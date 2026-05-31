@@ -1,0 +1,26 @@
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+logs
+*.log
+
+# Build outputs
+build/
+dist/
+
+# IDE
+.vs/
+.idea/
+*.suo
+*.user
+
+# Avalon-rust
+Avalon-rust/Avalon/.vscode/extensions.json
