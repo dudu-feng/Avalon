@@ -22,5 +22,8 @@ dist/
 *.suo
 *.user
 
+# vscode
+.vscode/
+
 # Avalon-rust
 Avalon-rust/Avalon/.vscode/extensions.json
