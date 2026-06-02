@@ -27,3 +27,6 @@ dist/
 
 # Avalon-rust
 Avalon-rust/Avalon/.vscode/extensions.json
+
+# test_file
+test_file/

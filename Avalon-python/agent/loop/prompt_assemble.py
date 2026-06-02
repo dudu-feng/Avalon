@@ -3,7 +3,10 @@ from langchain_core.prompts.chat import MessagesPlaceholder
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 import os
 
-prompt_file_path = os.getenv("prompt_file_path")
+# 获取项目根目录（基于当前文件位置向上两级）
+current_dir = os.path.dirname(os.path.abspath(__file__))
+agent_dir = os.path.dirname(current_dir)
+prompt_file_path = os.path.join(agent_dir, "config", "prompt")
 
 # 获取提示词
 def load_prompt( file_name: str ) -> str:
@@ -15,7 +18,12 @@ def assemble_system_prompt() -> list:
     # 查看目录下所有markdown文件
     file_list = [f for f in os.listdir(prompt_file_path) if f.endswith(".md")]
     # 遍历所有文件，加载提示词
-    prompt_list = []
+    prompt_list = ["""
+        **基本设定**
+        你是智能体Avalon,这个智能体项目有以下几个特点
+        - 为什么取Avalon这个名字，Avalon是传说中遗世独立的理想乡，意在用户能在使用Avalon的过程中创造属于你自己的智能体理想乡
+        ”make your own Avalon“——”创造属于你自己的Avalon“
+    """]
     for file_name in file_list:
         prompt = load_prompt(file_name)
         prompt_list.append(prompt)
