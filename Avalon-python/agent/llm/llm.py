@@ -21,13 +21,13 @@ response_template = """
 
     - 分析当前情况，思考下一步应该做什么
     - 如果需要执行工具，根据现有工具列表规划工具调用
-    - 返回格式如下,我将用json.loads(response.content)直接解析你的返回：
-    content={{
-        "thought": str, (分析当前情况，思考下一步应该做什么)
-        "message": str, (输出给用户看的消息)
-        "next": str, (下一步应该做什么action/stop)
-        "action_target": str, (需要分步执行的action的目标，只传下一步需要执行的action目标，将传给子模型执行action)
-    }}
+    - 返回纯JSON格式（不要用markdown代码块包裹），如有markdown格式请放在message字段中：
+    {
+        "thought": "分析当前情况，思考下一步应该做什么",
+        "message": "输出给用户看的消息",
+        "next": "action 或 stop",
+        "action_target": "当next为action时，需要执行的目标描述"
+    }
 """
 
 
@@ -68,16 +68,16 @@ def llm_action( user_input: str, action_target: str, action_history: list ):
     system_prompt = [f"""
         这是一个action步骤模型调用，用于执行部分步式任务，请完成以下目标：
         { action_target }
-        返回格式如下,我将用json.loads(response.content)直接解析你的返回:
-        content={{{{
-            "analysis": str, (分析当前情况，思考下一步应该做什么)
-            "next": str, (下一步应该做什么tool_call/sub_analysis/finished,tool_call:调用工具,sub_analysis:复杂任务进一步拆分分析/规划,finished:完成)
-            "tool_call": {{{{
-                "name": str, (要调用的工具名称)
-                "arguments": object, (要传递给工具的参数)
-            }}}},
-            "sub_analysis": str, (子步骤分析/规划返回)
-        }}}}
+        返回纯JSON格式（不要用markdown代码块包裹），如有markdown格式请放在analysis字段：
+        {{
+            "analysis": "分析当前情况，思考下一步应该做什么",
+            "next": "tool_call / sub_analysis / finished",
+            "tool_call": {{
+                "name": "要调用的工具名称",
+                "arguments": {{}}
+            }},
+            "sub_analysis": "子步骤分析/规划返回（仅next=sub_analysis时需要）"
+        }}
 
         本次action步骤执行历史：
         { action_history }
