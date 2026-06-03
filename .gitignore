@@ -33,3 +33,16 @@ test_file/
 
 # data
 data/
+
+# node
+node_modules/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyc.*
+
+# .claude
+.claude/
