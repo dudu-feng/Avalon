@@ -32,6 +32,12 @@ def init_session():
         with open(current_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
+def get_current_session():
+    current_file = os.path.join(session_path, "current", "terminal.json")
+    with open(current_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    return data
+
 def update_current_session(chat_history: list):
     """
     更新当前会话历史记录到 session_path/current/terminal.json

@@ -1,11 +1,10 @@
 import os
-from typing import Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 
-from loop import prompt_assemble
+from loop import prompt_assemble, session_manage
 from tool import base_tool
 
 try:
@@ -26,7 +25,7 @@ response_template = """
         "thought": "分析当前情况，思考下一步应该做什么",
         "message": "输出给用户看的消息",
         "next": "action 或 stop",
-        "action_target": "当next为action时，需要执行的目标描述"
+        "action_target": "当next为action时，需要执行的目标描述(将传给独立的action模型执行分步式操作)"
     }
 """
 
@@ -48,9 +47,12 @@ def llm_chat( user_input: str, chat_history: list ):
     model = get_model()
     system_prompt = prompt_assemble.assemble_system_prompt()
     tool_list = base_tool.get_tool_list()
+    current_session = session_manage.get_current_session()
 
     system_prompt.append(response_template)
     system_prompt.append(tool_list)
+    system_prompt.append("\n=====历史会话记录(terminal.json)=====\n")
+    system_prompt.append(current_session)
 
     # 构造消息列表
     messages = [SystemMessage(content=str(system_prompt))]
@@ -79,7 +81,7 @@ def llm_action( user_input: str, action_target: str, action_history: list ):
             "sub_analysis": "子步骤分析/规划返回（仅next=sub_analysis时需要）"
         }}
 
-        本次action步骤执行历史：
+        本次action步骤执行历史，当操作失败次数过多时，则停止执行操作，不要陷入死循环，根据操作历史返回失败原因，回到对话模型：
         { action_history }
     """
     ]
