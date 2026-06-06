@@ -5,7 +5,7 @@ from tool import base_tool
 from llm import llm
 
 
-def _parse_llm_json(llm_output_content: str) -> dict:
+def parse_llm_json(llm_output_content: str) -> dict:
     """
     解析 LLM 返回的 JSON 内容。
     1. 如果以 ``` 开头，去除 markdown 代码块后解析
@@ -62,7 +62,7 @@ def react_loop(user_input: str) -> dict:
     while True:
         chat_result = llm.llm_chat( user_input, chat_history)
         
-        chat_result_content = _parse_llm_json(chat_result.content)
+        chat_result_content = parse_llm_json(chat_result.content)
         if not chat_result_content:
             # 无法解析为 JSON，当作纯文本回复，直接输出并停止循环
             print(f"\nAvalon >: {chat_result.content}")
@@ -84,7 +84,7 @@ def react_loop(user_input: str) -> dict:
             while True:
                 action_result = llm.llm_action(user_input, action_target, action_history)
                 
-                action_result_content = _parse_llm_json(action_result.content)
+                action_result_content = parse_llm_json(action_result.content)
                 if not action_result_content:
                     chat_history.append({"role": "assistant", "content": f"(action步骤JSON解析异常){action_result.content}"})
                     return chat_history

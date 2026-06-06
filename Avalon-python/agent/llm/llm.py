@@ -95,3 +95,24 @@ def llm_action( user_input: str, action_target: str, action_history: list ):
     result = model.invoke(messages)
 
     return result
+
+def llm_compress( session_data: dict ):
+    model = get_model()
+    system_prompt = f"""
+        这是一个压缩模型调用，用于压缩历史会话记录，返回纯JSON格式（不要用markdown代码块包裹）
+        {{
+            "summary": "被压缩会话的总结",
+            "keywords": ["关键词1", "关键词2", "关键词3", ...](被压缩会话内容的精炼关键词，为了方便后续记忆检索，可以是内容概括性关键词，也可以是重要事件，关键事物的直接指向性关键词)
+        }}
+    """
+    user_prompt = f"""
+        压缩以下历史会话：
+        { session_data }
+    """
+    messages = [SystemMessage(content=system_prompt)]
+    messages.append(HumanMessage(content=user_prompt))
+
+    # 调用模型
+    result = model.invoke(messages)
+
+    return result

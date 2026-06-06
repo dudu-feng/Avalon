@@ -22,12 +22,16 @@ if __name__ == "__main__":
             continue
 
         # 处理命令
+        if user_input == "/compress":
+            session_manage.session_compress()
+            continue
         if user_input in ("/exit", "/quit"):
             break
         if user_input == "/help":
             print("命令列表：")
             print("  /exit, /quit   退出")
             print("  /help          显示帮助")
+            print("  /compress       压缩当前会话")
             print()
             continue
         chat_history = react_loop.react_loop(user_input)
