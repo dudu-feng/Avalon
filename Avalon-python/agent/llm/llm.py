@@ -20,8 +20,8 @@ response_template = """
 
     - 分析当前情况，思考下一步应该做什么
     - 如果需要执行工具，根据现有工具列表规划工具调用
-    - 返回纯JSON格式（不要用markdown代码块包裹），如有markdown格式请放在message字段中：
-    {
+    - 返回纯JSON格式：
+    样例JSON输出:{
         "thought": "分析当前情况，思考下一步应该做什么",
         "message": "输出给用户看的消息",
         "next": "action 或 stop",
@@ -36,6 +36,17 @@ def get_model() -> ChatOpenAI:
         api_key=os.getenv(f"{model_type}_api_key"),
         model_name=os.getenv(f"{model_type}_model"),
         base_url=os.getenv(f"{model_type}_model_base_url"),
+    )
+def get_jsonOutput_model() -> ChatOpenAI:
+    return ChatOpenAI(
+        api_key=os.getenv(f"{model_type}_api_key"),
+        model_name=os.getenv(f"{model_type}_model"),
+        base_url=os.getenv(f"{model_type}_model_base_url"),
+        model_kwargs={
+            "response_format": {
+                "type": "json_object"
+            }
+        }
     )
 
 # 切换模型类型
@@ -66,12 +77,12 @@ def llm_chat( user_input: str, chat_history: list ):
     return result
 
 def llm_action( user_input: str, action_target: str, action_history: list ):
-    model = get_model()
+    model = get_jsonOutput_model()
     system_prompt = [f"""
         这是一个action步骤模型调用，用于执行部分步式任务，请完成以下目标：
         { action_target }
-        返回纯JSON格式（不要用markdown代码块包裹），如有markdown格式请放在analysis字段：
-        {{
+        返回纯JSON格式：
+        样例JSON输出:{{
             "analysis": "分析当前情况，思考下一步应该做什么",
             "next": "tool_call / sub_analysis / finished",
             "tool_call": {{
@@ -96,8 +107,8 @@ def llm_action( user_input: str, action_target: str, action_history: list ):
 
     return result
 
-def llm_compress( session_data: dict ):
-    model = get_model()
+def llm_compress( session_data: dict ): 
+    model = get_jsonOutput_model()
     system_prompt = f"""
         这是一个压缩模型调用，用于压缩历史会话记录，返回纯JSON格式（不要用markdown代码块包裹）
         {{
