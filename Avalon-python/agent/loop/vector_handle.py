@@ -84,18 +84,15 @@ class VectorHandle:
     
     def __init__(
             self, 
-            collection_name: str = "avalon_session_memory",
-            embedding_mode: str = "local"
+            collection_name: str = "avalon_session_memory"
         ):
         """
         初始化向量数据库
         
         Args:
             collection_name: 集合名称，默认为 'avalon_memory'
-            embedding_mode: embedding模式，'local' 使用本地模型，'api' 使用API模型
         """
         self.collection_name = collection_name
-        self.embedding_mode = embedding_mode
         self.client = None
         self.collection = None
         self.embedding_function = None
@@ -103,20 +100,12 @@ class VectorHandle:
     
     def _init_client(self):
         """初始化ChromaDB客户端和集合"""
-        # 获取向量数据库存储路径
         vector_db_path = os.getenv("vector_db_path", "data/memory/vector_db")
         os.makedirs(vector_db_path, exist_ok=True)
         
-        # 初始化ChromaDB客户端
         self.client = chromadb.PersistentClient(path=vector_db_path)
+        self._init_local_embedding()
         
-        # 根据模式选择embedding函数
-        if self.embedding_mode == "local":
-            self._init_local_embedding()
-        else:
-            self._init_api_embedding()
-        
-        # 获取或创建集合
         try:
             self.collection = self.client.get_collection(
                 name=self.collection_name,
@@ -127,51 +116,21 @@ class VectorHandle:
                 name=self.collection_name,
                 embedding_function=self.embedding_function,
                 metadata={
-                    "description": "Avalon智能体记忆向量数据库",
-                    "embedding_mode": self.embedding_mode
+                    "description": "Avalon智能体记忆向量数据库"
                 }
             )
     
     def _init_local_embedding(self):
         """初始化本地embedding模型"""
         try:
-            # 获取本地模型配置
-            model_name = os.getenv("local_embedding_model", "BAAI/bge-small-zh-v1.5")
-            device = os.getenv("embedding_device", "cpu")
-            
-            print(f"🔄 使用本地embedding模式: {model_name}")
+            print(f"🔄 使用本地embedding模式: BAAI/bge-small-zh-v1.5")
             self.embedding_function = LocalEmbeddingFunction(
-                model_name=model_name,
-                device=device
+                model_name="BAAI/bge-small-zh-v1.5",
+                device=os.getenv("embedding_device", "cpu")
             )
             print(f"✅ 本地embedding模型初始化成功")
         except Exception as e:
-            print(f"❌ 本地embedding模型初始化失败: {e}")
-            print("🔄 降级使用API embedding模式")
-            self._init_api_embedding()
-    
-    def _init_api_embedding(self):
-        """初始化API embedding模型"""
-        try:
-            # 获取API配置
-            api_key = os.getenv("api_embedding_key")
-            model_name = os.getenv("api_embedding_model", "text-embedding-3-small")
-            base_url = os.getenv("api_embedding_base_url", "https://api.deepseek.com/v1")
-            
-            if not api_key:
-                raise ValueError("API key未配置")
-            
-            print(f"🔄 使用API embedding模式: {model_name}")
-            self.embedding_function = embedding_functions.OpenAIEmbeddingFunction(
-                api_key=api_key,
-                model_name=model_name,
-                base_url=base_url
-            )
-            print(f"✅ API embedding模型初始化成功")
-        except Exception as e:
-            print(f"❌ API embedding模型初始化失败: {e}")
-            print("🔄 降级使用默认embedding函数")
-            self.embedding_function = embedding_functions.DefaultEmbeddingFunction()
+            raise RuntimeError(f"本地embedding模型初始化失败: {e}")
     
     def add_documents(
             self,
@@ -272,29 +231,20 @@ class VectorHandle:
 _vector_handle = None
 
 def get_vector_handle(
-        collection_name: str = "avalon_memory",
-        embedding_mode: Optional[str] = None
+        collection_name: str = "avalon_memory"
     ) -> VectorHandle:
     """
     获取向量处理实例（单例模式）
     
     Args:
         collection_name: 集合名称
-        embedding_mode: embedding模式，'local' 或 'api'，None则使用环境变量配置
         
     Returns:
         VectorHandle: 向量处理实例
     """
     global _vector_handle
     
-    # 如果没有指定模式，从环境变量读取
-    if embedding_mode is None:
-        embedding_mode = os.getenv("embedding_mode", "local")
-    
-    # 检查是否需要重新创建实例
-    if (_vector_handle is None or 
-        _vector_handle.collection_name != collection_name or
-        _vector_handle.embedding_mode != embedding_mode):
-        _vector_handle = VectorHandle(collection_name, embedding_mode)
+    if _vector_handle is None or _vector_handle.collection_name != collection_name:
+        _vector_handle = VectorHandle(collection_name)
     
     return _vector_handle
