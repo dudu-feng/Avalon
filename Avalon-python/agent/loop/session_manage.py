@@ -93,10 +93,11 @@ def session_compress():
     if not compressed_data_content:
         print("压缩模型返回的 JSON 内容无法解析，无法继续压缩。")
         return
+    compressed_data_content["chunk"] = len(current_session["compressed"]) + 1
     current_session["compressed"].append(compressed_data_content)
     raw_dir = os.path.join(history_dir, current_session["id"], "raw")
     os.makedirs(raw_dir, exist_ok=True)
-    with open(os.path.join(raw_dir, f"{len(current_session['compressed'])}.json"), 'w', encoding='utf-8') as f:
+    with open(os.path.join(raw_dir, f"{compressed_data_content['chunk']}.json"), 'w', encoding='utf-8') as f:
         json.dump(current_session["session"], f, ensure_ascii=False, indent=2)
     current_session["session"] = []
     with open(current_file, 'w', encoding='utf-8') as f:
