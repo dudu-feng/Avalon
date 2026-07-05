@@ -29,22 +29,40 @@ class LocalEmbeddingFunction(embedding_functions.EmbeddingFunction):
         self._load_model()
     
     def _load_model(self):
-        """加载本地模型"""
+        """加载本地模型，优先从本地目录加载"""
         try:
             from sentence_transformers import SentenceTransformer
-            print(f"🔄 正在加载本地模型: {self.model_name}")
+            
+            # 设置国内镜像（以防需要下载）
+            os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
             
             # 设置模型缓存目录
-            cache_dir = os.getenv("model_cache_dir", "data/models")
+            cache_dir = os.getenv("model_cache_dir", "../data/vector/models/embedding")
             os.makedirs(cache_dir, exist_ok=True)
+            
+            # 检查本地是否已存在模型
+            model_local_path = os.path.join(
+                cache_dir, 
+                "bge-small-zh-v1.5",
+                "models--BAAI--bge-small-zh-v1.5",
+                "snapshots",
+                "7999e1d3359715c523056ef9478215996d62a620"
+            )
+            
+            if os.path.exists(model_local_path) and os.path.isdir(model_local_path):
+                print(f"🔄 从本地目录加载模型: {model_local_path}")
+                load_path = model_local_path
+            else:
+                print(f"🔄 正在加载模型: {self.model_name} (缓存目录: {cache_dir})")
+                load_path = self.model_name
             
             # 加载模型
             self.model = SentenceTransformer(
-                self.model_name,
+                load_path,
                 device=self.device,
                 cache_folder=cache_dir
             )
-            print(f"✅ 本地模型加载成功: {self.model_name}")
+            print(f"✅ 模型加载成功: {self.model_name}")
         except ImportError:
             raise ImportError(
                 "请安装 sentence-transformers 库: pip install sentence-transformers"
@@ -100,7 +118,7 @@ class VectorHandle:
     
     def _init_client(self):
         """初始化ChromaDB客户端和集合"""
-        vector_db_path = os.getenv("vector_db_path", "data/memory/vector_db")
+        vector_db_path = os.path.join(os.getenv("vector_db_path"), "chroma")
         os.makedirs(vector_db_path, exist_ok=True)
         
         self.client = chromadb.PersistentClient(path=vector_db_path)
@@ -157,9 +175,9 @@ class VectorHandle:
             if ids is None:
                 ids = [str(uuid.uuid4()) for _ in documents]
             
-            # 如果没有提供metadatas，创建空的
+            # 如果没有提供metadatas，创建包含默认字段的元数据（ChromaDB要求非空）
             if metadatas is None:
-                metadatas = [{} for _ in documents]
+                metadatas = [{"_default": ""} for _ in documents]
             
             # 添加到集合
             self.collection.add(
