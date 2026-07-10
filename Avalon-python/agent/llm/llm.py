@@ -4,14 +4,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 
+from config.env_config import env_config
 from loop import prompt_assemble, session_manage
 from tool import base_tool
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
 model_type = "default"
 
@@ -33,15 +28,15 @@ response_template = """
 # 获取环境变量
 def get_model() -> ChatOpenAI:
     return ChatOpenAI(
-        api_key=os.getenv(f"{model_type}_api_key"),
-        model_name=os.getenv(f"{model_type}_model"),
-        base_url=os.getenv(f"{model_type}_model_base_url"),
+        api_key=env_config.default_api_key,
+        model_name=env_config.default_model,
+        base_url=env_config.default_model_base_url,
     )
 def get_jsonOutput_model() -> ChatOpenAI:
     return ChatOpenAI(
-        api_key=os.getenv(f"{model_type}_api_key"),
-        model_name=os.getenv(f"{model_type}_model"),
-        base_url=os.getenv(f"{model_type}_model_base_url"),
+        api_key=env_config.default_api_key,
+        model_name=env_config.default_model,
+        base_url=env_config.default_model_base_url,
         model_kwargs={
             "response_format": {
                 "type": "json_object"
@@ -107,7 +102,7 @@ def llm_action( user_input: str, action_target: str, action_history: list ):
 
     return result
 
-def llm_compress( session_data: dict ): 
+def llm_compress( session_data: dict ):
     model = get_jsonOutput_model()
     system_prompt = f"""
         这是一个压缩模型调用，用于压缩历史会话记录，返回纯JSON格式（不要用markdown代码块包裹）

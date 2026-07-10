@@ -3,10 +3,15 @@ from langchain_core.prompts.chat import MessagesPlaceholder
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 import os
 
-# 获取项目根目录（基于当前文件位置向上两级）
-current_dir = os.path.dirname(os.path.abspath(__file__))
-agent_dir = os.path.dirname(current_dir)
-prompt_file_path = os.path.join(agent_dir, "config", "prompt")
+from config.env_config import env_config
+
+# 优先使用 .env 配置的绝对路径，否则回退到相对路径
+prompt_file_path = env_config.prompt_file_path
+if not os.path.isdir(prompt_file_path):
+    # 回退：基于当前文件位置向上两级查找 config/prompt
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    agent_dir = os.path.dirname(current_dir)
+    prompt_file_path = os.path.join(agent_dir, "config", "prompt")
 
 # 获取提示词
 def load_prompt( file_name: str ) -> str:
@@ -27,5 +32,5 @@ def assemble_system_prompt() -> list:
     for file_name in file_list:
         prompt = load_prompt(file_name)
         prompt_list.append(prompt)
-  
+
     return prompt_list

@@ -1,8 +1,8 @@
 # zvec_store.py
 import os
-from dotenv import load_dotenv
 import zvec
-from zvec.model.param.query import Fts, Query
+from zvec.model.param.query import Fts
+from config.env_config import env_config
 from loop.embedding_service import embedding_service
 
 
@@ -20,11 +20,6 @@ class ZvecStore:
     def __init__(self):
         if self._initialized:
             return
-        # 加载环境变量
-        try:
-            load_dotenv()
-        except ImportError:
-            print("加载环境变量失败")
 
         # 1. 定义集合Schema
         self._session_memory_schema = zvec.CollectionSchema(
@@ -49,11 +44,8 @@ class ZvecStore:
             ],
         )
 
-        # 2. 获取数据库路径
-        self._zvec_collection_path = os.path.join(
-            os.getenv("vector_db_path", "data\\vector\\vector_db"),
-            "zvec"
-        )
+        # 2. 获取数据库路径（使用配置类提供的派生路径）
+        self._zvec_collection_path = env_config.zvec_db_path
 
         # 3. 创建并打开集合，私有成员外部禁止访问
         self._collection = zvec.open(
@@ -101,7 +93,7 @@ class ZvecStore:
         """删除会话记忆"""
         result = self._collection.delete(ids = doc_id)
         return result
-    
+
     def batch_delete_session_memory(self, doc_ids: list[str]):
         """批量删除会话记忆"""
         result = self._collection.delete(ids = doc_ids)

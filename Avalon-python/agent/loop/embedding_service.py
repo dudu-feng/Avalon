@@ -3,6 +3,8 @@ import numpy as np
 from typing import List, Optional
 from sentence_transformers import SentenceTransformer
 
+from config.env_config import env_config
+
 
 class EmbeddingService:
     _instance: Optional["EmbeddingService"] = None
@@ -12,39 +14,21 @@ class EmbeddingService:
             cls._instance = super().__new__(cls)
             # 延迟初始化字段，实例创建时先不加载模型
             cls._instance._model: Optional[SentenceTransformer] = None
-            cls._instance._model_root: str = ""
-            cls._instance._model_name: str = ""
-            cls._instance._device: str = ""
         return cls._instance
-
-    def _load_env(self):
-        """加载环境变量，只执行一次"""
-        try:
-            from dotenv import load_dotenv
-            load_dotenv()
-        except ImportError:
-            pass
-
-        self._model_root = os.getenv("model_cache_dir", "")
-        self._model_name = os.getenv("local_embedding_model", "")
-        self._device = os.getenv("embedding_device", "cpu")
-
-        if not self._model_root or not self._model_name:
-            raise RuntimeError("环境变量 model_cache_dir 或 local_embedding_model 不能为空")
-
-        model_path = os.path.join(self._model_root, self._model_name)
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"模型文件夹不存在：{model_path}")
-        return model_path
 
     def _init_model(self):
         """懒加载：第一次调用embedding方法才加载模型"""
         if self._model is not None:
             return
 
-        model_path = self._load_env()
+        model_path = env_config.local_embedding_model_path
+        device = env_config.embedding_device
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"模型文件夹不存在：{model_path}")
+
         try:
-            self._model = SentenceTransformer(model_path, device=self._device)
+            self._model = SentenceTransformer(model_path, device=device)
             print(f"Embedding模型加载成功，设备：{self._model.device.type}")
         except Exception as e:
             raise RuntimeError(f"模型加载失败：{str(e)}") from e

@@ -2,18 +2,12 @@ import os
 import json
 import shutil
 from datetime import datetime
+from config.env_config import env_config
 from llm import llm
 from loop import react_loop
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    print("⚠️ 未找到 .env 文件，将使用默认配置")
-    pass
-
-session_path = os.getenv("session_path", "data\memory\session")
-session_index_path = os.getenv("session_index_path", "data\memory\session\index.json")
+session_path = env_config.session_path
+session_index_path = env_config.session_index_path
 
 def init_session():
     """
@@ -26,7 +20,7 @@ def init_session():
             data = json.load(f)
     except FileNotFoundError:
         data = {}
-    if data["status"] == "active":
+    if data.get("status") == "active":
         print("已识别到上次会话，继续上次对话。")
         return
     else:
@@ -66,6 +60,7 @@ def save_current_session():
     with open(current_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
     data["status"] = "archived"
+    os.makedirs(os.path.join(history_dir, data["id"]), exist_ok=True)
     with open(os.path.join(history_dir, data["id"], "index.json"), 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     data = {
