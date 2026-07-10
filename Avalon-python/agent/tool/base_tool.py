@@ -39,8 +39,16 @@ def run_shell_command(command: str) -> str:
     except Exception as e:
         return f"执行命令失败: {e}"
 
+@tool
+def get_directory_contents(directory_path: str) -> str:
+    """获取指定目录下的所有文件和子目录，传入 directory_path"""
+    try:
+        contents = os.listdir(directory_path)
+        return contents
+    except Exception as e:
+        return f"获取目录内容失败: {e}"
 
-TOOLS = [read_file, write_file, delete_file, run_shell_command]
+TOOLS = [read_file, write_file, delete_file, run_shell_command, get_directory_contents]
 
 def get_tool_list() -> str:
     """生成格式化的工具列表，供 LLM 理解可用工具"""
