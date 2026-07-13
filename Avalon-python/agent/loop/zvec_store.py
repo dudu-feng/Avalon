@@ -48,10 +48,21 @@ class ZvecStore:
         self._zvec_collection_path = env_config.zvec_db_path
 
         # 3. 创建并打开集合，私有成员外部禁止访问
-        self._collection = zvec.open(
-            path=self._zvec_collection_path,
-            option=zvec.CollectionOption(read_only=False, enable_mmap=True),
-        )
+        # 如果数据库目录不存在，使用 create_and_open 创建（会应用 schema，包括 FTS 索引）
+        # 如果数据库目录已存在，使用 open 打开（不应用 schema，保持原有结构）
+        if not os.path.exists(self._zvec_collection_path):
+            self._collection = zvec.create_and_open(
+                path=self._zvec_collection_path,
+                schema=self._session_memory_schema,
+                option=zvec.CollectionOption(read_only=False, enable_mmap=True),
+            )
+            print(f"[ZvecStore] 创建新数据库: {self._zvec_collection_path}")
+        else:
+            self._collection = zvec.open(
+                path=self._zvec_collection_path,
+                option=zvec.CollectionOption(read_only=False, enable_mmap=True),
+            )
+            print(f"[ZvecStore] 正在操作已存在数据库: {self._zvec_collection_path}")
         self._initialized = True
 
     @property
