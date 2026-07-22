@@ -10,8 +10,10 @@
 """
 
 import json
+import os
 from langchain_core.tools import tool
 from loop.zvec_store import zvec_store
+from config.env_config import env_config
 
 
 @tool
@@ -36,7 +38,7 @@ def search_session_memory(
         · 日期区间 "2026-07-01,2026-07-31" → 查询该时间范围内的记忆
 
     返回格式：JSON 数组，每条结果包含：
-    - doc_id: 文档唯一 ID（可定位源会话文件位置）
+    - location: 源会话片段的绝对路径（可直接用 read_file 读取原文，对应会话总体概要文件raw文件夹同级index.json文件）
     - session_id: 所属会话 ID
     - chunk: 压缩片段序号
     - description: 压缩摘要文本
@@ -77,8 +79,13 @@ def search_session_memory(
         doc_id = doc.id
         session_id, chunk = _parse_doc_id(doc_id)
 
+        location = os.path.join(
+            env_config.session_path, "history", "terminal",
+            session_id, "raw", f"{chunk}.json",
+        )
+
         formatted.append({
-            "doc_id": doc_id,
+            "location": location,
             "session_id": session_id,
             "chunk": chunk,
             "description": doc.fields.get("description", ""),
