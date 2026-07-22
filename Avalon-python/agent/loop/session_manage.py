@@ -5,6 +5,7 @@ from datetime import datetime
 from config.env_config import env_config
 from llm import llm
 from loop import react_loop
+from loop.zvec_store import zvec_store
 
 session_path = env_config.session_path
 session_index_path = env_config.session_index_path
@@ -98,3 +99,14 @@ def session_compress():
     with open(current_file, 'w', encoding='utf-8') as f:
         json.dump(current_session, f, ensure_ascii=False, indent=2)
     print(f"当前会话已压缩。{len(current_session['compressed'])}个压缩记录")
+
+    # -- 将压缩摘要同步写入向量数据库 --
+    # doc_id 格式: {会话ID}_chunk_{序号}，后续可通过 ID 反查源会话文件
+    try:
+        doc_id = f"{current_session['id']}_chunk_{compressed_data_content['chunk']}"
+        summary_text = "\n".join(compressed_data_content["summary"])
+        keywords = compressed_data_content["keywords"]
+        zvec_store.insert_session_memory(doc_id, summary_text, keywords)
+        print(f"[ZVec] 会话摘要已写入向量数据库: {doc_id}")
+    except Exception as e:
+        print(f"[ZVec] 写入向量数据库失败（不影响压缩流程）: {e}")
