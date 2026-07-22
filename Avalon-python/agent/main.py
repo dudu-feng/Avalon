@@ -36,6 +36,8 @@ if __name__ == "__main__":
             continue
         chat_history = react_loop.react_loop(user_input)
         session_manage.update_current_session(chat_history)
+        # 自动压缩检查：输入 token 超过阈值时自动触发压缩
+        session_manage.auto_compress_check_from_history(chat_history)
     # 退出前归档当前会话
     print("正在保存本次对话")
     session_manage.save_current_session()

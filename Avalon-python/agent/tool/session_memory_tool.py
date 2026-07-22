@@ -125,20 +125,28 @@ def _build_time_filter(time_range: str) -> str:
         return f'timestamp >= "{time_range}-00_00_00"'
 
 
-def _parse_doc_id(doc_id: str) -> tuple[str, int]:
+def _parse_doc_id(doc_id: str) -> tuple:
     """
-    从 doc_id 中解析会话 ID 和 chunk 序号。
+    从 doc_id 中解析会话 ID 和 chunk 标识。
 
-    doc_id 格式: {session_id}_chunk_{N}
-    示例: "terminal_2026-06-06-23_03_31_chunk_2" → ("terminal_2026-06-06-23_03_31", 2)
+    doc_id 格式:
+      - 普通块:  {session_id}_chunk_{N}      例: "terminal_2026-06-06-23_03_31_chunk_2"
+      - 合并块:  {session_id}_chunk_merged_{N} 例: "terminal_2026-06-06-23_03_31_chunk_merged_1"
+
+    返回: (session_id, chunk_id)
+      - 普通块 chunk_id 为 int（如 2）
+      - 合并块 chunk_id 为 str（如 "merged_1"）
     """
     marker = "_chunk_"
     if marker in doc_id:
         idx = doc_id.rfind(marker)
         session_id = doc_id[:idx]
+        chunk_str = doc_id[idx + len(marker):]
+        # 优先尝试 int 解析（普通块）
         try:
-            chunk = int(doc_id[idx + len(marker):])
+            chunk = int(chunk_str)
         except ValueError:
-            chunk = 0
+            # 合并块，保留原始字符串
+            chunk = chunk_str
         return session_id, chunk
     return doc_id, 0

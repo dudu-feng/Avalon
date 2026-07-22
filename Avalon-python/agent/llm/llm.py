@@ -53,7 +53,7 @@ def llm_chat( user_input: str, chat_history: list ):
     model = get_model()
     system_prompt = prompt_assemble.assemble_system_prompt()
     tool_list = base_tool.get_tool_list()
-    current_session = session_manage.get_current_session()
+    current_session = session_manage.get_session_context_for_prompt()
 
     system_prompt.append(response_template)
     system_prompt.append(tool_list)

@@ -158,6 +158,39 @@ class EnvConfig:
         """ZVec 持久化路径"""
         return os.path.join(self.vector_db_path, "zvec")
 
+    # ============================================================
+    #  会话压缩配置
+    # ============================================================
+
+    @property
+    def session_memory_compress_threshold(self) -> int:
+        """
+        会话自动压缩阈值（输入 token 数）。
+        支持格式: "512k" / "20k" / "20000"
+        默认 20000（适用于大部分 32K~128K 上下文窗口的模型）。
+        """
+        raw = self._get("session_memory_compress_threshold", "20000").strip().lower()
+        if raw.endswith("k"):
+            return int(float(raw[:-1]) * 1000)
+        return int(raw)
+
+    @property
+    def session_memory_max_chunks(self) -> int:
+        """
+        永恒会话：压缩块超过此数量时触发渐进式总结，将旧块合并为超级摘要。
+        默认 10。
+        """
+        return int(self._get("session_memory_max_chunks", "10"))
+
+    @property
+    def session_memory_context_chunks(self) -> int:
+        """
+        系统提示中加载的最近压缩块数量。
+        旧块通过 search_session_memory 工具按需检索。
+        默认 5。
+        """
+        return int(self._get("session_memory_context_chunks", "5"))
+
 
 # 全局唯一实例，其它模块只导入这个实例即可
 env_config = EnvConfig()
