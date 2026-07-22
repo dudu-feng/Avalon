@@ -32,7 +32,12 @@ class ZvecStore:
                     index_param=zvec.FtsIndexParam(
                         tokenizer_name="jieba",
                     ),
-                )
+                ),
+                zvec.FieldSchema(
+                    name="keyWords",
+                    data_type=zvec.DataType.ARRAY_STRING,
+                    nullable=False,
+                ),
             ],
             vectors=[
                 zvec.VectorSchema(
@@ -70,8 +75,17 @@ class ZvecStore:
         """只读暴露collection，不允许外部修改"""
         return self._collection
 
-    def insert_session_memory(self, doc_id: str, text: str):
-        """插入会话记忆"""
+    def insert_session_memory(self, doc_id: str, text: str, keywords: list = None):
+        """
+        插入会话记忆
+
+        Args:
+            doc_id: 文档唯一ID
+            text: 摘要文本（存入 description 标量字段，同时向量化存入 summary_vector）
+            keywords: 关键词列表（存入 keyWords 数组字段，如 ["Avalon", "会话压缩", "测试"]）
+        """
+        if keywords is None:
+            keywords = []
         vector = embedding_service.doc_embedding(text)
         doc = zvec.Doc(
             id=doc_id,
@@ -80,13 +94,23 @@ class ZvecStore:
             },
             fields={
                 "description": text,
+                "keyWords": keywords,
             },
         )
         result = self._collection.insert(doc)
         return result
 
-    def upsert_session_memory(self, doc_id: str, text: str):
-        """更新或插入会话记忆"""
+    def upsert_session_memory(self, doc_id: str, text: str, keywords: list = None):
+        """
+        更新或插入会话记忆
+
+        Args:
+            doc_id: 文档唯一ID
+            text: 摘要文本（存入 description 标量字段，同时向量化存入 summary_vector）
+            keywords: 关键词列表（存入 keyWords 数组字段，如 ["Avalon", "会话压缩", "测试"]）
+        """
+        if keywords is None:
+            keywords = []
         vector = embedding_service.doc_embedding(text)
         doc = zvec.Doc(
             id=doc_id,
@@ -95,6 +119,7 @@ class ZvecStore:
             },
             fields={
                 "description": text,
+                "keyWords": keywords,
             },
         )
         result = self._collection.upsert(doc)
