@@ -144,8 +144,8 @@ class ZvecStore:
         result = self._collection.delete(ids = doc_ids)
         return result
 
-    def vectorQuery_session_memory(self, queryContent: str, topk: int = 5):
-        """查询会话记忆向量相似度"""
+    def vectorQuery_session_memory(self, queryContent: str, topk: int = 5, filter_expr: str = ""):
+        """查询会话记忆向量相似度（语义检索）"""
         queryVector = embedding_service.query_embedding(queryContent)
         result = self._collection.query(
             queries=zvec.Query(
@@ -154,17 +154,41 @@ class ZvecStore:
             ),
             topk = topk,
             include_vector=False,
+            output_fields=["description", "keyWords", "timestamp"],
+            filter=filter_expr if filter_expr else None,
         )
         return result
 
-    def scalarQuery_session_memory(self, queryContent: str, topk: int = 5):
-        """查询会话记忆文本相似度"""
+    def scalarQuery_session_memory(self, queryContent: str, topk: int = 5, filter_expr: str = ""):
+        """查询会话记忆文本相似度（FTS 全文检索）"""
         result = self._collection.query(
             queries=zvec.Query(
                 field_name = "description",
                 fts=Fts( match_string= queryContent ),
             ),
             topk = topk,
+            output_fields=["description", "keyWords", "timestamp"],
+            filter=filter_expr if filter_expr else None,
+        )
+        return result
+
+    def hybridQuery_session_memory(self, queryContent: str, topk: int = 5, filter_expr: str = ""):
+        """
+        混合查询会话记忆（语义向量 + FTS 全文检索）
+
+        ZVec 内部融合两种信号返回综合排序结果，兼顾语义相似度和关键词匹配。
+        """
+        queryVector = embedding_service.query_embedding(queryContent)
+        result = self._collection.query(
+            queries=zvec.Query(
+                field_name = "summary_vector",
+                vector = queryVector,
+                fts=Fts( match_string= queryContent ),
+            ),
+            topk = topk,
+            include_vector=False,
+            output_fields=["description", "keyWords", "timestamp"],
+            filter=filter_expr if filter_expr else None,
         )
         return result
 

@@ -48,7 +48,9 @@ def get_directory_contents(directory_path: str) -> str:
     except Exception as e:
         return f"获取目录内容失败: {e}"
 
-TOOLS = [read_file, write_file, delete_file, run_shell_command, get_directory_contents]
+from tool.session_memory_tool import search_session_memory
+
+TOOLS = [read_file, write_file, delete_file, run_shell_command, get_directory_contents, search_session_memory]
 
 def get_tool_list() -> str:
     """生成格式化的工具列表，供 LLM 理解可用工具"""
