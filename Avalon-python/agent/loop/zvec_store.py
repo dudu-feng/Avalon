@@ -38,6 +38,11 @@ class ZvecStore:
                     data_type=zvec.DataType.ARRAY_STRING,
                     nullable=False,
                 ),
+                zvec.FieldSchema(
+                    name="timestamp",
+                    data_type=zvec.DataType.STRING,
+                    nullable=False,
+                ),
             ],
             vectors=[
                 zvec.VectorSchema(
@@ -75,7 +80,7 @@ class ZvecStore:
         """只读暴露collection，不允许外部修改"""
         return self._collection
 
-    def insert_session_memory(self, doc_id: str, text: str, keywords: list = None):
+    def insert_session_memory(self, doc_id: str, text: str, keywords: list = None, timestamp: str = ""):
         """
         插入会话记忆
 
@@ -83,6 +88,7 @@ class ZvecStore:
             doc_id: 文档唯一ID
             text: 摘要文本（存入 description 标量字段，同时向量化存入 summary_vector）
             keywords: 关键词列表（存入 keyWords 数组字段，如 ["Avalon", "会话压缩", "测试"]）
+            timestamp: 会话时间戳（ISO格式字符串，如 "2026-06-06-23_03_31"）
         """
         if keywords is None:
             keywords = []
@@ -95,12 +101,13 @@ class ZvecStore:
             fields={
                 "description": text,
                 "keyWords": keywords,
+                "timestamp": timestamp,
             },
         )
         result = self._collection.insert(doc)
         return result
 
-    def upsert_session_memory(self, doc_id: str, text: str, keywords: list = None):
+    def upsert_session_memory(self, doc_id: str, text: str, keywords: list = None, timestamp: str = ""):
         """
         更新或插入会话记忆
 
@@ -108,6 +115,7 @@ class ZvecStore:
             doc_id: 文档唯一ID
             text: 摘要文本（存入 description 标量字段，同时向量化存入 summary_vector）
             keywords: 关键词列表（存入 keyWords 数组字段，如 ["Avalon", "会话压缩", "测试"]）
+            timestamp: 会话时间戳（ISO格式字符串，如 "2026-06-06-23_03_31"）
         """
         if keywords is None:
             keywords = []
@@ -120,6 +128,7 @@ class ZvecStore:
             fields={
                 "description": text,
                 "keyWords": keywords,
+                "timestamp": timestamp,
             },
         )
         result = self._collection.upsert(doc)

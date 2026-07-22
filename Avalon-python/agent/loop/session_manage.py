@@ -104,9 +104,10 @@ def session_compress():
     # doc_id 格式: {会话ID}_chunk_{序号}，后续可通过 ID 反查源会话文件
     try:
         doc_id = f"{current_session['id']}_chunk_{compressed_data_content['chunk']}"
+        timestamp = current_session['id'].replace("terminal_", "", 1)  # "terminal_2026-06-06-23_03_31" -> "2026-06-06-23_03_31"
         summary_text = "\n".join(compressed_data_content["summary"])
         keywords = compressed_data_content["keywords"]
-        zvec_store.insert_session_memory(doc_id, summary_text, keywords)
+        zvec_store.insert_session_memory(doc_id, summary_text, keywords, timestamp)
         print(f"[ZVec] 会话摘要已写入向量数据库: {doc_id}")
     except Exception as e:
         print(f"[ZVec] 写入向量数据库失败（不影响压缩流程）: {e}")
