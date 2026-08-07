@@ -1,0 +1,29 @@
+{
+  "name": "avalon-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vueuse/core": "^14.4.0",
+    "axios": "^1.19.0",
+    "markdown-it": "^15.0.0",
+    "naive-ui": "^2.44.1",
+    "pinia": "^4.0.2",
+    "vue": "^3.5.40",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/tsconfig": "^0.9.1",
+    "typescript": "~6.0.2",
+    "unocss": "^66.7.5",
+    "vite": "^8.2.0",
+    "vue-tsc": "^3.3.8"
+  }
+}
