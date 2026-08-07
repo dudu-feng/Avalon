@@ -1,0 +1,23 @@
+# ===== LLM 交互 =====
+langchain-openai>=0.3.0
+langchain-core>=0.3.0
+
+# ===== Embedding 向量化 =====
+sentence-transformers>=3.0.0
+numpy>=1.24.0
+
+# ===== 向量数据库 =====
+zvec
+jieba>=0.42.0
+
+# ===== 配置管理 =====
+python-dotenv>=1.0.0
+
+# ===== Web 服务 =====
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+sse-starlette>=2.1.0
+
+# ===== 测试 =====
+pytest>=8.0.0
+httpx>=0.27.0
