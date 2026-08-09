@@ -12,6 +12,7 @@
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@iconify/vue": "^5.0.1",
     "@vueuse/core": "^14.4.0",
     "axios": "^1.19.0",
     "highlight.js": "^11.11.1",
@@ -24,13 +25,10 @@
     "vue-router": "^4.6.4"
   },
   "devDependencies": {
-    "@iconify-json/ion": "^1.2.7",
-    "@iconify-json/mdi": "^1.2.3",
     "@types/js-cookie": "^3.0.6",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^24.13.3",
     "@types/nprogress": "^0.2.3",
-    "@unocss/preset-icons": "^66.7.5",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/eslint-config-prettier": "^10.2.0",
     "@vue/eslint-config-typescript": "^14.9.0",

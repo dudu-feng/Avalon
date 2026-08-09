@@ -1,0 +1,33 @@
+@import './tokens.css';
+@import './components.css';
+
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+
+  width: 100%;
+  min-height: 100%;
+
+  background: var(--av-bg-primary);
+  color: var(--av-text-primary);
+}
+
+
+* {
+  box-sizing: border-box;
+}
+
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+}

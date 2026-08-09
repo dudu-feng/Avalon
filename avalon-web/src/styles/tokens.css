@@ -1,0 +1,133 @@
+:root {
+
+
+/* =====================
+ * Background
+ * ===================== */
+
+
+/* 页面背景 */
+
+--av-bg-primary:
+#f7f8fa;
+
+
+/* 侧边栏 / 卡片 */
+
+--av-bg-secondary:
+#ffffff;
+
+
+/* 悬浮层 */
+
+--av-bg-tertiary:
+#f1f3f6;
+
+
+/* Hover */
+
+--av-bg-hover:
+#eceff3;
+
+
+
+/* =====================
+ * Border
+ * ===================== */
+
+
+--av-border:
+#e5e7eb;
+
+
+--av-border-light:
+#d9dde5;
+
+
+
+/* =====================
+ * Text
+ * ===================== */
+
+
+--av-text-primary:
+#111827;
+
+
+--av-text-secondary:
+#4b5563;
+
+
+--av-text-tertiary:
+#9ca3af;
+
+
+
+/* =====================
+ * Avalon Brand
+ * ===================== */
+
+
+/* Logo金色 */
+
+--av-primary:
+#b8860b;
+
+
+--av-primary-hover:
+#d4a017;
+
+
+/* active背景 */
+
+--av-primary-muted:
+rgba(184,134,11,.12);
+
+
+
+/* =====================
+ * Radius
+ * ===================== */
+
+
+--av-radius-sm:
+8px;
+
+
+--av-radius-md:
+12px;
+
+
+--av-radius-lg:
+16px;
+
+
+
+/* =====================
+ * Sidebar
+ * ===================== */
+
+
+--av-sidebar-width:
+264px;
+
+
+--av-sidebar-collapse-width:
+76px;
+
+
+
+/* =====================
+ * Animation
+ * ===================== */
+
+
+--av-transition-fast:
+150ms;
+
+
+--av-transition-normal:
+250ms;
+
+
+}

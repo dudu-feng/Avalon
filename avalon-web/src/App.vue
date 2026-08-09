@@ -7,24 +7,20 @@ import {
   NNotificationProvider,
   zhCN,
   dateZhCN,
-} from 'naive-ui'
-import Layout from '@/components/Layout/index.vue'
+} from "naive-ui";
 
-
+import DefaultLayout from "@/components/Layout/DefaultLayout.vue";
 </script>
 
 <template>
-  <NConfigProvider
-    :locale="zhCN"
-    :date-locale="dateZhCN"
-  >
+  <NConfigProvider :locale="zhCN" :date-locale="dateZhCN">
     <NLoadingBarProvider>
       <NDialogProvider>
         <NNotificationProvider>
           <NMessageProvider>
-            <Layout>
+            <DefaultLayout>
               <RouterView />
-            </Layout>
+            </DefaultLayout>
           </NMessageProvider>
         </NNotificationProvider>
       </NDialogProvider>
