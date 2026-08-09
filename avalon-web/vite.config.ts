@@ -11,8 +11,7 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      // 关键：必须写成 '@' 指向 src
-      '@': resolve(__dirname, 'src')
-    }
-  }
+      '@': resolve(import.meta.dirname, 'src'),
+    },
+  },
 })

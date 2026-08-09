@@ -8,15 +8,23 @@ import {
   zhCN,
   dateZhCN,
 } from 'naive-ui'
+import Layout from '@/components/Layout/index.vue'
+
+
 </script>
 
 <template>
-  <NConfigProvider :locale="zhCN" :date-locale="dateZhCN">
+  <NConfigProvider
+    :locale="zhCN"
+    :date-locale="dateZhCN"
+  >
     <NLoadingBarProvider>
       <NDialogProvider>
         <NNotificationProvider>
           <NMessageProvider>
-            <RouterView />
+            <Layout>
+              <RouterView />
+            </Layout>
           </NMessageProvider>
         </NNotificationProvider>
       </NDialogProvider>
