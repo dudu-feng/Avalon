@@ -24,6 +24,7 @@
     "vue-router": "^4.6.4"
   },
   "devDependencies": {
+    "@iconify-json/carbon": "^1.2.25",
     "@types/js-cookie": "^3.0.6",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^24.13.3",
