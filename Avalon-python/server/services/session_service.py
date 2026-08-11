@@ -23,19 +23,22 @@ from server.core.exceptions import (
 #  路径工具
 # ============================================================
 
-SESSION_FILE = "terminal.json"
 
-
-def _current_file_path() -> str:
-    return os.path.join(env_config.session_path, "current", SESSION_FILE)
+def _current_file_path(channel: str) -> str:
+    return os.path.join(env_config.session_path, "current", f"{channel}.json")
 
 
 def _history_dir() -> str:
-    return os.path.join(env_config.session_path, "history", "terminal")
+    return os.path.join(env_config.session_path, "history")
 
 
 def _history_session_path(session_id: str) -> str:
     return os.path.join(_history_dir(), session_id)
+
+
+def _extract_channel(session_id: str) -> str:
+    """从 session_id 提取渠道前缀，如 web_2026-08-11-... → web"""
+    return session_id.split("_")[0]
 
 
 # ============================================================
@@ -78,15 +81,22 @@ def _walk_count(directory: str) -> int:
 
 
 def list_sessions() -> dict:
-    """列出所有会话（当前 + 历史）"""
-    result = {"current": None, "history": []}
+    """列出所有会话（所有渠道的当前活跃 + 历史归档）"""
+    result = {"current": [], "history": []}
 
-    # 当前活跃会话
-    cf = _current_file_path()
-    if os.path.exists(cf):
-        data = _read_json(cf)
-        if data and data.get("status") == "active":
-            result["current"] = _session_summary(data)
+    # 当前活跃会话：扫描 current/ 下所有 .json 文件
+    current_dir = os.path.join(env_config.session_path, "current")
+    if os.path.isdir(current_dir):
+        try:
+            for fname in sorted(os.listdir(current_dir)):
+                if not fname.endswith(".json"):
+                    continue
+                fpath = os.path.join(current_dir, fname)
+                data = _read_json(fpath)
+                if data and data.get("status") == "active":
+                    result["current"].append(_session_summary(data))
+        except Exception:
+            pass
 
     # 历史归档会话
     hd = _history_dir()
@@ -106,8 +116,9 @@ def list_sessions() -> dict:
 
 def get_session(session_id: str) -> dict:
     """获取会话完整数据（先查 current，再查 history）"""
-    # current
-    cf = _current_file_path()
+    # current — 从 session_id 提取渠道名
+    channel = _extract_channel(session_id)
+    cf = _current_file_path(channel)
     data = _read_json(cf)
     if data and data.get("id") == session_id:
         return data
@@ -121,17 +132,17 @@ def get_session(session_id: str) -> dict:
     raise SessionNotFoundException(f"会话 {session_id} 不存在")
 
 
-def create_session(preserve_current: bool = True) -> dict:
+def create_session(channel: str = "web", preserve_current: bool = True) -> dict:
     """创建新会话"""
     if preserve_current:
-        cf = _current_file_path()
+        cf = _current_file_path(channel)
         data = _read_json(cf)
         if data and data.get("status") == "active" and data.get("session"):
-            session_manage.session_compress()
-            session_manage.save_current_session()
+            session_manage.session_compress(channel)
+            session_manage.save_current_session(channel)
 
     timestamp = datetime.now().strftime("%Y-%m-%d-%H_%M_%S")
-    session_id = f"terminal_{timestamp}"
+    session_id = f"{channel}_{timestamp}"
     new_session = {
         "id": session_id,
         "status": "active",
@@ -140,8 +151,8 @@ def create_session(preserve_current: bool = True) -> dict:
         "super_compressed": [],
         "session": [],
     }
-    os.makedirs(os.path.dirname(_current_file_path()), exist_ok=True)
-    with open(_current_file_path(), "w", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(_current_file_path(channel)), exist_ok=True)
+    with open(_current_file_path(channel), "w", encoding="utf-8") as f:
         json.dump(new_session, f, ensure_ascii=False, indent=2)
 
     return {
@@ -163,9 +174,10 @@ def compress_session(session_id: str) -> dict:
     before_round = data.get("compress_round", 0)
     before_count = len(data.get("session", []))
 
-    session_manage.session_compress()
+    channel = _extract_channel(session_id)
+    session_manage.session_compress(channel)
 
-    data_after = _read_json(_current_file_path()) or {}
+    data_after = _read_json(_current_file_path(channel)) or {}
     after_round = data_after.get("compress_round", 0)
     compressed = data_after.get("compressed", [])
     latest_chunk = compressed[-1] if compressed else {}
@@ -182,7 +194,8 @@ def compress_session(session_id: str) -> dict:
 
 def archive_session(session_id: str) -> dict:
     """归档活跃会话"""
-    cf = _current_file_path()
+    channel = _extract_channel(session_id)
+    cf = _current_file_path(channel)
     data = _read_json(cf)
 
     if not data:
@@ -192,8 +205,8 @@ def archive_session(session_id: str) -> dict:
     if data.get("status") != "active":
         raise SessionNotFoundException(f"会话 {session_id} 已经归档")
 
-    session_manage.session_compress()
-    session_manage.save_current_session()
+    session_manage.session_compress(channel)
+    session_manage.save_current_session(channel)
 
     return {
         "session_id": session_id,
@@ -204,7 +217,8 @@ def archive_session(session_id: str) -> dict:
 def delete_session(session_id: str) -> dict:
     """删除历史会话（含 ZVec 向量清理）"""
     # 安全检查：不能删活跃会话
-    cf = _current_file_path()
+    channel = _extract_channel(session_id)
+    cf = _current_file_path(channel)
     data = _read_json(cf)
     if data and data.get("id") == session_id and data.get("status") == "active":
         raise ActiveSessionDeleteForbiddenException()

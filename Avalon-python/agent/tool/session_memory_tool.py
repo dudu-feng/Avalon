@@ -80,7 +80,7 @@ def search_session_memory(
         session_id, chunk = _parse_doc_id(doc_id)
 
         location = os.path.join(
-            env_config.session_path, "history", "terminal",
+            env_config.session_path, "history",
             session_id, "raw", f"{chunk}.json",
         )
 

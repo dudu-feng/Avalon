@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 
 class CreateSessionRequest(BaseModel):
+    channel: str = "web"
     preserve_current: bool = True
 
 
@@ -32,7 +33,7 @@ class SessionMeta(BaseModel):
 
 
 class SessionListData(BaseModel):
-    current: Optional[SessionMeta] = None
+    current: List[SessionMeta] = []
     history: List[SessionMeta] = []
 
 

@@ -49,15 +49,15 @@ def change_model_type( type: str ):
     global model_type
     model_type = type
 
-def llm_chat( user_input: str, chat_history: list ):
+def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ):
     model = get_model()
     system_prompt = prompt_assemble.assemble_system_prompt()
     tool_list = base_tool.get_tool_list()
-    current_session = session_manage.get_session_context_for_prompt()
+    current_session = session_manage.get_session_context_for_prompt(channel)
 
     system_prompt.append(response_template)
     system_prompt.append(tool_list)
-    system_prompt.append("\n=====历史会话记录(terminal.json)=====\n")
+    system_prompt.append(f"\n=====历史会话记录({channel}.json)=====\n")
     system_prompt.append(current_session)
 
     # 构造消息列表

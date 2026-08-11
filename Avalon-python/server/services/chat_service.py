@@ -45,6 +45,7 @@ def _execute_tool(tool_name: str, arguments: dict) -> str:
 def streaming_react_loop(
     user_input: str,
     on_event: Optional[Callable[[str, dict], None]] = None,
+    channel: str = "terminal",
 ) -> list:
     """
     带事件回调的 ReAct 双层循环。
@@ -55,6 +56,7 @@ def streaming_react_loop(
     Args:
         user_input: 用户输入
         on_event: 事件回调 (event_type, data_dict)
+        channel: 渠道标识 (terminal/lark/desktop/web)
 
     Returns:
         chat_history — 完整聊天历史列表
@@ -71,7 +73,7 @@ def streaming_react_loop(
 
     # ===== 对话层循环 =====
     while True:
-        chat_result = llm.llm_chat(user_input, chat_history)
+        chat_result = llm.llm_chat(user_input, chat_history, channel)
         chat_result_content = parse_llm_json(chat_result.content)
 
         if not chat_result_content:
@@ -250,6 +252,9 @@ async def generate_sse(session_id: str, message: str) -> AsyncGenerator[str, Non
     from loop import session_manage
     from server.core.sse import format_sse
 
+    # 从 session_id 提取渠道前缀
+    channel = session_id.split("_")[0] if "_" in session_id else "web"
+
     queue: asyncio.Queue = asyncio.Queue()
     event_loop = asyncio.get_event_loop()
 
@@ -268,14 +273,14 @@ async def generate_sse(session_id: str, message: str) -> AsyncGenerator[str, Non
         """在线程池中执行"""
         nonlocal compress_triggered
         try:
-            history = streaming_react_loop(message, on_event=on_event)
+            history = streaming_react_loop(message, on_event=on_event, channel=channel)
 
             # 持久化
-            session_manage.update_current_session(history)
+            session_manage.update_current_session(history, channel)
 
             # 自动压缩检查
             compress_triggered = (
-                session_manage.auto_compress_check_from_history(history)
+                session_manage.auto_compress_check_from_history(history, channel)
             )
         except Exception as e:
             traceback.print_exc()

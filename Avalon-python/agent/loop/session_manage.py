@@ -10,12 +10,18 @@ from loop.zvec_store import zvec_store
 session_path = env_config.session_path
 session_index_path = env_config.session_index_path
 
-def init_session():
+
+def _current_file(channel: str) -> str:
+    """构建当前会话文件路径: session_path/current/{channel}.json"""
+    return os.path.join(session_path, "current", f"{channel}.json")
+
+
+def init_session(channel: str = "terminal"):
     """
     初始化当前会话
-    session_path/current/
+    session_path/current/{channel}.json
     """
-    current_file = os.path.join(session_path, "current", "terminal.json")
+    current_file = _current_file(channel)
     try:
         with open(current_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -26,7 +32,7 @@ def init_session():
         return
     else:
         timestamp = datetime.now().strftime("%Y-%m-%d-%H_%M_%S")
-        data["id"] = f"terminal_{timestamp}"
+        data["id"] = f"{channel}_{timestamp}"
         data["status"] = "active"
         data["compress_round"] = 0
         data["compressed"] = []
@@ -35,31 +41,34 @@ def init_session():
         with open(current_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-def get_current_session():
-    current_file = os.path.join(session_path, "current", "terminal.json")
+
+def get_current_session(channel: str = "terminal"):
+    current_file = _current_file(channel)
     with open(current_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
     return data
 
-def update_current_session(chat_history: list):
+
+def update_current_session(chat_history: list, channel: str = "terminal"):
     """
-    更新当前会话历史记录到 session_path/current/terminal.json
+    更新当前会话历史记录到 session_path/current/{channel}.json
     """
-    current_file = os.path.join(session_path, "current", "terminal.json")
+    current_file = _current_file(channel)
     with open(current_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
     data["session"].extend(chat_history)
     with open(current_file, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def save_current_session():
+
+def save_current_session(channel: str = "terminal"):
     """
     保存当前会话历史记录到历史会话目录
-    session_path/history/terminal
+    session_path/history
     """
-    session_compress()
-    current_file = os.path.join(session_path, "current", "terminal.json")
-    history_dir = os.path.join(session_path, "history", "terminal")
+    session_compress(channel)
+    current_file = _current_file(channel)
+    history_dir = os.path.join(session_path, "history")
     with open(current_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
     data["status"] = "archived"
@@ -77,14 +86,15 @@ def save_current_session():
     with open(current_file, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def session_compress():
+
+def session_compress(channel: str = "terminal"):
     """
     压缩历史会话目录
-    session_path/history/terminal
+    session_path/history
     """
-    history_dir = os.path.join(session_path, "history", "terminal")
-    current_file = os.path.join(session_path, "current", "terminal.json")
-    current_session = get_current_session()
+    history_dir = os.path.join(session_path, "history")
+    current_file = _current_file(channel)
+    current_session = get_current_session(channel)
     if not current_session["session"]:
         print("当前会话为空，无需压缩。")
         return
@@ -109,7 +119,8 @@ def session_compress():
     # doc_id 格式: {会话ID}_chunk_{序号}，后续可通过 ID 反查源会话文件
     try:
         doc_id = f"{current_session['id']}_chunk_{compressed_data_content['chunk']}"
-        timestamp = current_session['id'].replace("terminal_", "", 1)  # "terminal_2026-06-06-23_03_31" -> "2026-06-06-23_03_31"
+        # 从 session_id 提取时间戳：去掉渠道前缀 "{channel}_"
+        timestamp = current_session['id'].replace(f"{channel}_", "", 1)
         summary_text = "\n".join(compressed_data_content["summary"])
         keywords = compressed_data_content["keywords"]
         zvec_store.insert_session_memory(doc_id, summary_text, keywords, timestamp)
@@ -118,14 +129,14 @@ def session_compress():
         print(f"[ZVec] 写入向量数据库失败（不影响压缩流程）: {e}")
 
     # -- 永恒会话：检查是否需要渐进式总结（旧块合并） --
-    _progressive_summarize()
+    _progressive_summarize(channel)
 
 
 # ============================================================
 #  自动压缩 & 永恒会话管理
 # ============================================================
 
-def auto_compress_check_from_history(chat_history: list) -> bool:
+def auto_compress_check_from_history(chat_history: list, channel: str = "terminal") -> bool:
     """
     从 chat_history 中提取最大 input_tokens，判断是否触发自动压缩。
 
@@ -157,13 +168,13 @@ def auto_compress_check_from_history(chat_history: list) -> bool:
     threshold = env_config.session_memory_compress_threshold
     if max_input >= threshold:
         print(f"[AutoCompress] 输入 token({max_input}) >= 阈值({threshold})，触发自动压缩...")
-        session_compress()
+        session_compress(channel)
         return True
 
     return False
 
 
-def get_session_context_for_prompt() -> dict:
+def get_session_context_for_prompt(channel: str = "terminal") -> dict:
     """
     返回限界会话上下文，用于 LLM 系统提示。
 
@@ -176,7 +187,7 @@ def get_session_context_for_prompt() -> dict:
     返回:
         dict — 裁剪后的会话数据（浅拷贝，不影响文件中的完整数据）
     """
-    data = get_current_session()
+    data = get_current_session(channel)
     max_context = env_config.session_memory_context_chunks
     compressed = data.get("compressed", [])
 
@@ -195,7 +206,7 @@ def get_session_context_for_prompt() -> dict:
     return bounded
 
 
-def _progressive_summarize():
+def _progressive_summarize(channel: str = "terminal"):
     """
     永恒会话处理：当普通压缩块超过上限时，将最旧块 + 历史超级摘要合并。
 
@@ -218,7 +229,7 @@ def _progressive_summarize():
     max_chunks = env_config.session_memory_max_chunks
     merge_batch = max_chunks // 2  # 固定每次合并 5 个逻辑块
 
-    current = get_current_session()
+    current = get_current_session(channel)
     compressed = current.get("compressed", [])
     super_compressed = current.get("super_compressed")
 
@@ -307,7 +318,7 @@ def _progressive_summarize():
     # --- 更新：super_compressed 独立存储，compressed 只保留普通块 ---
     current["super_compressed"] = merged_chunk
     current["compressed"] = recent_chunks
-    current_file = os.path.join(session_path, "current", "terminal.json")
+    current_file = _current_file(channel)
     with open(current_file, 'w', encoding='utf-8') as f:
         json.dump(current, f, ensure_ascii=False, indent=2)
 
@@ -324,7 +335,8 @@ def _progressive_summarize():
         merged_doc_id = f"{session_id}_chunk_{merged_chunk_num}"
         merged_text = "\n".join(merged_chunk["summary"])
         merged_keywords = merged_chunk["keywords"]
-        timestamp = session_id.replace("terminal_", "", 1)
+        # 从 session_id 提取时间戳：去掉渠道前缀 "{channel}_"
+        timestamp = session_id.replace(f"{channel}_", "", 1)
         zvec_store.insert_session_memory(merged_doc_id, merged_text, merged_keywords, timestamp)
         print(f"[ZVec] 渐进式总结已写入: {merged_doc_id}")
     except Exception as e:
@@ -332,7 +344,7 @@ def _progressive_summarize():
 
     # --- 保存 raw 文件 ---
     try:
-        raw_dir = os.path.join(session_path, "history", "terminal", session_id, "raw")
+        raw_dir = os.path.join(session_path, "history", session_id, "raw")
         os.makedirs(raw_dir, exist_ok=True)
         with open(os.path.join(raw_dir, f"{merged_chunk_num}.json"), 'w', encoding='utf-8') as f:
             json.dump({

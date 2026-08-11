@@ -46,3 +46,6 @@ __pycache__/
 
 # .claude
 .claude/
+
+#/ lark_doc
+lark_doc/

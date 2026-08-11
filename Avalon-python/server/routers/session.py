@@ -36,7 +36,7 @@ async def api_list_sessions():
 @router.post("", response_model=ApiResponse[CreateSessionResponse])
 async def api_create_session(req: CreateSessionRequest):
     """创建新会话"""
-    data = create_session(req.preserve_current)
+    data = create_session(req.channel, req.preserve_current)
     return ApiResponse.ok(data)
 
 
