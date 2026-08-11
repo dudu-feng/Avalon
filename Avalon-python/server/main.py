@@ -6,9 +6,22 @@ FastAPI 应用入口
   shutdown → 关闭飞书渠道连接
 """
 
+import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+
+# ════════════════════════════════════════════════════════════════
+# 日志配置 — 必须在所有模块导入前完成
+# ════════════════════════════════════════════════════════════════
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    stream=sys.stdout,
+)
+# 飞书 SDK 日志过于冗长，限制为 WARNING
+logging.getLogger("lark_oapi").setLevel(logging.WARNING)
 
 # 将 agent/ 目录加入 Python 路径，以便导入 loop / tool / config 等 core 模块
 _agent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agent")
@@ -60,7 +73,7 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """应用生命周期：启动/关闭飞书渠道"""
-        from server.lark_service.channel_manager import startup_lark, shutdown_lark
+        from server.lark_service import startup_lark, shutdown_lark
 
         await startup_lark()
         try:

@@ -6,6 +6,7 @@ Chat SSE 服务 —— 独立的流式 ReAct 循环 + SSE 桥接
 """
 
 import asyncio
+import logging
 import traceback
 import uuid
 from datetime import datetime
@@ -19,6 +20,8 @@ from loop.react_loop import (
     parse_llm_json,
 )
 from tool import base_tool
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -131,17 +134,22 @@ def streaming_react_loop(
                 action_result = llm.llm_action(
                     user_input, action_target, action_history
                 )
-                action_result_content = parse_llm_json(action_result.content)
+                raw_content = action_result.content or ""
+                action_result_content = parse_llm_json(raw_content)
 
                 if not action_result_content:
-                    # JSON 完全无法解析 → 记录错误并回到对话层
+                    # JSON 解析失败 → 记录原始内容，回传给上层对话模型处理
+                    logger.warning(
+                        "[Lark] Action JSON 解析失败 | raw_content 前200字符: %s",
+                        raw_content[:200],
+                    )
                     _emit("error", {
                         "code": 50002,
                         "message": "action步骤JSON解析异常",
                     }, on_event)
                     chat_history.append({
                         "role": "assistant",
-                        "content": f"(action步骤JSON解析异常){action_result.content}",
+                        "content": f"(action步骤JSON解析异常){raw_content[:200]}",
                     })
                     _emit("done", {
                         "chat_history": chat_history,
@@ -149,13 +157,11 @@ def streaming_react_loop(
                     }, on_event)
                     return chat_history
 
-                # 部分恢复：如果缺少 next 字段，尝试用已有信息推断
+                # 如果缺少 next 字段，尝试用已有信息推断
                 if not action_result_content.get("next"):
-                    # 有 tool_call 信息 → 推断为 tool_call
                     if action_result_content.get("tool_call", {}).get("name"):
                         action_result_content["next"] = "tool_call"
                     else:
-                        # 无法推断 → 当作 finished，回到对话层
                         action_result_content["next"] = "finished"
 
                 analysis = action_result_content.get("analysis", "")

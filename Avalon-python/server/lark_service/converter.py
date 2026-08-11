@@ -7,6 +7,7 @@
 content 拼接规则详见 doc/design/feishu-session-format.md
 """
 
+import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -58,6 +59,9 @@ def _resource_label(res) -> str:
     return label
 
 
+logger = logging.getLogger(__name__)
+
+
 class MessageConverter:
     """
     飞书消息 → 标准 session entry 转换器。
@@ -73,12 +77,17 @@ class MessageConverter:
 
         返回的 dict 可直接传给 session_manage.update_current_session()
         """
-        return {
-            "role": "user",
-            "time": _now(),
-            "content": self._build_content(msg),
-            "meta": self._build_user_meta(msg),
-        }
+        content = self._build_content(msg)
+        meta = self._build_user_meta(msg)
+
+        logger.debug(
+            "[Lark] 消息转换完成 | chat_type=%s | content_len=%d | has_reply=%s | resources=%d",
+            meta["chat_type"],
+            len(content),
+            meta.get("reply_to") is not None,
+            len(meta.get("resources", [])),
+        )
+        return {"role": "user", "time": _now(), "content": content, "meta": meta}
 
     def card_action_to_entry(self, event: CardActionEvent) -> Dict[str, Any]:
         """

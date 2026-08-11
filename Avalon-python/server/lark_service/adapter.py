@@ -15,9 +15,12 @@ Phase 2（后续升级）:
 """
 
 import asyncio
+import logging
 from typing import Any, Dict, Optional
 
 from lark_oapi.channel import FeishuChannel
+
+logger = logging.getLogger(__name__)
 
 
 class ReplyAdapter:
@@ -79,8 +82,12 @@ class ReplyAdapter:
                     self._processing_reaction_id = data.get(
                         "reaction_id"
                     ) or data.get("reactionId", "")
+                logger.debug(
+                    "[Lark] ReplyAdapter: 已添加 reaction=%s | reaction_id=%s",
+                    self._processing_reaction, self._processing_reaction_id,
+                )
             except Exception:
-                pass
+                logger.debug("[Lark] ReplyAdapter: 添加 reaction 失败", exc_info=True)
 
     # ── 事件消费主循环 ──
 
@@ -94,29 +101,42 @@ class ReplyAdapter:
           error          → 记录错误
           __sentinel__   → 队列结束标记，触发 finalize
         """
+        event_stats: Dict[str, int] = {}
         while True:
             event_type, data = await queue.get()
 
             if event_type == "__sentinel__":
+                logger.debug(
+                    "[Lark] ReplyAdapter: 收到 sentinel | 事件统计=%s",
+                    event_stats,
+                )
                 await self._finalize()
                 break
 
+            event_stats[event_type] = event_stats.get(event_type, 0) + 1
             handler = getattr(self, f"_on_{event_type}", None)
             if handler:
                 try:
                     await handler(data)
                 except Exception:
-                    pass
+                    logger.debug(
+                        "[Lark] ReplyAdapter: 处理事件失败 | event=%s",
+                        event_type, exc_info=True,
+                    )
 
     # ── 事件处理器 ──
 
     async def _on_chat_message(self, data: Dict[str, Any]) -> None:
         delta = data.get("delta", "")
         self._accumulated_text += delta
+        # 每累积 200 字符打印一次进度
+        if len(self._accumulated_text) % 200 < len(delta) if delta else False:
+            logger.debug("[Lark] ReplyAdapter: 已累积 %d 字符", len(self._accumulated_text))
 
     async def _on_error(self, data: Dict[str, Any]) -> None:
         self._has_error = True
         self._error_message = data.get("message", "处理出错")
+        logger.warning("[Lark] ReplyAdapter: 收到错误事件 | message=%s", self._error_message)
 
     async def _on_done(self, data: Dict[str, Any]) -> None:
         await self._finalize()
@@ -164,6 +184,12 @@ class ReplyAdapter:
             return
         self._finalized = True
 
+        reply_len = len(self._accumulated_text)
+        logger.info(
+            "[Lark] ReplyAdapter: 开始 finalize | chat_id=%s | chat_type=%s | 回复长度=%d | has_error=%s",
+            self._chat_id, self._chat_type, reply_len, self._has_error,
+        )
+
         # ① 取消处理中 reaction → 添加完成 reaction
         if self._reply_to_message_id:
             # 先移除处理中标记
@@ -172,15 +198,17 @@ class ReplyAdapter:
                     await self._channel.remove_reaction(
                         self._reply_to_message_id, self._processing_reaction_id
                     )
+                    logger.debug("[Lark] ReplyAdapter: 已移除处理中 reaction")
                 except Exception:
-                    pass
+                    logger.debug("[Lark] ReplyAdapter: 移除处理中 reaction 失败", exc_info=True)
             # 再添加完成标记
             try:
                 await self._channel.add_reaction(
                     self._reply_to_message_id, self._done_reaction
                 )
+                logger.debug("[Lark] ReplyAdapter: 已添加完成 reaction=%s", self._done_reaction)
             except Exception:
-                pass
+                logger.debug("[Lark] ReplyAdapter: 添加完成 reaction 失败", exc_info=True)
 
         # ② 发送回复
         if self._accumulated_text:
@@ -189,13 +217,22 @@ class ReplyAdapter:
             if self._chat_type != "p2p" and self._reply_to_message_id:
                 opts["reply_to"] = self._reply_to_message_id
 
+            logger.info(
+                "[Lark] ReplyAdapter: 发送回复 | chat_id=%s | 长度=%d | reply_to=%s",
+                self._chat_id, reply_len, opts.get("reply_to", "无"),
+            )
             await self._channel.send(
                 self._chat_id,
                 {"markdown": self._accumulated_text},
                 opts,
             )
+            logger.info("[Lark] ReplyAdapter: 回复发送成功")
 
         elif self._has_error:
+            logger.warning(
+                "[Lark] ReplyAdapter: 发送错误通知 | message=%s",
+                self._error_message,
+            )
             await self._channel.send(
                 self._chat_id,
                 {"text": f"处理出错: {self._error_message}"},

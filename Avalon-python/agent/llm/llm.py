@@ -1,4 +1,5 @@
-import os
+import json
+import logging
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -7,6 +8,8 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AI
 from config.env_config import env_config
 from loop import prompt_assemble, session_manage
 from tool import base_tool
+
+logger = logging.getLogger(__name__)
 
 model_type = "default"
 
@@ -31,17 +34,17 @@ def get_model() -> ChatOpenAI:
         api_key=env_config.default_api_key,
         model_name=env_config.default_model,
         base_url=env_config.default_model_base_url,
+        temperature=0.7,
     )
+
+
 def get_jsonOutput_model() -> ChatOpenAI:
     return ChatOpenAI(
         api_key=env_config.default_api_key,
         model_name=env_config.default_model,
         base_url=env_config.default_model_base_url,
-        model_kwargs={
-            "response_format": {
-                "type": "json_object"
-            }
-        }
+        temperature=0.1,  # 低温度提高 JSON 格式输出的稳定性
+        timeout=120
     )
 
 # 切换模型类型
@@ -50,7 +53,9 @@ def change_model_type( type: str ):
     model_type = type
 
 def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ):
-    model = get_jsonOutput_model()  # 强制 JSON 输出，避免 markdown 包裹和格式错误
+    logger.info("[LLM] 对话模型调用开始 | channel=%s", channel)
+
+    model = get_model()
     system_prompt = prompt_assemble.assemble_system_prompt()
     tool_list = base_tool.get_tool_list()
     current_session = session_manage.get_session_context_for_prompt(channel)
@@ -69,14 +74,20 @@ def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ):
     # 调用模型
     result = model.invoke(messages)
 
+    logger.info("[LLM] 对话模型调用完成")
     return result
 
 def llm_action( user_input: str, action_target: str, action_history: list ):
+    logger.info("[LLM] Action 模型调用开始 | target=%s", action_target)
+
     model = get_jsonOutput_model()
-    system_prompt = [f"""
-        这是一个action步骤模型调用，用于执行部分步式任务，请完成以下目标：
+    tool_list = base_tool.get_tool_list()
+
+    system_prompt = f"""
+        这是一个action步骤模型调用，用于执行部分步式任务，请完成以下目标，当操作失败次数过多时，则停止执行操作：
         { action_target }
-        返回纯JSON格式：
+
+        返回纯JSON格式（不要用markdown代码块包裹）：
         样例JSON输出:{{
             "analysis": "分析当前情况，思考下一步应该做什么",
             "next": "tool_call / sub_analysis / finished",
@@ -87,19 +98,20 @@ def llm_action( user_input: str, action_target: str, action_history: list ):
             "sub_analysis": "子步骤分析/规划返回（仅next=sub_analysis时需要）"
         }}
 
-        本次action步骤执行历史，当操作失败次数过多时，则停止执行操作，不要陷入死循环，根据操作历史返回失败原因，回到对话模型：
+        可用的工具列表：
+        { tool_list }
+
+        本次action步骤执行历史，当操作失败次数过多时，则停止执行操作:
         { action_history }
     """
-    ]
-    tool_list = base_tool.get_tool_list()
-    system_prompt.append(tool_list)
 
-    messages = [SystemMessage(content=str(system_prompt))]
+    messages = [SystemMessage(content=system_prompt)]
     messages.append(HumanMessage(content=user_input))
 
     # 调用模型
     result = model.invoke(messages)
 
+    logger.info("[LLM] Action 模型调用完成")
     return result
 
 def llm_compress( session_data: dict ):

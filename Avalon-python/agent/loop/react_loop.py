@@ -1,103 +1,47 @@
 import json
+import logging
 import re
 import datetime
 from tool import base_tool
 from llm import llm
 
+logger = logging.getLogger(__name__)
 
-def _extract_json_block(text: str) -> str:
-    """
-    从任意文本中提取最外层的 JSON 对象。
 
-    策略：找到第一个 `{` 和最后一个 `}`，用括号计数确保配对。
-    比正则更可靠，能处理嵌套结构和字符串中的花括号。
+def _strip_markdown_fences(text: str) -> str:
     """
-    # 先尝试找 markdown 代码块中的 JSON
+    剥离外层 markdown 代码块标记。
+
+    ```json\\n...\\n``` → 提取内部内容
+    ```json\\n...       → 移除开头标记（无结尾的情况）
+    无代码块              → 原样返回
+    """
+    # 完整代码块
     m = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
     if m:
-        text = m.group(1)
+        return m.group(1).strip()
 
-    start = text.find("{")
-    if start == -1:
-        return ""
+    # 只有开头标记
+    text = re.sub(r'^```(?:json)?\s*\n?', '', text, count=1)
 
-    # 括号计数，处理字符串中的花括号
-    depth = 0
-    in_string = False
-    escape = False
-    end = -1
-
-    for i, ch in enumerate(text):
-        if start != -1 and i < start:
-            continue
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"' and not in_string:
-            in_string = True
-            continue
-        if ch == '"' and in_string:
-            in_string = False
-            continue
-        if in_string:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-
-    if end == -1:
-        return ""
-
-    return text[start:end + 1]
-
-
-def _repair_json(text: str) -> str:
-    """
-    修复 LLM 常见的 JSON 格式错误。
-
-    按优先级依次尝试：
-    1. 移除尾部逗号（最常见）
-    2. 单引号转双引号
-    3. 补全截断的 JSON（缺少的 } 和 " ）
-    """
-    # ① 移除对象/数组中的尾部逗号: ,}  ,]
-    text = re.sub(r",\s*([}\]])", r"\1", text)
-
-    # ② 移除行尾尾部逗号（LLM 常在多行 JSON 最后一项后加逗号）
-    text = re.sub(r",\s*\n\s*([}\]])", r"\n\1", text)
-
-    # ③ 尝试修复截断：补全缺失的闭合花括号
-    open_braces = text.count("{") - text.count("}")
-    if open_braces > 0:
-        # 检查是否在字符串中间被截断
-        in_str = False
-        for ch in text:
-            if ch == '"':
-                in_str = not in_str
-        if in_str:
-            text += '"'
-        text += "}" * open_braces
+    # 只有结尾标记
+    if text.rstrip().endswith('```'):
+        text = text.rstrip()[:-3].rstrip()
 
     return text
 
 
 def parse_llm_json(llm_output_content: str) -> dict:
     """
-    解析 LLM 返回的 JSON 内容，带多重容错修复。
+    解析 LLM 返回的 JSON 内容。
 
-    修复策略（按优先级）：
-    1. 去除 markdown 代码块
-    2. 括号匹配提取 JSON 对象
-    3. 直接 json.loads
-    4. 修复尾部逗号后重试
-    5. 补全截断的 JSON 后重试
+    action 模型已通过 response_format: json_object 约束输出，
+    只需处理一种异常：外层 markdown 代码块包裹。
+
+    步骤：
+    1. 直接 json.loads（正常情况）
+    2. 剥离 markdown 代码块后 json.loads（被代码块包裹的情况）
+    3. 都不行 → 返回 {}，交由上层决定重试或调整
     """
     if not llm_output_content or not isinstance(llm_output_content, str):
         return {}
@@ -106,44 +50,25 @@ def parse_llm_json(llm_output_content: str) -> dict:
     if not content:
         return {}
 
-    # ① 提取 JSON 块（处理嵌套、markdown）
-    extracted = _extract_json_block(content)
-    if not extracted:
-        # 可能 LLM 没返回花括号，尝试整体解析
-        extracted = content
-
-    # ② 直接解析
+    # ① 直接解析
     try:
-        result = json.loads(extracted)
+        result = json.loads(content)
         if isinstance(result, dict):
             return result
-        return {}
     except json.JSONDecodeError:
         pass
 
-    # ③ 修复常见错误后重试
-    repaired = _repair_json(extracted)
-    try:
-        result = json.loads(repaired)
-        if isinstance(result, dict):
-            return result
-        return {}
-    except json.JSONDecodeError:
-        pass
+    # ② 剥离 markdown 代码块后重试
+    stripped = _strip_markdown_fences(content)
+    if stripped != content:
+        try:
+            result = json.loads(stripped)
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
 
-    # ④ 最后手段：尝试找到所有有效的键值对
-    # 匹配 "key": value 模式
-    partial = {}
-    for m in re.finditer(r'"(\w+)"\s*:\s*("(?:[^"\\]|\\.)*"|[^,}\]]+)', repaired):
-        key = m.group(1)
-        val = m.group(2).strip()
-        if val.startswith('"') and val.endswith('"'):
-            val = val[1:-1]
-        partial[key] = val
-
-    if partial:
-        return partial
-
+    # ③ 无法解析，返回空 dict 交由上层处理
     return {}
 
 def get_current_time() -> str:
@@ -202,10 +127,18 @@ def react_loop(user_input: str) -> dict:
 
             while True:
                 action_result = llm.llm_action(user_input, action_target, action_history)
-                
-                action_result_content = parse_llm_json(action_result.content)
+                raw_content = action_result.content or ""
+                action_result_content = parse_llm_json(raw_content)
+
                 if not action_result_content:
-                    chat_history.append({"role": "assistant", "content": f"(action步骤JSON解析异常){action_result.content}"})
+                    logger.warning(
+                        "Action JSON 解析失败 | raw_content 前200字符: %s",
+                        raw_content[:200],
+                    )
+                    chat_history.append({
+                        "role": "assistant",
+                        "content": f"(action步骤JSON解析异常){raw_content[:200]}",
+                    })
                     return chat_history
 
                 print(f"\nAgent[action分析]: {action_result_content.get('analysis', '')}")
