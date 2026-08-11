@@ -12,7 +12,7 @@
 import json
 import os
 from langchain_core.tools import tool
-from loop.zvec_store import zvec_store
+from loop.zvec_store import get_zvec_store
 from config.env_config import env_config
 
 
@@ -62,11 +62,11 @@ def search_session_memory(
     # 选择查询方法
     try:
         if search_mode == "semantic":
-            results = zvec_store.vectorQuery_session_memory(query, topk, filter_expr)
+            results = get_zvec_store().vectorQuery_session_memory(query, topk, filter_expr)
         elif search_mode == "keyword":
-            results = zvec_store.scalarQuery_session_memory(query, topk, filter_expr)
+            results = get_zvec_store().scalarQuery_session_memory(query, topk, filter_expr)
         else:  # hybrid
-            results = zvec_store.hybridQuery_session_memory(query, topk, filter_expr)
+            results = get_zvec_store().hybridQuery_session_memory(query, topk, filter_expr)
     except Exception as e:
         return json.dumps(
             {"error": f"查询失败: {e}"},

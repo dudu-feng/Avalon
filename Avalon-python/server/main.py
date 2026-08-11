@@ -1,9 +1,14 @@
 """
 FastAPI 应用入口
+
+生命周期:
+  startup  → 初始化飞书渠道（如已配置凭据）
+  shutdown → 关闭飞书渠道连接
 """
 
 import os
 import sys
+from contextlib import asynccontextmanager
 
 # 将 agent/ 目录加入 Python 路径，以便导入 loop / tool / config 等 core 模块
 _agent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agent")
@@ -50,6 +55,21 @@ def create_app() -> FastAPI:
     # 注册异常处理器
     register_handlers(app)
 
+    # ── 飞书渠道 lifespan ──
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """应用生命周期：启动/关闭飞书渠道"""
+        from server.lark_service.channel_manager import startup_lark, shutdown_lark
+
+        await startup_lark()
+        try:
+            yield
+        finally:
+            await shutdown_lark()
+
+    app.router.lifespan_context = lifespan
+
     return app
 
 
@@ -65,7 +85,7 @@ def main():
         "server.main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        reload=False,
     )
 
 

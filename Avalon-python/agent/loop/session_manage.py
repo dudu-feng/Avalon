@@ -5,7 +5,7 @@ from datetime import datetime
 from config.env_config import env_config
 from llm import llm
 from loop import react_loop
-from loop.zvec_store import zvec_store
+from loop.zvec_store import get_zvec_store
 
 session_path = env_config.session_path
 session_index_path = env_config.session_index_path
@@ -123,7 +123,7 @@ def session_compress(channel: str = "terminal"):
         timestamp = current_session['id'].replace(f"{channel}_", "", 1)
         summary_text = "\n".join(compressed_data_content["summary"])
         keywords = compressed_data_content["keywords"]
-        zvec_store.insert_session_memory(doc_id, summary_text, keywords, timestamp)
+        get_zvec_store().insert_session_memory(doc_id, summary_text, keywords, timestamp)
         print(f"[ZVec] 会话摘要已写入向量数据库: {doc_id}")
     except Exception as e:
         print(f"[ZVec] 写入向量数据库失败（不影响压缩流程）: {e}")
@@ -326,7 +326,7 @@ def _progressive_summarize(channel: str = "terminal"):
     for old in old_chunks:
         old_num = old.get("chunk", 0)
         try:
-            zvec_store.delete_session_memory(f"{session_id}_chunk_{old_num}")
+            get_zvec_store().delete_session_memory(f"{session_id}_chunk_{old_num}")
         except Exception:
             pass
 
@@ -337,7 +337,7 @@ def _progressive_summarize(channel: str = "terminal"):
         merged_keywords = merged_chunk["keywords"]
         # 从 session_id 提取时间戳：去掉渠道前缀 "{channel}_"
         timestamp = session_id.replace(f"{channel}_", "", 1)
-        zvec_store.insert_session_memory(merged_doc_id, merged_text, merged_keywords, timestamp)
+        get_zvec_store().insert_session_memory(merged_doc_id, merged_text, merged_keywords, timestamp)
         print(f"[ZVec] 渐进式总结已写入: {merged_doc_id}")
     except Exception as e:
         print(f"[ProgressiveSummarize] ZVec 写入失败: {e}")

@@ -238,13 +238,13 @@ def delete_session(session_id: str) -> dict:
         if sc:
             chunks.append(sc)
         try:
-            from loop.zvec_store import zvec_store
+            from loop.zvec_store import get_zvec_store
 
             for c in chunks:
                 cid = c.get("chunk", 0)
                 if cid:
                     try:
-                        zvec_store.delete_session_memory(
+                        get_zvec_store().delete_session_memory(
                             f"{session_id}_chunk_{cid}"
                         )
                         zvec_removed += 1

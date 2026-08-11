@@ -193,5 +193,25 @@ class ZvecStore:
         return result
 
 
-# 全局唯一实例，其它模块只导入这个实例即可
-zvec_store = ZvecStore()
+# 惰性初始化：避免模块导入时立即创建实例（会造成多进程抢锁）
+_zvec_store = None
+
+
+def get_zvec_store() -> ZvecStore:
+    """
+    返回全局唯一的 ZvecStore 实例（惰性初始化）。
+
+    只有在真正需要读写数据库时才创建实例，避免：
+    - uvicorn reload 子进程在模块导入阶段抢锁
+    - 顶层 import 触发的副作用
+    - 多进程同时 open 同一 Collection
+
+    用法:
+        from loop.zvec_store import get_zvec_store
+        store = get_zvec_store()
+        store.insert_session_memory(...)
+    """
+    global _zvec_store
+    if _zvec_store is None:
+        _zvec_store = ZvecStore()
+    return _zvec_store

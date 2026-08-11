@@ -50,7 +50,7 @@ def change_model_type( type: str ):
     model_type = type
 
 def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ):
-    model = get_model()
+    model = get_jsonOutput_model()  # 强制 JSON 输出，避免 markdown 包裹和格式错误
     system_prompt = prompt_assemble.assemble_system_prompt()
     tool_list = base_tool.get_tool_list()
     current_session = session_manage.get_session_context_for_prompt(channel)

@@ -77,7 +77,7 @@ def streaming_react_loop(
         chat_result_content = parse_llm_json(chat_result.content)
 
         if not chat_result_content:
-            # JSON 解析失败 → 纯文本回复
+            # JSON 解析完全失败 → 纯文本回复
             _emit("chat_message", {"delta": chat_result.content}, on_event)
             _emit("error", {
                 "code": 50002,
@@ -92,6 +92,10 @@ def streaming_react_loop(
                 "compress_triggered": False,
             }, on_event)
             return chat_history
+
+        # 部分恢复：如果解析出了 message 但缺少 next，当作 stop 处理
+        if not chat_result_content.get("next"):
+            chat_result_content["next"] = "stop"
 
         # thought
         thought = chat_result_content.get("thought", "")
@@ -130,6 +134,7 @@ def streaming_react_loop(
                 action_result_content = parse_llm_json(action_result.content)
 
                 if not action_result_content:
+                    # JSON 完全无法解析 → 记录错误并回到对话层
                     _emit("error", {
                         "code": 50002,
                         "message": "action步骤JSON解析异常",
@@ -143,6 +148,15 @@ def streaming_react_loop(
                         "compress_triggered": False,
                     }, on_event)
                     return chat_history
+
+                # 部分恢复：如果缺少 next 字段，尝试用已有信息推断
+                if not action_result_content.get("next"):
+                    # 有 tool_call 信息 → 推断为 tool_call
+                    if action_result_content.get("tool_call", {}).get("name"):
+                        action_result_content["next"] = "tool_call"
+                    else:
+                        # 无法推断 → 当作 finished，回到对话层
+                        action_result_content["next"] = "finished"
 
                 analysis = action_result_content.get("analysis", "")
                 next_step = action_result_content.get("next", "")
