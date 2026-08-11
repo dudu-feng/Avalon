@@ -7,6 +7,8 @@
   - hybrid:   混合检索（语义 + 关键词，默认推荐）
 
 支持按时间范围过滤（基于 doc_id 中的时间戳）。
+
+同时提供向量数据库索引重建能力，用于会话文件目录结构变更后同步向量库。
 """
 
 import json
@@ -101,6 +103,146 @@ def search_session_memory(
         )
 
     return json.dumps(formatted, ensure_ascii=False, indent=2)
+
+
+@tool
+def rebuild_session_memory_index(confirm: str = "") -> str:
+    """
+    重建向量数据库索引。
+
+    当会话历史文件的目录结构发生变更（如文件移动、重命名、架构调整）时，
+    向量数据库中存储的旧文件路径会失效，导致 search_session_memory 返回的
+    location 路径无法访问。
+
+    此工具会将向量数据库完全重置，然后重新扫描以下位置的所有压缩块并重新入库：
+      - history/{session_id}/index.json   → 已归档会话
+      - current/{channel}.json            → 活跃会话
+
+    参数：
+    - confirm: 输入 "yes" 确认重建操作（必填，防止误操作）
+
+    返回：重建结果统计
+    """
+    if confirm.strip().lower() != "yes":
+        return json.dumps({
+            "error": "此操作将完全重建向量数据库索引，请传入 confirm='yes' 确认",
+            "hint": "使用 rebuild_session_memory_index(confirm='yes') 确认操作",
+        }, ensure_ascii=False)
+
+    import traceback
+
+    store = get_zvec_store()
+    history_dir = os.path.join(env_config.session_path, "history")
+    current_dir = os.path.join(env_config.session_path, "current")
+
+    result = {
+        "cleared": True,
+        "archived_sessions": 0,
+        "active_sessions": 0,
+        "total_chunks": 0,
+        "errors": [],
+    }
+
+    # ① 清空向量数据库
+    try:
+        store.rebuild_collection()
+    except Exception as e:
+        return json.dumps({
+            "error": f"清空向量数据库失败: {e}",
+            "detail": traceback.format_exc()[-300:],
+        }, ensure_ascii=False)
+
+    # ② 扫描已归档会话
+    if os.path.isdir(history_dir):
+        for session_id in sorted(os.listdir(history_dir)):
+            session_dir = os.path.join(history_dir, session_id)
+            if not os.path.isdir(session_dir):
+                continue
+            index_file = os.path.join(session_dir, "index.json")
+            if not os.path.isfile(index_file):
+                continue
+
+            channel = session_id.split("_")[0]
+            n = _reindex_from_file(session_id, index_file, channel)
+            if n > 0:
+                result["archived_sessions"] += 1
+                result["total_chunks"] += n
+            elif n == -1:
+                result["errors"].append(f"读取失败: {index_file}")
+
+    # ③ 扫描活跃会话
+    if os.path.isdir(current_dir):
+        for fname in sorted(os.listdir(current_dir)):
+            if not fname.endswith(".json"):
+                continue
+            fpath = os.path.join(current_dir, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                result["errors"].append(f"读取失败: {fpath}")
+                continue
+
+            if data.get("status") != "active":
+                continue
+
+            session_id = data.get("id", "")
+            if not session_id:
+                continue
+
+            channel = fname.replace(".json", "")
+            n = _reindex_from_data(session_id, data, channel)
+            if n > 0:
+                result["active_sessions"] += 1
+                result["total_chunks"] += n
+
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+def _reindex_from_file(session_id: str, index_path: str, channel: str) -> int:
+    """从 index.json 读取会话数据并重建索引。返回入库块数，-1 表示读取失败。"""
+    try:
+        with open(index_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return -1
+    return _reindex_from_data(session_id, data, channel)
+
+
+def _reindex_from_data(session_id: str, data: dict, channel: str) -> int:
+    """从会话数据中提取 compressed + super_compressed 并插入向量库。"""
+    timestamp = session_id.replace(f"{channel}_", "", 1)
+    store = get_zvec_store()
+    count = 0
+
+    # 普通压缩块
+    for chunk in data.get("compressed", []):
+        chunk_id = chunk.get("chunk", 0)
+        doc_id = f"{session_id}_chunk_{chunk_id}"
+        text = "\n".join(chunk.get("summary", []))
+        keywords = chunk.get("keywords", [])
+        if text:
+            try:
+                store.insert_session_memory(doc_id, text, keywords, timestamp)
+                count += 1
+            except Exception:
+                pass
+
+    # 超级摘要
+    sc = data.get("super_compressed")
+    if sc:
+        chunk_id = sc.get("chunk", "merged")
+        doc_id = f"{session_id}_chunk_{chunk_id}"
+        text = "\n".join(sc.get("summary", []))
+        keywords = sc.get("keywords", [])
+        if text:
+            try:
+                store.insert_session_memory(doc_id, text, keywords, timestamp)
+                count += 1
+            except Exception:
+                pass
+
+    return count
 
 
 def _build_time_filter(time_range: str) -> str:

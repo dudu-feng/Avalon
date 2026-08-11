@@ -192,6 +192,34 @@ class ZvecStore:
         )
         return result
 
+    def rebuild_collection(self) -> int:
+        """
+        删除并重建整个集合。
+
+        用于会话历史文件目录结构变更后重置向量数据库。
+        旧集合数据将被完全清除，新的空集合将被创建。
+
+        返回:
+            0 — 重建成功
+        """
+        import shutil
+
+        # 释放旧集合引用
+        self._collection = None
+
+        # 删除旧数据库目录
+        if os.path.exists(self._zvec_collection_path):
+            shutil.rmtree(self._zvec_collection_path)
+
+        # 重新创建空集合
+        self._collection = zvec.create_and_open(
+            path=self._zvec_collection_path,
+            schema=self._session_memory_schema,
+            option=zvec.CollectionOption(read_only=False, enable_mmap=True),
+        )
+        print(f"[ZvecStore] 集合已重建: {self._zvec_collection_path}")
+        return 0
+
 
 # 惰性初始化：避免模块导入时立即创建实例（会造成多进程抢锁）
 _zvec_store = None

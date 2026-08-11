@@ -154,6 +154,9 @@ class ReActPipeline:
         from server.services.chat_service import streaming_react_loop
         from loop import session_manage
 
+        # 确保飞书会话已初始化（首次消息或 save_current_session 后重新分配会话 ID）
+        session_manage.init_session("feishu")
+
         event_count = [0]  # 用列表包装以便在闭包中修改
 
         def on_event(event_type: str, data: Dict[str, Any]) -> None:
