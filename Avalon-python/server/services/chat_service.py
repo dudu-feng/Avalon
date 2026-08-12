@@ -6,7 +6,6 @@ Chat SSE 服务 —— 独立的流式 ReAct 循环 + SSE 桥接
 """
 
 import asyncio
-import logging
 import traceback
 import uuid
 from datetime import datetime
@@ -21,9 +20,6 @@ from loop.react_loop import (
 )
 from tool import base_tool
 
-logger = logging.getLogger(__name__)
-
-
 # ============================================================
 #  流式 ReAct 循环（独立实现，不修改 agent/loop/react_loop.py）
 # ============================================================
@@ -35,11 +31,16 @@ def _emit(event_type: str, data: dict, callback: Optional[Callable] = None):
 
 
 def _execute_tool(tool_name: str, arguments: dict) -> str:
-    """执行工具（与 react_loop.execute_tool 逻辑一致）"""
+    """执行工具（与 react_loop.execute_tool 逻辑一致）。返回值强制转为字符串。"""
     for tool in base_tool.TOOLS:
         if tool.name == tool_name:
             try:
-                return tool.invoke(arguments)
+                result = tool.invoke(arguments)
+                # 确保返回值为字符串（部分工具如 get_directory_contents 可能返回 list）
+                if not isinstance(result, str):
+                    import json as _json
+                    result = _json.dumps(result, ensure_ascii=False, indent=2)
+                return result
             except Exception as e:
                 return f"工具调用失败: {e}"
     return f"未找到工具: {tool_name}"
@@ -139,10 +140,6 @@ def streaming_react_loop(
 
                 if not action_result_content:
                     # JSON 解析失败 → 记录原始内容，回传给上层对话模型处理
-                    logger.warning(
-                        "[Lark] Action JSON 解析失败 | raw_content 前200字符: %s",
-                        raw_content[:200],
-                    )
                     _emit("error", {
                         "code": 50002,
                         "message": "action步骤JSON解析异常",

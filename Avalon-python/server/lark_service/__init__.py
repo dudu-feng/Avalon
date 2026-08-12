@@ -11,7 +11,6 @@
 """
 
 import asyncio
-import logging
 from typing import Optional
 
 from server.lark_service.config import FeishuConfig
@@ -20,9 +19,6 @@ from server.lark_service.converter import MessageConverter
 from server.lark_service.adapter import ReplyAdapter
 from server.lark_service.handler import EventHandler
 from server.lark_service.pipeline import ReActPipeline
-
-logger = logging.getLogger(__name__)
-
 
 class LarkService:
     """
@@ -61,8 +57,6 @@ class LarkService:
         if not self._config.is_configured():
             raise ValueError("飞书凭据未配置")
 
-        logger.info("[Lark] 正在启动飞书渠道...")
-
         # ① 创建管线
         self._pipeline = ReActPipeline()
 
@@ -73,8 +67,6 @@ class LarkService:
         # ③ 创建事件处理器并绑定到 SDK Channel
         self._handler = EventHandler(self._config, self._pipeline)
         self._handler.bind(self._channel.sdk_channel)
-
-        logger.info("[Lark] 飞书渠道启动完成")
 
     async def stop(self) -> None:
         """
@@ -99,9 +91,6 @@ class LarkService:
         self._pipeline = None
         self._config = None
 
-        logger.info("[Lark] 飞书渠道已停止")
-
-
 # ════════════════════════════════════════════════════════════════
 # 全局实例 + FastAPI lifespan 集成
 # ════════════════════════════════════════════════════════════════
@@ -125,14 +114,12 @@ async def startup_lark() -> Optional[LarkService]:
 
     config = FeishuConfig.from_env()
     if not config.app_id or not config.enabled:
-        logger.info("[Lark] 飞书渠道未启用（凭据未配置或 FEISHU_ENABLED=false）")
         return None
 
     service = LarkService()
     try:
         await service.start()
     except Exception:
-        logger.exception("[Lark] 飞书渠道启动失败")
         return None
 
     _lark_service = service

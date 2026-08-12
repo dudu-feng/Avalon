@@ -8,7 +8,6 @@ ReAct 执行管线。
 """
 
 import asyncio
-import logging
 import time
 import traceback
 from typing import Any, Dict
@@ -17,8 +16,6 @@ from lark_oapi.channel import FeishuChannel
 
 from server.lark_service.adapter import ReplyAdapter
 from server.lark_service.config import FeishuConfig
-
-logger = logging.getLogger(__name__)
 
 
 class ReActPipeline:
@@ -57,11 +54,6 @@ class ReActPipeline:
         chat_id = msg_meta.get("chat_id", "?")
         chat_type = msg_meta.get("chat_type", "p2p")
 
-        logger.info(
-            "[Lark] ═══ ReAct 管线启动 | msg_id=%s | chat_id=%s | chat_type=%s | input_len=%d",
-            msg_id, chat_id, chat_type, len(user_input),
-        )
-
         # ① 创建回复适配器
         adapter = ReplyAdapter(
             channel,
@@ -71,15 +63,11 @@ class ReActPipeline:
             processing_reaction=config.processing_reaction,
             done_reaction=config.done_reaction,
         )
-        logger.debug("[Lark] 管线: ReplyAdapter 已创建 | reaction=%s→%s",
-                     config.processing_reaction, config.done_reaction)
-
         # ② 标记处理中（👀 reaction）
         try:
             await adapter.mark_processing()
-            logger.debug("[Lark] 管线: 已标记处理中 reaction")
         except Exception:
-            logger.debug("[Lark] 管线: 标记处理中 reaction 失败（可能无消息权限）")
+            pass
 
         # ③ 创建跨线程队列
         queue: asyncio.Queue = asyncio.Queue()
@@ -89,13 +77,10 @@ class ReActPipeline:
             adapter.consume(queue),
             name=f"feishu_reply_{msg_id}",
         )
-        logger.debug("[Lark] 管线: 消费者任务已启动")
-
         # ⑤ 在线程池中执行 ReAct 循环
         loop = asyncio.get_event_loop()
         t_react_start = time.monotonic()
         try:
-            logger.info("[Lark] 管线: 开始执行 ReAct 循环（线程池）...")
             await loop.run_in_executor(
                 None,
                 self._run_react_in_thread,
@@ -105,10 +90,8 @@ class ReActPipeline:
                 loop,
             )
             t_react = time.monotonic() - t_react_start
-            logger.info("[Lark] 管线: ReAct 循环完成 | 耗时=%.1fs", t_react)
         except Exception:
             t_react = time.monotonic() - t_react_start
-            logger.error("[Lark] 管线: ReAct 循环异常 | 耗时=%.1fs", t_react)
             traceback.print_exc()
             try:
                 loop.call_soon_threadsafe(
@@ -124,17 +107,12 @@ class ReActPipeline:
                     queue.put_nowait,
                     ("__sentinel__", {}),
                 )
-                logger.debug("[Lark] 管线: sentinel 信号已发送")
             except RuntimeError:
-                logger.warning("[Lark] 管线: 无法发送 sentinel（事件循环已关闭）")
+                pass
 
         # ⑦ 等待消费者完成（包括 _finalize 中的 reaction swap + send）
         await consumer
         t_total = time.monotonic() - t_start
-        logger.info(
-            "[Lark] ═══ ReAct 管线完成 | msg_id=%s | 总耗时=%.1fs",
-            msg_id, t_total,
-        )
 
     # ── 线程池执行体 ──
 
@@ -178,12 +156,6 @@ class ReActPipeline:
             channel="feishu",
         )
 
-        logger.debug(
-            "[Lark] ReAct 线程: streaming_react_loop 返回 | 历史条目=%d | 事件推送=%d",
-            len(chat_history) if chat_history else 0,
-            event_count[0],
-        )
-
         # 注入 meta 到 user 消息
         if chat_history and len(chat_history) > 0:
             first_entry = chat_history[0]
@@ -192,7 +164,6 @@ class ReActPipeline:
 
         # 持久化
         session_manage.update_current_session(chat_history, "feishu")
-        logger.debug("[Lark] ReAct 线程: 会话已持久化")
 
         # 自动压缩检查
         session_manage.auto_compress_check_from_history(chat_history, "feishu")

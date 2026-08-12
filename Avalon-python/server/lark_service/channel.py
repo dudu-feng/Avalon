@@ -10,7 +10,6 @@ FeishuChannel SDK 生命周期管理。
 """
 
 import asyncio
-import logging
 import warnings
 from typing import Optional
 
@@ -31,8 +30,6 @@ from lark_oapi.channel import (
 )
 
 from server.lark_service.config import FeishuConfig
-
-logger = logging.getLogger(__name__)
 
 
 class LarkChannel:
@@ -69,10 +66,6 @@ class LarkChannel:
         """
         if not self._config.is_configured():
             raise ValueError("飞书凭据未配置，请在 .env 中设置 LARK_APP_ID 和 LARK_APP_SECRET")
-
-        logger.info("[Lark] 正在启动飞书渠道 | transport=%s | dm=%s | group=%s | require_mention=%s",
-                    self._config.transport, self._config.dm_enabled,
-                    self._config.group_enabled, self._config.require_mention)
 
         # 创建 SDK Channel
         self._sdk_channel = FeishuChannel(
@@ -121,11 +114,9 @@ class LarkChannel:
             # connect_until_ready 在线程池运行 channel.start()，
             # 仅等待 WS 连接就绪即返回，不阻塞在 _select() 死循环上
             await self._sdk_channel.connect_until_ready(timeout=30)
-            logger.info("[Lark] 飞书渠道已启动 (WebSocket 长连接)")
         else:
             # Webhook 模式：start() 初始化 dispatcher 后返回
             self._sdk_channel.start()
-            logger.info("[Lark] 飞书渠道已启动 (Webhook 模式)")
 
         # 补注册 SDK 遗漏的事件处理器
         self._patch_missing_processors()
@@ -159,18 +150,16 @@ class LarkChannel:
             patched_count += 1
 
         if patched_count > 0:
-            logger.info("[Lark] 已补注册 %d 个 SDK 遗漏的事件处理器", patched_count)
+            pass
 
     async def stop(self) -> None:
         """断开 SDK Channel 连接"""
         if self._sdk_channel is not None:
-            logger.info("[Lark] 正在断开飞书渠道连接...")
             # 断开 WebSocket 连接
             try:
                 await self._sdk_channel.disconnect()
-                logger.debug("[Lark] disconnect() 完成")
             except Exception:
-                logger.debug("[Lark] disconnect() 异常", exc_info=True)
+                pass
 
             # 给 SDK 内部后台任务（_ping_loop、_receive_message_loop、
             # _start_clear_cron）一点时间响应关闭信号并正常退出，
@@ -180,7 +169,6 @@ class LarkChannel:
             except asyncio.CancelledError:
                 pass
 
-            logger.info("[Lark] 飞书渠道已停止")
             self._sdk_channel = None
 
     async def health_check(self) -> bool:

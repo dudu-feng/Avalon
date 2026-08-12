@@ -1,5 +1,4 @@
 import json
-import logging
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -8,8 +7,6 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AI
 from config.env_config import env_config
 from loop import prompt_assemble, session_manage
 from tool import base_tool
-
-logger = logging.getLogger(__name__)
 
 model_type = "default"
 
@@ -53,8 +50,6 @@ def change_model_type( type: str ):
     model_type = type
 
 def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ):
-    logger.info("[LLM] 对话模型调用开始 | channel=%s", channel)
-
     model = get_model()
     system_prompt = prompt_assemble.assemble_system_prompt()
     tool_list = base_tool.get_tool_list()
@@ -74,12 +69,9 @@ def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ):
     # 调用模型
     result = model.invoke(messages)
 
-    logger.info("[LLM] 对话模型调用完成")
     return result
 
 def llm_action( user_input: str, action_target: str, action_history: list ):
-    logger.info("[LLM] Action 模型调用开始 | target=%s", action_target)
-
     model = get_jsonOutput_model()
     tool_list = base_tool.get_tool_list()
 
@@ -111,7 +103,6 @@ def llm_action( user_input: str, action_target: str, action_history: list ):
     # 调用模型
     result = model.invoke(messages)
 
-    logger.info("[LLM] Action 模型调用完成")
     return result
 
 def llm_compress( session_data: dict ):

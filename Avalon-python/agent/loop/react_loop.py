@@ -1,11 +1,8 @@
 import json
-import logging
 import re
 import datetime
 from tool import base_tool
 from llm import llm
-
-logger = logging.getLogger(__name__)
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -131,10 +128,6 @@ def react_loop(user_input: str) -> dict:
                 action_result_content = parse_llm_json(raw_content)
 
                 if not action_result_content:
-                    logger.warning(
-                        "Action JSON 解析失败 | raw_content 前200字符: %s",
-                        raw_content[:200],
-                    )
                     chat_history.append({
                         "role": "assistant",
                         "content": f"(action步骤JSON解析异常){raw_content[:200]}",
