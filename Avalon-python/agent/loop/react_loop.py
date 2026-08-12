@@ -6,6 +6,12 @@ from llm import llm
 def get_current_time() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
 
+
+def default_user_entry(user_input: str) -> dict:
+    """默认用户消息封装（无渠道 meta 的终端等渠道使用）"""
+    return {"role": "user", "time": get_current_time(), "content": user_input}
+
+
 def chat_result_transform(chat_result_content: dict, chat_result ) -> dict:
     return {
         "role": "assistant",
@@ -24,9 +30,11 @@ def action_result_transform(action_result_content: dict, action_result) -> dict:
         "token_usage": action_result.usage_metadata
     }
 
-def react_loop(user_input: str) -> dict:
+def react_loop(user_input: str, user_entry: dict | None = None) -> dict:
     chat_history = []
-    chat_history.append({"role": "user", "time": get_current_time(), "content": user_input})
+    if user_entry is None:
+        user_entry = default_user_entry(user_input)
+    chat_history.append(user_entry)
     while True:
         chat_result = llm.llm_chat( user_input, chat_history)
 

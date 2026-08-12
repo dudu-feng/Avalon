@@ -149,18 +149,13 @@ class ReActPipeline:
                 # 事件循环已关闭，无法推送
                 pass
 
-        # 执行 ReAct 循环
+        # 执行 ReAct 循环（传入已封装好的 user entry，含飞书 meta）
         chat_history = streaming_react_loop(
             user_input,
             on_event=on_event,
             channel="feishu",
+            user_entry=entry,
         )
-
-        # 注入 meta 到 user 消息
-        if chat_history and len(chat_history) > 0:
-            first_entry = chat_history[0]
-            if first_entry.get("role") == "user":
-                first_entry["meta"] = entry.get("meta", {})
 
         # 持久化
         session_manage.update_current_session(chat_history, "feishu")

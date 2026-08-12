@@ -15,6 +15,7 @@ from llm import llm
 from loop.react_loop import (
     action_result_transform,
     chat_result_transform,
+    default_user_entry,
     get_current_time,
 )
 from tool import base_tool
@@ -49,6 +50,7 @@ def streaming_react_loop(
     user_input: str,
     on_event: Optional[Callable[[str, dict], None]] = None,
     channel: str = "terminal",
+    user_entry: Optional[dict] = None,
 ) -> list:
     """
     带事件回调的 ReAct 双层循环。
@@ -57,19 +59,19 @@ def streaming_react_loop(
     但在每个关键步骤通过 on_event 回调推送进度事件。
 
     Args:
-        user_input: 用户输入
+        user_input: 用户输入（构造 LLM 的 HumanMessage）
         on_event: 事件回调 (event_type, data_dict)
         channel: 渠道标识 (terminal/lark/desktop/web)
+        user_entry: 已封装好的用户消息 entry（含渠道 meta），
+                    缺省时用 default_user_entry 生成
 
     Returns:
         chat_history — 完整聊天历史列表
     """
     chat_history = []
-    chat_history.append({
-        "role": "user",
-        "time": get_current_time(),
-        "content": user_input,
-    })
+    if user_entry is None:
+        user_entry = default_user_entry(user_input)
+    chat_history.append(user_entry)
 
     message_id = str(uuid.uuid4())[:8]
     _emit("chat_start", {"message_id": message_id}, on_event)
