@@ -12,7 +12,6 @@ from datetime import datetime
 from typing import AsyncGenerator, Callable, Optional
 
 from llm import llm
-from llm.llm import parse_llm_json
 from loop.react_loop import (
     action_result_transform,
     chat_result_transform,
@@ -78,18 +77,18 @@ def streaming_react_loop(
     # ===== 对话层循环 =====
     while True:
         chat_result = llm.llm_chat(user_input, chat_history, channel)
-        chat_result_content = parse_llm_json(chat_result.content)
+        chat_result_content = chat_result.content
 
         if not chat_result_content:
             # JSON 解析完全失败 → 纯文本回复
-            _emit("chat_message", {"delta": chat_result.content}, on_event)
+            _emit("chat_message", {"delta": chat_result.raw}, on_event)
             _emit("error", {
                 "code": 50002,
                 "message": "LLM JSON 解析失败，已当作文本回复",
             }, on_event)
             chat_history.append({
                 "role": "assistant",
-                "content": chat_result.content,
+                "content": chat_result.raw,
             })
             _emit("done", {
                 "chat_history": chat_history,
@@ -117,10 +116,7 @@ def streaming_react_loop(
 
         # next=stop → 结束
         if chat_result_content.get("next") == "stop":
-            token_usage = {}
-            if hasattr(chat_result, "usage_metadata") and chat_result.usage_metadata:
-                token_usage = chat_result.usage_metadata
-            _emit("chat_stop", {"token_usage": token_usage}, on_event)
+            _emit("chat_stop", {"token_usage": chat_result.usage_metadata}, on_event)
             break
 
         # next=action → 进入动作层
@@ -135,8 +131,7 @@ def streaming_react_loop(
                 action_result = llm.llm_action(
                     user_input, action_target, action_history
                 )
-                raw_content = action_result.content or ""
-                action_result_content = parse_llm_json(raw_content)
+                action_result_content = action_result.content
 
                 if not action_result_content:
                     # JSON 解析失败 → 记录原始内容，回传给上层对话模型处理
@@ -146,7 +141,7 @@ def streaming_react_loop(
                     }, on_event)
                     chat_history.append({
                         "role": "assistant",
-                        "content": f"(action步骤JSON解析异常){raw_content[:200]}",
+                        "content": f"(action步骤JSON解析异常){action_result.raw[:200]}",
                     })
                     _emit("done", {
                         "chat_history": chat_history,
@@ -178,15 +173,9 @@ def streaming_react_loop(
                         "action_type": "finished",
                         "action_analysis": analysis,
                     })
-                    token_usage = {}
-                    if (
-                        hasattr(action_result, "usage_metadata")
-                        and action_result.usage_metadata
-                    ):
-                        token_usage = action_result.usage_metadata
                     _emit("action_finished", {
                         "analysis": analysis,
-                        "token_usage": token_usage,
+                        "token_usage": action_result.usage_metadata,
                     }, on_event)
                     break
 

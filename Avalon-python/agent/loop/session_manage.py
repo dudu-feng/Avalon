@@ -98,7 +98,7 @@ def session_compress(channel: str = "terminal"):
         print("当前会话为空，无需压缩。")
         return
     compressed_data = llm.llm_compress(current_session)
-    compressed_data_content = llm.parse_llm_json(compressed_data.content)
+    compressed_data_content = compressed_data.content
     if not compressed_data_content:
         print("压缩模型返回的 JSON 内容无法解析，无法继续压缩。")
         return
@@ -291,7 +291,7 @@ def _progressive_summarize(channel: str = "terminal"):
 
     try:
         merged_result = llm.llm_compress(mock_session)
-        merged_content = llm.parse_llm_json(merged_result.content)
+        merged_content = merged_result.content
     except Exception as e:
         print(f"[ProgressiveSummarize] 合并压缩调用失败: {e}")
         return

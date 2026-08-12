@@ -1,36 +1,27 @@
 import datetime
 from tool import base_tool
 from llm import llm
-from llm.llm import parse_llm_json
 
 
 def get_current_time() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
 
 def chat_result_transform(chat_result_content: dict, chat_result ) -> dict:
-    token_usage = {}
-    if hasattr(chat_result, 'usage_metadata') and chat_result.usage_metadata:
-        token_usage = chat_result.usage_metadata
-    
     return {
         "role": "assistant",
         "time": get_current_time(),
         "content": chat_result_content.get("message", ""),
         "thought": chat_result_content.get("thought", ""),
-        "token_usage": token_usage
+        "token_usage": chat_result.usage_metadata
     }
 
 def action_result_transform(action_result_content: dict, action_result) -> dict:
-    token_usage = {}
-    if hasattr(action_result, 'usage_metadata') and action_result.usage_metadata:
-        token_usage = action_result.usage_metadata
-
     return {
         "step": action_result_content.get("next", ""),
         "time": get_current_time(),
         "analysis": action_result_content.get("analysis", ""),
         "action": action_result_content.get( action_result_content.get("next", "unknown") , ""),
-        "token_usage": token_usage
+        "token_usage": action_result.usage_metadata
     }
 
 def react_loop(user_input: str) -> dict:
@@ -38,35 +29,34 @@ def react_loop(user_input: str) -> dict:
     chat_history.append({"role": "user", "time": get_current_time(), "content": user_input})
     while True:
         chat_result = llm.llm_chat( user_input, chat_history)
-        
-        chat_result_content = parse_llm_json(chat_result.content)
+
+        chat_result_content = chat_result.content
         if not chat_result_content:
             # 无法解析为 JSON，当作纯文本回复，直接输出并停止循环
-            print(f"\nAvalon >: {chat_result.content}")
-            chat_history.append({"role": "assistant", "content": chat_result.content})
+            print(f"\nAvalon >: {chat_result.raw}")
+            chat_history.append({"role": "assistant", "content": chat_result.raw})
             return chat_history
 
         print(f"\nAvalon >: {chat_result_content.get('message', '')}")
         chat_history.append(chat_result_transform(chat_result_content, chat_result))
-    
+
         if chat_result_content.get("next") == "stop":
             break
-        
+
         if chat_result_content.get("next") == "action":
             action_history = []
-            action_target = chat_result_content.get("action_target", "") 
+            action_target = chat_result_content.get("action_target", "")
             print(f"\nAgent: 开始执行目标：{action_target}")
             action_history.append({ "action_target": action_target })
 
             while True:
                 action_result = llm.llm_action(user_input, action_target, action_history)
-                raw_content = action_result.content or ""
-                action_result_content = parse_llm_json(raw_content)
+                action_result_content = action_result.content
 
                 if not action_result_content:
                     chat_history.append({
                         "role": "assistant",
-                        "content": f"(action步骤JSON解析异常){raw_content[:200]}",
+                        "content": f"(action步骤JSON解析异常){action_result.raw[:200]}",
                     })
                     return chat_history
 

@@ -28,6 +28,16 @@ _model_instance: ChatOpenAI | None = None
 _json_model_instance: ChatOpenAI | None = None
 
 
+class LLMResult:
+    """LLM 调用结果封装，内部已完成 JSON 解析"""
+    __slots__ = ('content', 'raw', 'usage_metadata')
+
+    def __init__(self, content: dict, raw: str, usage_metadata: dict | None = None):
+        self.content = content              # 解析后的 JSON dict（失败时为 {}）
+        self.raw = raw                      # 原始响应字符串（解析失败时用于降级输出）
+        self.usage_metadata = usage_metadata or {}
+
+
 def get_model() -> ChatOpenAI:
     """获取会话模型实例（单例，temperature=0.7）"""
     global _model_instance
@@ -114,7 +124,16 @@ def parse_llm_json(llm_output_content: str) -> dict:
     # ③ 无法解析，返回空 dict 交由上层处理
     return {}
 
-def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ):
+
+def _invoke_and_parse(model: ChatOpenAI, messages: list) -> LLMResult:
+    """调用模型并解析 JSON，统一封装为 LLMResult"""
+    result = model.invoke(messages)
+    raw = result.content or ""
+    usage = getattr(result, 'usage_metadata', None)
+    return LLMResult(content=parse_llm_json(raw), raw=raw, usage_metadata=usage)
+
+
+def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ) -> LLMResult:
     model = get_model()
     system_prompt = prompt_assemble.assemble_system_prompt()
     tool_list = base_tool.get_tool_list()
@@ -131,12 +150,10 @@ def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ):
     messages.append(HumanMessage(content=user_input))
     messages.append(AIMessage(content=str(chat_history)))
 
-    # 调用模型
-    result = model.invoke(messages)
+    # 调用模型并解析
+    return _invoke_and_parse(model, messages)
 
-    return result
-
-def llm_action( user_input: str, action_target: str, action_history: list ):
+def llm_action( user_input: str, action_target: str, action_history: list ) -> LLMResult:
     model = get_jsonOutput_model()
     tool_list = base_tool.get_tool_list()
 
@@ -165,12 +182,10 @@ def llm_action( user_input: str, action_target: str, action_history: list ):
     messages = [SystemMessage(content=system_prompt)]
     messages.append(HumanMessage(content=user_input))
 
-    # 调用模型
-    result = model.invoke(messages)
+    # 调用模型并解析
+    return _invoke_and_parse(model, messages)
 
-    return result
-
-def llm_compress( session_data: dict ):
+def llm_compress( session_data: dict ) -> LLMResult:
     model = get_jsonOutput_model()
     system_prompt = f"""
         这是一个压缩模型调用，用于压缩历史会话记录，返回纯JSON格式（不要用markdown代码块包裹）
@@ -186,7 +201,5 @@ def llm_compress( session_data: dict ):
     messages = [SystemMessage(content=system_prompt)]
     messages.append(HumanMessage(content=user_prompt))
 
-    # 调用模型
-    result = model.invoke(messages)
-
-    return result
+    # 调用模型并解析
+    return _invoke_and_parse(model, messages)
