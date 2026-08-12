@@ -12,11 +12,11 @@ from datetime import datetime
 from typing import AsyncGenerator, Callable, Optional
 
 from llm import llm
+from llm.llm import parse_llm_json
 from loop.react_loop import (
     action_result_transform,
     chat_result_transform,
     get_current_time,
-    parse_llm_json,
 )
 from tool import base_tool
 

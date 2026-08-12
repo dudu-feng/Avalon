@@ -1,72 +1,8 @@
-import json
-import re
 import datetime
 from tool import base_tool
 from llm import llm
+from llm.llm import parse_llm_json
 
-
-def _strip_markdown_fences(text: str) -> str:
-    """
-    剥离外层 markdown 代码块标记。
-
-    ```json\\n...\\n``` → 提取内部内容
-    ```json\\n...       → 移除开头标记（无结尾的情况）
-    无代码块              → 原样返回
-    """
-    # 完整代码块
-    m = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-
-    # 只有开头标记
-    text = re.sub(r'^```(?:json)?\s*\n?', '', text, count=1)
-
-    # 只有结尾标记
-    if text.rstrip().endswith('```'):
-        text = text.rstrip()[:-3].rstrip()
-
-    return text
-
-
-def parse_llm_json(llm_output_content: str) -> dict:
-    """
-    解析 LLM 返回的 JSON 内容。
-
-    action 模型已通过 response_format: json_object 约束输出，
-    只需处理一种异常：外层 markdown 代码块包裹。
-
-    步骤：
-    1. 直接 json.loads（正常情况）
-    2. 剥离 markdown 代码块后 json.loads（被代码块包裹的情况）
-    3. 都不行 → 返回 {}，交由上层决定重试或调整
-    """
-    if not llm_output_content or not isinstance(llm_output_content, str):
-        return {}
-
-    content = llm_output_content.strip()
-    if not content:
-        return {}
-
-    # ① 直接解析
-    try:
-        result = json.loads(content)
-        if isinstance(result, dict):
-            return result
-    except json.JSONDecodeError:
-        pass
-
-    # ② 剥离 markdown 代码块后重试
-    stripped = _strip_markdown_fences(content)
-    if stripped != content:
-        try:
-            result = json.loads(stripped)
-            if isinstance(result, dict):
-                return result
-        except json.JSONDecodeError:
-            pass
-
-    # ③ 无法解析，返回空 dict 交由上层处理
-    return {}
 
 def get_current_time() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")

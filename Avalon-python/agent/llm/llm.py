@@ -1,4 +1,5 @@
 import json
+import re
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -7,8 +8,6 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AI
 from config.env_config import env_config
 from loop import prompt_assemble, session_manage
 from tool import base_tool
-
-model_type = "default"
 
 response_template = """
     请按照以下格式进行思考和回应：
@@ -24,30 +23,96 @@ response_template = """
     }
 """
 
+# ========== 模型单例（懒加载，只创建一次） ==========
+_model_instance: ChatOpenAI | None = None
+_json_model_instance: ChatOpenAI | None = None
 
-# 获取环境变量
+
 def get_model() -> ChatOpenAI:
-    return ChatOpenAI(
-        api_key=env_config.default_api_key,
-        model_name=env_config.default_model,
-        base_url=env_config.default_model_base_url,
-        temperature=0.7,
-    )
-
+    """获取会话模型实例（单例，temperature=0.7）"""
+    global _model_instance
+    if _model_instance is None:
+        _model_instance = ChatOpenAI(
+            api_key=env_config.default_api_key,
+            model_name=env_config.default_model,
+            base_url=env_config.default_model_base_url,
+            temperature=0.7,
+        )
+    return _model_instance
 
 def get_jsonOutput_model() -> ChatOpenAI:
-    return ChatOpenAI(
-        api_key=env_config.default_api_key,
-        model_name=env_config.default_model,
-        base_url=env_config.default_model_base_url,
-        temperature=0.1,  # 低温度提高 JSON 格式输出的稳定性
-        timeout=120
-    )
+    """获取 JSON 输出模型实例（单例，temperature=0.1，用于 action 步骤和会话压缩）"""
+    global _json_model_instance
+    if _json_model_instance is None:
+        _json_model_instance = ChatOpenAI(
+            api_key=env_config.default_api_key,
+            model_name=env_config.default_model,
+            base_url=env_config.default_model_base_url,
+            temperature=0.1,
+            timeout=120
+        )
+    return _json_model_instance
 
-# 切换模型类型
-def change_model_type( type: str ):
-    global model_type
-    model_type = type
+def refresh_models():
+    """重新创建模型实例（在配置变更后调用）"""
+    global _model_instance, _json_model_instance
+    _model_instance = None
+    _json_model_instance = None
+
+
+def _strip_markdown_fences(text: str) -> str:
+    """剥离外层 markdown 代码块标记"""
+    # 完整代码块 ```json\n...\n```
+    m = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+
+    # 只有开头标记 ```json\n...
+    text = re.sub(r'^```(?:json)?\s*\n?', '', text, count=1)
+
+    # 只有结尾标记 ```
+    if text.rstrip().endswith('```'):
+        text = text.rstrip()[:-3].rstrip()
+
+    return text
+
+
+def parse_llm_json(llm_output_content: str) -> dict:
+    """
+    解析 LLM 返回的 JSON 内容。
+
+    步骤：
+    1. 直接 json.loads（正常情况）
+    2. 剥离 markdown 代码块后 json.loads（被代码块包裹的情况）
+    3. 都不行 → 返回 {}，交由上层决定重试或调整
+    """
+    if not llm_output_content or not isinstance(llm_output_content, str):
+        return {}
+
+    content = llm_output_content.strip()
+    if not content:
+        return {}
+
+    # ① 直接解析
+    try:
+        result = json.loads(content)
+        if isinstance(result, dict):
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    # ② 剥离 markdown 代码块后重试
+    stripped = _strip_markdown_fences(content)
+    if stripped != content:
+        try:
+            result = json.loads(stripped)
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    # ③ 无法解析，返回空 dict 交由上层处理
+    return {}
 
 def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ):
     model = get_model()
