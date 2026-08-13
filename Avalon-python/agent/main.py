@@ -1,5 +1,24 @@
 from loop import react_loop, session_manage
 
+
+def _terminal_on_event(event_type: str, data: dict) -> None:
+    """把 react_loop 事件渲染成终端打印（复刻原 print 输出格式）"""
+    if event_type == "chat_message":
+        print(f"\nAvalon >: {data.get('delta', '')}")
+    elif event_type == "action_start":
+        print(f"\nAgent: 开始执行目标：{data.get('action_target', '')}")
+    elif event_type == "action_step":
+        print(f"\nAgent[action分析]: {data.get('analysis', '')}")
+    elif event_type == "action_tool_call":
+        print(f"\nAvalon >: 调用工具：{data.get('tool_name', '')} 参数： {data.get('arguments', {})}")
+    elif event_type == "action_tool_result":
+        print(f"\nAvalon >: 工具调用结果：{data.get('result', '')}")
+    elif event_type == "action_sub_analysis":
+        print(f"\nAvalon >: 进一步分析：{data.get('sub_analysis', '')}")
+    elif event_type == "error":
+        print(f"\n⚠️ {data.get('message', '')}")
+
+
 if __name__ == "__main__":
     # 初始化当前会话
     session_manage.init_session()
@@ -34,7 +53,7 @@ if __name__ == "__main__":
             print("  /compress       压缩当前会话")
             print()
             continue
-        chat_history = react_loop.react_loop(user_input)
+        chat_history = react_loop.react_loop(user_input, on_event=_terminal_on_event)
         session_manage.update_current_session(chat_history)
         # 自动压缩检查：输入 token 超过阈值时自动触发压缩
         session_manage.auto_compress_check_from_history(chat_history)

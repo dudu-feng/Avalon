@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from langchain_core.tools import tool
@@ -62,3 +63,17 @@ def get_tool_list() -> str:
     {result}
     """
     return tool_template
+
+
+def invoke_tool(tool_name: str, arguments: dict) -> str:
+    """按名字查找并调用工具，统一异常处理与返回值类型（强制转为 str）。"""
+    for tool in TOOLS:
+        if tool.name == tool_name:
+            try:
+                result = tool.invoke(arguments)
+                if not isinstance(result, str):
+                    result = json.dumps(result, ensure_ascii=False, indent=2)
+                return result
+            except Exception as e:
+                return f"工具调用失败: {e}"
+    return f"未找到工具: {tool_name}"

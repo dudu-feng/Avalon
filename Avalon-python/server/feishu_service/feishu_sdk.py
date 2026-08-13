@@ -56,7 +56,7 @@ from lark_oapi.channel import (
     Events,
 )
 
-from server.lark_service.config import FeishuConfig
+from server.feishu_service.config import FeishuConfig
 
 
 # ============================================================
@@ -323,6 +323,29 @@ class FeishuSDKService:
             opts["reply_to"] = reply_to
 
         return await self._sdk_channel.send(chat_id, content, opts)
+
+    async def edit_message(
+        self,
+        message_id: str,
+        content: dict,
+    ):
+        """
+        编辑已发送的消息（流式分段回复的核心能力）。
+
+        Args:
+            message_id: 待编辑消息的 ID（来自 send_message 的 SendResult.message_id）
+            content: 新的消息内容，{"text": "..."} 或 {"markdown": "..."}
+
+        Returns:
+            SDK 返回的 SendResult
+
+        Raises:
+            RuntimeError: SDK 服务未启动
+        """
+        if self._sdk_channel is None:
+            raise RuntimeError("SDK 服务未启动，请先调用 start()")
+
+        return await self._sdk_channel.edit_message(message_id, content)
 
     async def add_reaction(self, message_id: str, emoji: str):
         """
