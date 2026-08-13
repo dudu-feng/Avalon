@@ -153,13 +153,17 @@ def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ) -
     # 调用模型并解析
     return _invoke_and_parse(model, messages)
 
-def llm_action( user_input: str, action_target: str, action_history: list ) -> LLMResult:
+def llm_action( action_target: str, action_history: list ) -> LLMResult:
     model = get_jsonOutput_model()
     tool_list = base_tool.get_tool_list()
 
     system_prompt = f"""
         这是一个action步骤模型调用，用于执行部分步式任务，请完成以下目标，当操作失败次数过多时，则停止执行操作：
         { action_target }
+        遵守规则：
+        1. 拒绝发散性思考，只根据执行历史和工具列表进行分析。
+        2. 拒绝多次尝试同一错误操作，避免死循环。
+        3. 简洁思考，限制思考过程不要太长，保持思考效率。
 
         返回纯JSON格式（不要用markdown代码块包裹）：
         样例JSON输出:{{
@@ -180,7 +184,6 @@ def llm_action( user_input: str, action_target: str, action_history: list ) -> L
     """
 
     messages = [SystemMessage(content=system_prompt)]
-    messages.append(HumanMessage(content=user_input))
 
     # 调用模型并解析
     return _invoke_and_parse(model, messages)
