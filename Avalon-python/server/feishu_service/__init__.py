@@ -24,6 +24,10 @@ async def startup_lark() -> None:
     if not config.enabled or not config.is_configured():
         return
 
+    # 会话初始化只需一次：确保 session 文件存在，后续每条消息复用同一会话
+    from loop import session_manage
+    session_manage.init_session("feishu")
+
     sdk = await create_sdk(config)
     sdk.on(FeishuEvent.MESSAGE, handle_feishu_message)
 

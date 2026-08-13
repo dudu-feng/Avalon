@@ -49,7 +49,6 @@ class EnvConfig:
         _config_dir = os.path.dirname(os.path.abspath(__file__))
         _agent_dir = os.path.dirname(_config_dir)
         _dotenv_path = os.path.join(_agent_dir, ".env")
-        print(_dotenv_path)
 
         try:
             from dotenv import load_dotenv

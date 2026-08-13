@@ -201,7 +201,6 @@ async def handle_feishu_message(msg: InboundMessage) -> None:
         from loop import react_loop, session_manage
 
         try:
-            session_manage.init_session("feishu")
             chat_history = react_loop.react_loop(
                 text, on_event=on_event, channel="feishu", user_entry=user_entry
             )
