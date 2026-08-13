@@ -328,10 +328,10 @@ class FeishuSDKService:
         return await self._sdk_channel.send(chat_id, content, opts)
 
     async def edit_message(
-        self,
-        message_id: str,
-        content: dict,
-    ):
+            self,
+            message_id: str,
+            content: dict,
+        ):
         """
         编辑已发送的消息（流式分段回复的核心能力）。
 

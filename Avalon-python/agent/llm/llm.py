@@ -8,6 +8,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AI
 from config.env_config import env_config
 from loop import prompt_assemble, session_manage
 from tool import base_tool
+from server.logger import logger
 
 response_template = """
     请按照以下格式进行思考和回应：
@@ -149,7 +150,8 @@ def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ) -
     # 添加当前用户输入
     messages.append(HumanMessage(content=user_input))
     messages.append(AIMessage(content=str(chat_history)))
-
+    
+    logger.info(f"提示词组装完成，开始请求对话层，用户输入：{user_input}")
     # 调用模型并解析
     return _invoke_and_parse(model, messages)
 
@@ -185,6 +187,7 @@ def llm_action( action_target: str, action_history: list ) -> LLMResult:
 
     messages = [SystemMessage(content=system_prompt)]
 
+    logger.info(f"提示词组装完成，开始请求action大模型，用户输入：{action_target}")
     # 调用模型并解析
     return _invoke_and_parse(model, messages)
 

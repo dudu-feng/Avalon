@@ -20,6 +20,7 @@ from lark_oapi.channel import InboundMessage
 
 from server.feishu_service.config import FeishuConfig
 from server.feishu_service.feishu_sdk import get_sdk
+from server.logger import logger
 
 
 def _now() -> str:
@@ -180,6 +181,7 @@ async def handle_feishu_message(msg: InboundMessage) -> None:
     processing_reaction_id = None
     if config.processing_reaction:
         try:
+            logger.info(f"添加处理中表情{config.processing_reaction}")
             result = await sdk.add_reaction(msg.id, config.processing_reaction)
             if result.success and result.raw:
                 processing_reaction_id = result.raw.get("data", {}).get("reaction_id")
@@ -238,11 +240,13 @@ async def handle_feishu_message(msg: InboundMessage) -> None:
     # ⑤ 结束：取消「处理中」表情，标记「完成」
     if processing_reaction_id:
         try:
+            logger.info(f"取消处理中表情{processing_reaction_id}")
             await sdk.remove_reaction(msg.id, processing_reaction_id)
         except Exception:
             pass
     if config.done_reaction:
         try:
+            logger.info(f"添加完成表情{config.done_reaction}")
             await sdk.add_reaction(msg.id, config.done_reaction)
         except Exception:
             pass

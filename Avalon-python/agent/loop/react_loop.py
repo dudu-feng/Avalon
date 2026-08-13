@@ -4,6 +4,7 @@ from typing import Callable
 from tool import base_tool
 from llm import llm
 from emitter import ReactEmitter
+from server.logger import logger
 
 
 def get_current_time() -> str:
@@ -45,6 +46,7 @@ def react_loop(
     终端 / 飞书等调用方各自消费同一套事件契约。
     """
     emitter = ReactEmitter(on_event)
+    logger.info("开始react_loop循环")
 
     chat_history = []
     if user_entry is None:
@@ -53,8 +55,10 @@ def react_loop(
 
     while True:
         # ===== 对话层 =====
+        logger.info(f"开始进入chat模块")
         chat_result = llm.llm_chat(user_input, chat_history, channel)
         chat_result_content = chat_result.content
+        logger.info(f"chat大模型请求完成，返回结果：{chat_result_content}")
 
         if not chat_result_content:
             # 无法解析为 JSON，当作纯文本回复，输出后停止
@@ -70,6 +74,7 @@ def react_loop(
             break
 
         if chat_result_content.get("next") == "action":
+            logger.info(f"进入action操作循环")
             # ===== 动作层 =====
             action_history = []
             action_target = chat_result_content.get("action_target", "")
@@ -77,8 +82,10 @@ def react_loop(
             action_history.append({ "action_target": action_target })
 
             while True:
-                action_result = llm.llm_action(user_input, action_target, action_history)
+                logger.info(f"进入action模块")
+                action_result = llm.llm_action(action_target, action_history)
                 action_result_content = action_result.content
+                logger.info(f"action大模型请求完成，返回结果：{action_result_content}")
 
                 if not action_result_content:
                     chat_history.append({
@@ -102,13 +109,17 @@ def react_loop(
                     emitter.action_finished(analysis, action_result.usage_metadata)
                     break
                 elif next_step == "tool_call":
+                    logger.info(f"进入tool_call模块")
                     tool_call = action_result_content.get("tool_call") or {}
                     tool_name = tool_call.get("name")
                     arguments = tool_call.get("arguments", {})
                     emitter.action_tool_call(tool_name, arguments)
+                    logger.info(f"开始调用工具{tool_name}，参数：{arguments}")
 
                     tool_result = base_tool.invoke_tool(tool_name, arguments)
                     success = not tool_result.startswith(("工具调用失败", "未找到工具"))
+
+                    logger.info(f"工具{tool_name}调用结果：{success}，返回结果：{tool_result}")
                     emitter.action_tool_result(tool_name, success, tool_result)
 
                     action_history.append({
@@ -139,4 +150,5 @@ def react_loop(
 
             chat_history.append({ "role": "assistant", "content": "【执行记录】", "action_history": action_history })
 
+    logger.info(f"react_loop结束")
     return chat_history
