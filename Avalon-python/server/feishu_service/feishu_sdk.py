@@ -223,10 +223,7 @@ class FeishuSDKService:
         self._sdk_channel.on(Events.RECONNECTING, self._on_reconnecting)
         self._sdk_channel.on(Events.RECONNECTED, self._on_reconnected)
 
-        # ③ 补注册 SDK 遗漏的事件处理器
-        self._patch_missing_processors()
-
-        # ④ 启动连接
+        # ③ 启动连接
         if self._config.transport == "ws":
             # WebSocket 模式
             # 问题：lark_oapi.ws.client 在模块导入时执行了
@@ -242,6 +239,12 @@ class FeishuSDKService:
         else:
             # Webhook 模式：start() 初始化 dispatcher 后返回
             self._sdk_channel.start()
+
+        # ④ 补注册 SDK 遗漏的事件处理器
+        # 必须在连接建立之后调用：channel.start() 内部会重新执行
+        # _build_dispatcher()（channel.py:689），若在此之前 patch，
+        # 补丁会随旧 dispatcher 一起被丢弃。
+        self._patch_missing_processors()
 
     async def stop(self) -> None:
         """
@@ -434,6 +437,8 @@ class FeishuSDKService:
         dispatcher = self._sdk_channel.dispatcher
 
         # 用户打开机器人私聊会话（im.chat.access_event.bot_p2p_chat_entered_v1）
+        # 注意：SDK 查找处理器时用 f"{schema}.{type}" 拼接 key，
+        #       v2 事件 schema 为 "p2"，所以 key 必须带 "p2." 前缀。
         key = "p2.im.chat.access_event.bot_p2p_chat_entered_v1"
         if key not in dispatcher._processorMap:
             dispatcher._processorMap[key] = (

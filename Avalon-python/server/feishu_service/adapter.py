@@ -4,18 +4,21 @@
 职责：把飞书消息事件贯通到 agent 主模块（react_loop + session_manage）。
 
 流程：
-  InboundMessage → 提取文本 + 构造 user_entry → 发占位消息
+  InboundMessage → 提取文本 + 构造 user_entry → 对用户消息标记「处理中」表情
   → 线程池执行 react_loop（on_event 跨线程推事件）
-  → 异步消费事件，流式 edit_message 更新回复
+  → 每个过程事件实时发一条新消息
   → 持久化会话 + 自动压缩检查
+  → 取消「处理中」表情，标记「完成」表情
 """
 
 import asyncio
+import json
 from datetime import datetime
 from typing import Any, Dict, List
 
 from lark_oapi.channel import InboundMessage
 
+from server.feishu_service.config import FeishuConfig
 from server.feishu_service.feishu_sdk import get_sdk
 
 
@@ -79,24 +82,71 @@ def _build_user_entry(msg: InboundMessage) -> Dict[str, Any]:
 #  事件渲染（ReAct 事件 → 可读文本）
 # ============================================================
 
+def _code_block(text: str, limit: int = 4000) -> str:
+    """把文本安全包进 markdown 代码块（替换内部 ``` 并限制长度）"""
+    safe = text.replace("```", "'''")
+    if len(safe) > limit:
+        safe = safe[:limit] + "\n…（已截断）"
+    return f"```\n{safe}\n```"
+
+
+def _safe_json(obj) -> str:
+    """对象转 JSON 字符串，失败时退回 str()"""
+    try:
+        return json.dumps(obj, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError):
+        return str(obj)
+
+
 def _render_event(event_type: str, data: Dict[str, Any]) -> str:
-    """把 ReAct 事件渲染成一行可读文本（chat_thought 内部思考不展示）"""
+    """把 ReAct 事件渲染成飞书 markdown（清晰排版）"""
     if event_type == "chat_message":
+        # 回复正文，原样输出
         return data.get("delta", "")
+
     if event_type == "action_start":
-        return f"🔧 执行目标：{data.get('action_target', '')}"
+        target = data.get("action_target", "")
+        return f"## 🎯 {target}" if target else "## 🎯 开始执行"
+
     if event_type == "action_step":
         analysis = data.get("analysis", "")
         return f"📋 {analysis}" if analysis else ""
+
     if event_type == "action_tool_call":
-        return f"🛠️ 调用工具：{data.get('tool_name', '')}"
+        tool_name = data.get("tool_name", "")
+        arguments = data.get("arguments") or {}
+        lines = [f"🛠️ 调用工具：**{tool_name}**"]
+        if arguments:
+            lines.append(_code_block(_safe_json(arguments)))
+        return "\n".join(lines)
+
     if event_type == "action_tool_result":
-        return f"📦 结果：{data.get('result', '')}"
+        tool_name = data.get("tool_name", "")
+        success = data.get("success", False)
+        result = data.get("result", "")
+        status = "✅" if success else "❌"
+        if len(result) <= 200:
+            return f"{status} **{tool_name}**：{result}"
+        return f"{status} **{tool_name}** 结果：\n" + _code_block(result)
+
     if event_type == "action_finished":
         return "✅ 执行完成"
+
     if event_type == "error":
         return f"⚠️ {data.get('message', '')}"
+
     return ""
+
+
+# 飞书 markdown 单条消息长度保护：工具结果可能很长，超长会导致发送被拒
+_MAX_MARKDOWN_LEN = 8000
+
+
+def _truncate_markdown(text: str, limit: int = _MAX_MARKDOWN_LEN) -> str:
+    """截断超长文本，避免飞书拒收过长的 markdown 消息"""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n…（内容过长，已截断）"
 
 
 # ============================================================
@@ -105,7 +155,14 @@ def _render_event(event_type: str, data: Dict[str, Any]) -> str:
 
 async def handle_feishu_message(msg: InboundMessage) -> None:
     """
-    处理一条飞书消息：提取 → ReAct 流式 → 编辑回复 → 持久化。
+    处理一条飞书消息：提取 → ReAct 逐事件发新消息 → 持久化。
+
+    流程:
+      ① 对用户消息标记「处理中」表情
+      ② 线程池执行 react_loop，on_event 跨线程推事件
+      ③ 每个过程事件实时 send 一条新消息
+      ④ 持久化会话 + 自动压缩检查
+      ⑤ 取消「处理中」表情，标记「完成」表情
     """
     sdk = get_sdk()
     if sdk is None:
@@ -117,17 +174,17 @@ async def handle_feishu_message(msg: InboundMessage) -> None:
         return  # 空消息暂不处理
 
     chat_id = msg.conversation.chat_id
+    config = FeishuConfig.from_env()
 
-    # ① 发送占位消息，拿到 message_id 供后续流式编辑
-    try:
-        send_result = await sdk.send_message(
-            chat_id, {"markdown": "思考中…"}, reply_to=msg.id
-        )
-        if not send_result.success or not send_result.message_id:
-            return
-        message_id = send_result.message_id
-    except Exception:
-        return
+    # ① 对用户消息标记「处理中」表情（reaction 承担状态标记，无需占位消息）
+    processing_reaction_id = None
+    if config.processing_reaction:
+        try:
+            result = await sdk.add_reaction(msg.id, config.processing_reaction)
+            if result.success and result.raw:
+                processing_reaction_id = result.raw.get("data", {}).get("reaction_id")
+        except Exception:
+            pass
 
     # ② 跨线程事件队列
     queue: asyncio.Queue = asyncio.Queue()
@@ -157,8 +214,7 @@ async def handle_feishu_message(msg: InboundMessage) -> None:
 
     executor_future = loop.run_in_executor(None, run_react)
 
-    # ③ 消费事件，流式编辑回复
-    lines: List[str] = []
+    # ③ 消费事件，每个过程步骤实时发一条新消息
     try:
         while True:
             event_type, data = await queue.get()
@@ -166,8 +222,11 @@ async def handle_feishu_message(msg: InboundMessage) -> None:
                 break
             line = _render_event(event_type, data)
             if line:
-                lines.append(line)
-                await sdk.edit_message(message_id, {"markdown": "\n".join(lines)})
+                result = await sdk.send_message(
+                    chat_id, {"markdown": _truncate_markdown(line)}
+                )
+                if not result.success:
+                    break
     except Exception:
         pass
 
@@ -177,9 +236,14 @@ async def handle_feishu_message(msg: InboundMessage) -> None:
     except Exception:
         pass
 
-    # ⑤ 最终编辑（确保有内容）
-    final = "\n".join(lines) if lines else "(无回复)"
-    try:
-        await sdk.edit_message(message_id, {"markdown": final})
-    except Exception:
-        pass
+    # ⑤ 结束：取消「处理中」表情，标记「完成」
+    if processing_reaction_id:
+        try:
+            await sdk.remove_reaction(msg.id, processing_reaction_id)
+        except Exception:
+            pass
+    if config.done_reaction:
+        try:
+            await sdk.add_reaction(msg.id, config.done_reaction)
+        except Exception:
+            pass
