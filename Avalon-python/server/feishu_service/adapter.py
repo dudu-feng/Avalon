@@ -151,10 +151,70 @@ def _truncate_markdown(text: str, limit: int = _MAX_MARKDOWN_LEN) -> str:
 
 
 # ============================================================
+#  全局消息队列（跨消息串行化）
+# ============================================================
+
+# 所有飞书消息（群聊 + 私聊）共用同一队列：会话记忆全局共享于
+# current/feishu.json，若并发处理会竞争同一份文件（丢失更新），
+# 因此必须在渠道层串行化。worker 按 FIFO 依次处理每条消息。
+_message_queue: asyncio.Queue | None = None
+_worker_task: asyncio.Task | None = None
+
+
+def start_worker() -> None:
+    """启动全局消息队列的常驻 worker（startup 阶段调用一次）。"""
+    global _message_queue, _worker_task
+    if _worker_task is not None and not _worker_task.done():
+        return
+    _message_queue = asyncio.Queue()
+    _worker_task = asyncio.create_task(_worker_loop())
+
+
+async def stop_worker() -> None:
+    """停止 worker（shutdown 阶段调用，取消常驻任务）。"""
+    global _worker_task, _message_queue
+    if _worker_task is not None and not _worker_task.done():
+        _worker_task.cancel()
+        try:
+            await _worker_task
+        except asyncio.CancelledError:
+            pass
+    _worker_task = None
+    _message_queue = None
+
+
+async def _worker_loop() -> None:
+    """常驻 worker：FIFO 依次处理每条飞书消息。"""
+    while True:
+        msg = await _message_queue.get()
+        try:
+            await _process_message(msg)
+        except Exception:
+            logger.exception("处理飞书消息失败")
+        finally:
+            _message_queue.task_done()
+
+
+# ============================================================
 #  消息处理入口
 # ============================================================
 
 async def handle_feishu_message(msg: InboundMessage) -> None:
+    """
+    飞书消息入口：入队后立即返回，由全局 worker 串行处理。
+
+    这样同一时刻只有一条消息在跑 ReAct，避免并发竞争共享会话文件；
+    新到的消息按 FIFO 排队，依次处理。
+    """
+    if _message_queue is None:
+        # worker 未启动（配置未走 startup 流程），退化到同步处理
+        logger.warning("消息队列 worker 未启动，退化到同步处理")
+        await _process_message(msg)
+        return
+    _message_queue.put_nowait(msg)
+
+
+async def _process_message(msg: InboundMessage) -> None:
     """
     处理一条飞书消息：提取 → ReAct 逐事件发新消息 → 持久化。
 

@@ -15,7 +15,7 @@ from server.feishu_service.feishu_sdk import (
     destroy_sdk,
     get_sdk,
 )
-from server.feishu_service.adapter import handle_feishu_message
+from server.feishu_service.adapter import handle_feishu_message, start_worker, stop_worker
 
 
 async def startup_lark() -> None:
@@ -31,9 +31,13 @@ async def startup_lark() -> None:
     sdk = await create_sdk(config)
     sdk.on(FeishuEvent.MESSAGE, handle_feishu_message)
 
+    # 启动全局消息队列 worker，串行处理飞书消息
+    start_worker()
+
 
 async def shutdown_lark() -> None:
     """关闭飞书渠道"""
+    await stop_worker()
     await destroy_sdk()
 
 
