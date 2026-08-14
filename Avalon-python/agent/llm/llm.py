@@ -152,8 +152,10 @@ def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ) -
     messages.append(AIMessage(content=str(chat_history)))
     
     logger.info(f"提示词组装完成，开始请求对话层，用户输入：{user_input}")
-    # 调用模型并解析
-    return _invoke_and_parse(model, messages)
+    # 调用模型
+    result = model.invoke(messages)
+    
+    return result
 
 def llm_action( action_target: str, action_history: list ) -> LLMResult:
     model = get_jsonOutput_model()
