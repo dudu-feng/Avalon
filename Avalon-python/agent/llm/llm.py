@@ -139,6 +139,7 @@ def _invoke_and_parse(model: ChatOpenAI, messages: list) -> LLMResult:
             messages,
             response_format={"type": "json_object"},
         )
+        logger.info(f"带 response_format 调用成功，原始响应：{result}")
         raw = (result.content or "").strip()
         if raw:
             usage = getattr(result, 'usage_metadata', None)
@@ -148,6 +149,7 @@ def _invoke_and_parse(model: ChatOpenAI, messages: list) -> LLMResult:
         logger.warning("带 response_format 调用失败，降级为不带 response_format 重试", exc_info=True)
 
     result = model.invoke(messages)
+    logger.info(f"不带 response_format 调用成功，原始响应：{result}")
     raw = (result.content or "").strip()
     usage = getattr(result, 'usage_metadata', None)
     return LLMResult(content=parse_llm_json(raw), raw=raw, usage_metadata=usage)

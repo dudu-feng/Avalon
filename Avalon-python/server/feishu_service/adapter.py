@@ -20,7 +20,7 @@ from lark_oapi.channel import InboundMessage
 
 from server.feishu_service.config import FeishuConfig
 from server.feishu_service.feishu_sdk import get_sdk
-from server.feishu_service.media import transcribe_audio
+from server.feishu_service.media import transcribe_audio, is_whisper_loaded
 from server.logger import logger
 
 
@@ -84,6 +84,11 @@ def _build_user_entry(msg: InboundMessage) -> Dict[str, Any]:
         "content": _build_content(msg),
         "meta": _build_meta(msg),
     }
+
+
+def _has_audio(msg: InboundMessage) -> bool:
+    """消息是否携带语音资源（用于判断是否需要语音转写）"""
+    return any(res.type == "audio" for res in (msg.resources or []))
 
 
 async def _build_media_text(msg: InboundMessage) -> str:
@@ -248,6 +253,16 @@ async def _process_message(msg: InboundMessage) -> None:
         return
 
     user_entry = _build_user_entry(msg)
+
+    # 语音冷启动：Whisper 模型首次加载较慢，先发提示避免用户干等
+    if _has_audio(msg) and not is_whisper_loaded():
+        try:
+            await sdk.send_message(
+                msg.conversation.chat_id,
+                {"markdown": "正在加载语音识别模型，首次转写较慢，请稍等 ⏳"},
+            )
+        except Exception:
+            pass
 
     # 语音等媒体资源转写为文字后拼进 content，供纯文本 LLM 理解
     media_text = await _build_media_text(msg)

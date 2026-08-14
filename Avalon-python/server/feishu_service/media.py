@@ -51,6 +51,11 @@ def _get_whisper_model():
     return _whisper_model
 
 
+def is_whisper_loaded() -> bool:
+    """Whisper 模型是否已加载（True = 热，转写快；False = 冷启动，转写慢）"""
+    return _whisper_model is not None
+
+
 def _transcribe_bytes(data: bytes) -> str:
     """同步：落临时文件 → 转写 → 清理，返回文字（失败返回空串）。"""
     model = _get_whisper_model()
