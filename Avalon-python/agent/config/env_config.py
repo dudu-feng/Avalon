@@ -97,6 +97,11 @@ class EnvConfig:
     def session_index_path(self) -> str:
         return self._get("session_index_path")
 
+    @property
+    def file_path(self) -> str:
+        """通用文件存放目录（临时文件放在其下 temp 子目录）"""
+        return self._get("file_path")
+
     # ============================================================
     #  向量数据库
     # ============================================================
@@ -157,6 +162,13 @@ class EnvConfig:
         """ZVec 持久化路径"""
         return os.path.join(self.vector_db_path, "zvec")
 
+    @property
+    def temp_file_path(self) -> str:
+        """临时文件目录 = file_path + temp（语音转写等临时落盘处），未配置时为空"""
+        if self.file_path:
+            return os.path.join(self.file_path, "temp")
+        return ""
+
     # ============================================================
     #  会话压缩配置
     # ============================================================
@@ -189,6 +201,25 @@ class EnvConfig:
         默认 5。
         """
         return int(self._get("session_memory_context_chunks", "5"))
+
+    # ============================================================
+    #  飞书媒体转写配置
+    # ============================================================
+
+    @property
+    def whisper_model_path(self) -> str:
+        """本地 Whisper 模型存放目录（faster-whisper 的 download_root）"""
+        return self._get("Whisper_model_path")
+
+    @property
+    def whisper_model_name(self) -> str:
+        """Whisper 模型名（tiny/base/small/medium/large-v3），默认 medium"""
+        return self._get("Whisper_model_name", "medium")
+
+    @property
+    def whisper_device(self) -> str:
+        """Whisper 推理设备：cpu / cuda，默认 cpu"""
+        return self._get("Whisper_device", "cpu")
 
 
 # 全局唯一实例，其它模块只导入这个实例即可

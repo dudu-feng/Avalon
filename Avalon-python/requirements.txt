@@ -13,6 +13,9 @@ jieba>=0.42.0
 # ===== 配置管理 =====
 python-dotenv>=1.0.0
 
+# ===== 飞书媒体转写 =====
+faster-whisper>=1.0.0
+
 # ===== Web 服务 =====
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0

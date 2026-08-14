@@ -369,6 +369,33 @@ class FeishuSDKService:
 
         await self._sdk_channel.remove_reaction(message_id, reaction_id)
 
+    async def download_resource(
+            self,
+            file_key: str,
+            resource_type: str = "image",
+            message_id: Optional[str] = None,
+        ) -> Optional[bytes]:
+        """
+        下载飞书消息资源（图片/文件/音频/视频），返回字节内容。
+
+        Args:
+            file_key: 入站事件携带的资源 key（来自 InboundMessage.resources）
+            resource_type: "image" / "file" / "audio" / "video"
+            message_id: 可选，提供后走 message-resource 下载端点
+
+        Returns:
+            资源字节内容，下载失败返回 None
+
+        Raises:
+            RuntimeError: SDK 服务未启动
+        """
+        if self._sdk_channel is None:
+            raise RuntimeError("SDK 服务未启动，请先调用 start()")
+
+        return await self._sdk_channel.download_resource(
+            file_key, resource_type, message_id
+        )
+
     # ── 内部：事件转发器 ─────────────────────────────────────
 
     async def _on_message(self, msg: InboundMessage) -> None:

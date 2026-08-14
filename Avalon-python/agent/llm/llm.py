@@ -16,7 +16,8 @@ response_template = """
     - 分析当前情况，思考下一步应该做什么
     - 如果需要执行工具，根据现有工具列表规划工具调用
     - 返回纯JSON格式：
-    样例JSON输出:{
+    样例JSON输出:
+    {
         "thought": "分析当前情况，思考下一步应该做什么",
         "message": "输出给用户看的消息",
         "next": "action 或 stop",
@@ -127,9 +128,27 @@ def parse_llm_json(llm_output_content: str) -> dict:
 
 
 def _invoke_and_parse(model: ChatOpenAI, messages: list) -> LLMResult:
-    """调用模型并解析 JSON，统一封装为 LLMResult"""
+    """调用模型并解析 JSON，统一封装为 LLMResult。
+
+    优先使用 response_format=json_object 强制结构化输出；若该模式
+    返回空 content（DeepSeek JSON Output 已知问题）或抛异常（模型
+    不支持该参数），则降级为不带 response_format 的普通调用重试一次。
+    """
+    try:
+        result = model.invoke(
+            messages,
+            response_format={"type": "json_object"},
+        )
+        raw = (result.content or "").strip()
+        if raw:
+            usage = getattr(result, 'usage_metadata', None)
+            return LLMResult(content=parse_llm_json(raw), raw=raw, usage_metadata=usage)
+        logger.warning("JSON Output 返回空 content，降级为不带 response_format 重试")
+    except Exception:
+        logger.warning("带 response_format 调用失败，降级为不带 response_format 重试", exc_info=True)
+
     result = model.invoke(messages)
-    raw = result.content or ""
+    raw = (result.content or "").strip()
     usage = getattr(result, 'usage_metadata', None)
     return LLMResult(content=parse_llm_json(raw), raw=raw, usage_metadata=usage)
 
@@ -153,9 +172,7 @@ def llm_chat( user_input: str, chat_history: list, channel: str = "terminal" ) -
     
     logger.info(f"提示词组装完成，开始请求对话层，用户输入：{user_input}")
     # 调用模型
-    result = model.invoke(messages)
-    
-    return result
+    return _invoke_and_parse(model, messages)
 
 def llm_action( action_target: str, action_history: list ) -> LLMResult:
     model = get_jsonOutput_model()

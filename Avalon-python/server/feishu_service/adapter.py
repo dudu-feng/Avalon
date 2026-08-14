@@ -20,6 +20,7 @@ from lark_oapi.channel import InboundMessage
 
 from server.feishu_service.config import FeishuConfig
 from server.feishu_service.feishu_sdk import get_sdk
+from server.feishu_service.media import transcribe_audio
 from server.logger import logger
 
 
@@ -31,6 +32,10 @@ def _now() -> str:
 #  消息转换（飞书 → 标准 user entry）
 # ============================================================
 
+# 飞书媒体消息类型：content_text 是 <audio .../> 等 XML 占位符，不应作为正文
+_MEDIA_TYPES = {"image", "audio", "file", "video", "sticker"}
+
+
 def _build_content(msg: InboundMessage) -> str:
     """拼接用户消息文本（群聊加发送者前缀）"""
     parts: List[str] = []
@@ -39,13 +44,15 @@ def _build_content(msg: InboundMessage) -> str:
         sender_name = msg.sender.display_name or msg.sender.open_id or "未知"
         parts.append(sender_name)
 
-    if msg.content_text:
+    # 媒体消息的 content_text 是占位符（如 <audio key=... duration=.../>），
+    # 不能当作正文；真正的语义由 _build_media_text 转写后替换 [非文本消息]。
+    if msg.content_text and msg.raw_content_type not in _MEDIA_TYPES:
         if parts:
             parts.append(f": {msg.content_text}")
         else:
             parts.append(msg.content_text)
     else:
-        # 纯非文本消息（图片/文件等）
+        # 纯媒体消息或空文本
         if parts:
             parts.append(": [非文本消息]")
         else:
@@ -77,6 +84,17 @@ def _build_user_entry(msg: InboundMessage) -> Dict[str, Any]:
         "content": _build_content(msg),
         "meta": _build_meta(msg),
     }
+
+
+async def _build_media_text(msg: InboundMessage) -> str:
+    """转写消息携带的媒体资源（当前仅语音），返回追加到 content 的文本。"""
+    chunks: List[str] = []
+    for res in (msg.resources or []):
+        if res.type == "audio":
+            text = await transcribe_audio(res.file_key, msg.id)
+            chunks.append(f"[语音转写: {text}]" if text else "[语音无法转写]")
+        # image / file / video / sticker 暂保持现状，后续按需扩展
+    return "\n".join(chunks)
 
 
 # ============================================================
@@ -230,6 +248,19 @@ async def _process_message(msg: InboundMessage) -> None:
         return
 
     user_entry = _build_user_entry(msg)
+
+    # 语音等媒体资源转写为文字后拼进 content，供纯文本 LLM 理解
+    media_text = await _build_media_text(msg)
+    if media_text:
+        content = user_entry["content"].strip()
+        if content.endswith("[非文本消息]"):
+            # 纯媒体消息：用转写结果替换掉无意义的占位符
+            prefix = content[: -len("[非文本消息]")].rstrip()
+            user_entry["content"] = (prefix + " " + media_text).strip() if prefix else media_text
+        else:
+            # 图文混合：文字与转写结果都保留
+            user_entry["content"] = content + "\n" + media_text
+
     text = user_entry["content"].strip()
     if not text:
         return  # 空消息暂不处理
@@ -269,6 +300,10 @@ async def _process_message(msg: InboundMessage) -> None:
             session_manage.update_current_session(chat_history, "feishu")
             session_manage.auto_compress_check_from_history(chat_history, "feishu")
             return chat_history
+        except Exception as e:
+            # 记录异常并推给用户，避免「无回复直接标记完成」
+            logger.exception("ReAct 执行失败")
+            on_event("error", {"code": 50000, "message": f"处理出错：{type(e).__name__}: {e}"})
         finally:
             # 兜底 sentinel：无论成功/异常都通知消费者退出，避免死锁
             on_event("__sentinel__", {})
