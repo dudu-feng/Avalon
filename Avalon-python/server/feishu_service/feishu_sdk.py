@@ -54,6 +54,9 @@ from lark_oapi.channel import (
     ReactionEvent,
     RejectEvent,
     Events,
+    CardBuilder,
+    CardPayload,
+    new_card,
 )
 
 from server.feishu_service.config import FeishuConfig
@@ -350,6 +353,132 @@ class FeishuSDKService:
 
         return await self._sdk_channel.edit_message(message_id, content)
 
+    async def send_card(
+            self,
+            chat_id: str,
+            card: dict,
+            *,
+            reply_to: Optional[str] = None,
+        ):
+        """
+        发送 interactive 卡片消息。
+
+        Args:
+            chat_id: 飞书会话 ID（oc_xxx）
+            card: 卡片 JSON（schema 2.0），可直接传 new_card().to_dict() 的结果
+            reply_to: 被引用回复的消息 ID（可选）
+
+        Returns:
+            SDK 返回的 SendResult
+
+        Raises:
+            RuntimeError: SDK 服务未启动
+        """
+        if self._sdk_channel is None:
+            raise RuntimeError("SDK 服务未启动，请先调用 start()")
+
+        opts: dict = {}
+        if reply_to:
+            opts["reply_to"] = reply_to
+
+        return await self._sdk_channel.send(chat_id, {"card": card}, opts)
+
+    async def update_card(self, message_id: str, card: dict):
+        """
+        更新已发送的卡片消息（PATCH /im/v1/messages/:message_id）。
+
+        Args:
+            message_id: 待更新的消息 ID
+            card: 新的卡片 JSON（schema 2.0）
+
+        Returns:
+            SDK 返回的 SendResult
+
+        Raises:
+            RuntimeError: SDK 服务未启动
+        """
+        if self._sdk_channel is None:
+            raise RuntimeError("SDK 服务未启动，请先调用 start()")
+
+        return await self._sdk_channel.update_card(message_id, card)
+
+    async def stream_markdown(
+            self,
+            chat_id: str,
+            producer,
+            *,
+            reply_to: Optional[str] = None,
+        ):
+        """
+        流式发送一张 markdown 打字机卡片（CardKit typewriter 协议）。
+
+        producer 是 async 函数，接收流式控制器，通过 ctl.append(text) 逐段追加内容：
+
+            async def producer(ctl):
+                await ctl.append("第一段")
+                await ctl.append("\\n\\n第二段")
+
+            await sdk.stream_markdown(chat_id, producer)
+
+        Args:
+            chat_id: 飞书会话 ID（oc_xxx）
+            producer: async def f(ctl) -> None，负责调用 ctl.append(text) 追加内容
+            reply_to: 被引用回复的消息 ID（可选）
+
+        Returns:
+            SDK 返回的 SendResult
+
+        Raises:
+            RuntimeError: SDK 服务未启动
+        """
+        if self._sdk_channel is None:
+            raise RuntimeError("SDK 服务未启动，请先调用 start()")
+
+        opts: dict = {}
+        if reply_to:
+            opts["reply_to"] = reply_to
+
+        return await self._sdk_channel.stream(chat_id, {"markdown": producer}, opts)
+
+    async def stream_card(
+            self,
+            chat_id: str,
+            initial: dict,
+            producer,
+            *,
+            reply_to: Optional[str] = None,
+        ):
+        """
+        流式发送一张完整卡片快照流（适合进度条、动态元素等复杂卡片）。
+
+        producer 是 async 函数，接收 CardStreamController，通过 ctl.update(snapshot)
+        提交完整卡片快照：
+
+            async def producer(ctl):
+                await ctl.update({"schema": "2.0", "body": {...}})
+
+        Args:
+            chat_id: 飞书会话 ID（oc_xxx）
+            initial: 初始卡片 JSON（schema 2.0）
+            producer: async def f(ctl) -> None，负责调用 ctl.update(snapshot)
+            reply_to: 被引用回复的消息 ID（可选）
+
+        Returns:
+            SDK 返回的 SendResult
+
+        Raises:
+            RuntimeError: SDK 服务未启动
+        """
+        if self._sdk_channel is None:
+            raise RuntimeError("SDK 服务未启动，请先调用 start()")
+
+        opts: dict = {}
+        if reply_to:
+            opts["reply_to"] = reply_to
+
+        spec = {"card": {"initial": initial, "producer": producer}}
+        return await self._sdk_channel.stream(chat_id, spec, opts)
+
     async def add_reaction(self, message_id: str, emoji: str):
         """
         对消息添加表情回应。
@@ -555,4 +684,7 @@ __all__ = [
     "get_sdk",
     "create_sdk",
     "destroy_sdk",
+    "CardBuilder",
+    "CardPayload",
+    "new_card",
 ]

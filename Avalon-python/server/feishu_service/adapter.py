@@ -124,13 +124,13 @@ def _safe_json(obj) -> str:
 
 def _render_event(event_type: str, data: Dict[str, Any]) -> str:
     """把 ReAct 事件渲染成飞书 markdown（清晰排版）"""
-    if event_type == "chat_message":
-        # 回复正文，原样输出
-        return data.get("delta", "")
+    if event_type == "chat_thought":
+        thought = data.get("thought", "")
+        return f"💭 思考\n\n{thought}" if thought else ""
 
     if event_type == "action_start":
         target = data.get("action_target", "")
-        return f"## 🎯 {target}" if target else "## 🎯 开始执行"
+        return f"🎯 {target}" if target else "🎯 开始执行"
 
     if event_type == "action_step":
         analysis = data.get("analysis", "")
@@ -162,15 +162,8 @@ def _render_event(event_type: str, data: Dict[str, Any]) -> str:
     return ""
 
 
-# 飞书 markdown 单条消息长度保护：工具结果可能很长，超长会导致发送被拒
+# 流式卡片累积内容长度保护：工具结果可能很长，超长会导致卡片被拒收
 _MAX_MARKDOWN_LEN = 8000
-
-
-def _truncate_markdown(text: str, limit: int = _MAX_MARKDOWN_LEN) -> str:
-    """截断超长文本，避免飞书拒收过长的 markdown 消息"""
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "\n…（内容过长，已截断）"
 
 
 # ============================================================
@@ -325,21 +318,36 @@ async def _process_message(msg: InboundMessage) -> None:
 
     executor_future = loop.run_in_executor(None, run_react)
 
-    # ③ 消费事件，每个过程步骤实时发一条新消息
-    try:
+    # ③ 双通道输出：正文走普通消息，思考过程走流式卡片
+    async def producer(ctl):
+        total = 0
         while True:
             event_type, data = await queue.get()
             if event_type == "__sentinel__":
                 break
+            # 正文通道：chat_message → 直接发普通消息给用户
+            if event_type == "chat_message":
+                delta = data.get("delta", "")
+                if delta:
+                    try:
+                        await sdk.send_message(chat_id, {"markdown": delta})
+                    except Exception:
+                        logger.exception("正文消息发送失败")
+                continue
+            # 思考通道：其余过程事件 → append 进流式卡片
             line = _render_event(event_type, data)
-            if line:
-                result = await sdk.send_message(
-                    chat_id, {"markdown": _truncate_markdown(line)}
-                )
-                if not result.success:
-                    break
+            if not line:
+                continue
+            total += len(line)
+            if total > _MAX_MARKDOWN_LEN:
+                await ctl.append("\n\n…（内容过长，已截断）")
+                break
+            await ctl.append(line + "\n\n")
+
+    try:
+        await sdk.stream_markdown(chat_id, producer)
     except Exception:
-        pass
+        logger.exception("流式卡片输出失败")
 
     # ④ 等待 ReAct 完成（确保异常不中断回复流程）
     try:

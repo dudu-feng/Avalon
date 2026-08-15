@@ -8,6 +8,7 @@
 
 | 事件名              | data 字段                  | 说明                     |
 |---------------------|----------------------------|--------------------------|
+| chat_thought        | thought                    | 对话层思考过程           |
 | chat_message        | delta                      | 回复正文（含降级纯文本） |
 | action_start        | action_target              | 进入动作层               |
 | action_step         | analysis, next             | 动作层每步分析           |
@@ -30,6 +31,9 @@ class ReactEmitter:
     def _emit(self, event_type: str, data: dict) -> None:
         if self._on_event:
             self._on_event(event_type, data)
+
+    def chat_thought(self, thought: str) -> None:
+        self._emit("chat_thought", {"thought": thought})
 
     def chat_message(self, delta: str) -> None:
         self._emit("chat_message", {"delta": delta})

@@ -67,6 +67,9 @@ def react_loop(
             chat_history.append({"role": "assistant", "content": chat_result.raw})
             return chat_history
 
+        thought = chat_result_content.get("thought", "")
+        if thought:
+            emitter.chat_thought(thought)
         emitter.chat_message(chat_result_content.get("message", ""))
         chat_history.append(chat_result_transform(chat_result_content, chat_result))
 
