@@ -189,7 +189,8 @@ def llm_action( action_target: str, action_history: list ) -> LLMResult:
         3. 简洁思考，限制思考过程不要太长，保持思考效率。
 
         返回纯JSON格式（不要用markdown代码块包裹）：
-        样例JSON输出:{{
+        样例JSON输出:
+        {{
             "analysis": "分析当前情况，思考下一步应该做什么",
             "next": "tool_call / sub_analysis / finished",
             "tool_call": {{
@@ -215,7 +216,8 @@ def llm_action( action_target: str, action_history: list ) -> LLMResult:
 def llm_compress( session_data: dict ) -> LLMResult:
     model = get_jsonOutput_model()
     system_prompt = f"""
-        这是一个压缩模型调用，用于压缩历史会话记录，返回纯JSON格式（不要用markdown代码块包裹）
+        这是一个压缩模型调用，用于压缩历史会话记录，返回纯JSON格式。
+        样例JSON输出:
         {{
             "summary": ["被压缩会话的总结1", "被压缩会话的总结2"],(被压缩会话的总结，因为后续需要把总结字段向量化作后续会话语义检索，所以单个总结长度不超过200个字符，如会话内容较多，可返回多个总结)
             "keywords": ["关键词1", "关键词2", "关键词3", ...](被压缩会话内容的精炼关键词，为了方便后续会话记忆作关键词检索，可以是内容概括性关键词，也可以是重要事件，关键事物的直接指向性关键词)
