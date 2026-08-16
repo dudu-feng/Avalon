@@ -4,8 +4,12 @@
 
 mod commands;
 mod config;
+mod embedding;
 mod llm;
 mod tool;
+
+#[cfg(test)]
+mod test_file; // 单元测试（仅 cargo test 编译）
 
 use config::ConfigStore;
 use llm::LlmState;

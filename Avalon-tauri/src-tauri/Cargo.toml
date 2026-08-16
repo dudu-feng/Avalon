@@ -31,6 +31,10 @@ anyhow = "1"
 thiserror = "2"
 async-trait = "0.1"
 encoding_rs = "0.8"
+candle-core = "0.11.0"
+candle-nn = "0.11.0"
+candle-transformers = "0.11.0"
+tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

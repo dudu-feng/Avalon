@@ -61,12 +61,21 @@ pub enum EmbeddingMode {
     Api,
 }
 
+/// embedding 加载时机：lazy（懒加载）| eager（常驻热加载）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EmbeddingLoadMode {
+    Lazy,
+    Eager,
+}
+
 /// Embedding 向量化配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
     pub mode: EmbeddingMode,
     pub local_model: String,
     pub device: String,
+    pub load_mode: EmbeddingLoadMode,
     pub api_key: String,
     pub api_model: String,
     pub api_base_url: String,

@@ -7,9 +7,9 @@
 # ============================================================
 [paths]
 # 共享数据根目录（会话记忆/向量库/模型）。留空 = 项目根下的 data/
-data_root = "f:\Avalon\data"
+data_root = "f:/Avalon/data"
 # 文件存放目录（临时文件等）。留空 = 项目根下的 file/
-file_root = "f:\Avalon\file"
+file_root = "f:/Avalon/file"
 
 # ============================================================
 #  LLM 模型配置
@@ -29,7 +29,8 @@ timeout_secs = 120                        # 请求超时秒数
 mode = "local"                            # local | api
 local_model = "bge-small-zh-v1.5"
 device = "cpu"
-api_key = ""
+load_mode = "lazy"                        # lazy | eager（懒加载 | 常驻热加载）
+api_key = ""                              # 仅当 mode = api 时必填（环境变量 AVALON_EMBEDDING_API_KEY 覆盖）
 api_model = "text-embedding-3-small"
 api_base_url = ""
 

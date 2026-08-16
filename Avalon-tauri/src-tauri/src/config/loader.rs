@@ -20,6 +20,7 @@ pub const DEFAULT_TEMPLATE: &str = r#"# ========================================
 # ============================================================
 [paths]
 # 共享数据根目录（会话记忆/向量库/模型）。留空 = 项目根下的 data/
+# 提示：Windows 绝对路径请用正斜杠（f:/Avalon/data），反斜杠在 TOML 中是转义符
 data_root = ""
 # 文件存放目录（临时文件等）。留空 = 项目根下的 file/
 file_root = ""
@@ -42,6 +43,7 @@ timeout_secs = 120                        # 请求超时秒数
 mode = "local"                            # local | api
 local_model = "bge-small-zh-v1.5"
 device = "cpu"
+load_mode = "lazy"                        # lazy | eager（懒加载 | 常驻热加载）
 api_key = ""
 api_model = "text-embedding-3-small"
 api_base_url = ""
