@@ -20,6 +20,8 @@ pub struct AppConfig {
     pub session_memory: SessionMemoryConfig,
     /// Whisper 语音转写配置
     pub whisper: WhisperConfig,
+    /// 向量数据库配置
+    pub vector: VectorConfig,
 
     // —— 运行时派生，不落盘 ——
     /// Avalon-config.toml 完整路径（保存时写回原位置）
@@ -108,4 +110,18 @@ pub struct SessionMemoryConfig {
 pub struct WhisperConfig {
     pub model_name: String,
     pub device: String,
+}
+
+/// 向量数据库后端：memory（自研轻量索引）| sqlite（预留扩展）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VectorBackend {
+    Memory,
+    Sqlite,
+}
+
+/// 向量数据库配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorConfig {
+    pub backend: VectorBackend,
 }

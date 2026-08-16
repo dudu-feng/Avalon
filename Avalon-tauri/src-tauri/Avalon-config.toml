@@ -49,3 +49,9 @@ search_mode = "hybrid"                    # semantic | keyword | hybrid
 [whisper]
 model_name = "medium"
 device = "cpu"
+
+# ============================================================
+#  向量数据库配置
+# ============================================================
+[vector]
+backend = "memory"                        # memory（自研轻量）| sqlite（预留扩展）

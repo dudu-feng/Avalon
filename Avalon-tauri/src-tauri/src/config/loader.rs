@@ -63,6 +63,12 @@ search_mode = "hybrid"                    # semantic | keyword | hybrid
 [whisper]
 model_name = "medium"
 device = "cpu"
+
+# ============================================================
+#  向量数据库配置
+# ============================================================
+[vector]
+backend = "memory"                        # memory（自研轻量）| sqlite（预留扩展）
 "#;
 
 /// 加载配置：定位 → 不存在则生成默认模板 → 反序列化 → 回填 config_path → 环境变量覆盖
