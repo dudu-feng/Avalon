@@ -89,6 +89,41 @@ def _strip_markdown_fences(text: str) -> str:
     return text
 
 
+def _extract_json_object(text: str) -> str:
+    """从混有自然语言前缀/后缀的文本中提取第一个完整的 JSON 对象。
+
+    从第一个 `{` 开始按花括号配平（跳过字符串字面量），返回首个
+    平衡的 `{...}` 片段；找不到则返回空字符串。
+    """
+    start = text.find('{')
+    if start == -1:
+        return ''
+
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+
+        if ch == '"':
+            in_str = True
+        elif ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return ''
+
+
 def parse_llm_json(llm_output_content: str) -> dict:
     """
     解析 LLM 返回的 JSON 内容。
@@ -96,7 +131,8 @@ def parse_llm_json(llm_output_content: str) -> dict:
     步骤：
     1. 直接 json.loads（正常情况）
     2. 剥离 markdown 代码块后 json.loads（被代码块包裹的情况）
-    3. 都不行 → 返回 {}，交由上层决定重试或调整
+    3. 从混合文本中提取首个完整 JSON 对象后 json.loads（自然语言前缀的情况）
+    4. 都不行 → 返回 {}，交由上层决定重试或调整
     """
     if not llm_output_content or not isinstance(llm_output_content, str):
         return {}
@@ -123,7 +159,17 @@ def parse_llm_json(llm_output_content: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    # ③ 无法解析，返回空 dict 交由上层处理
+    # ③ 从混合文本中提取首个完整 JSON 对象后重试
+    extracted = _extract_json_object(content)
+    if extracted:
+        try:
+            result = json.loads(extracted)
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    # ④ 无法解析，返回空 dict 交由上层处理
     return {}
 
 

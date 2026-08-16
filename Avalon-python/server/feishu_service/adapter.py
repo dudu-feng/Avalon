@@ -166,6 +166,31 @@ def _render_event(event_type: str, data: Dict[str, Any]) -> str:
 _MAX_MARKDOWN_LEN = 8000
 
 
+def _build_folded_card(thoughts: List[str], actions: List[str]) -> Dict[str, Any]:
+    """流式结束后，把整张过程卡片重构成折叠面板（默认收起）。
+
+    流式阶段 thought / action 混在同一个 markdown 里逐字输出（最流畅）；
+    结束后把全部内容（思考 + 执行过程）收进一个 collapsible_panel，
+    expanded=False 默认折叠，用户点击面板才展开查看完整过程。
+
+    collapsible_panel 是卡片 JSON 2.0 容器组件。
+    """
+    full_text = "\n\n".join(t for t in (thoughts + actions) if t)
+    return {
+        "schema": "2.0",
+        "body": {
+            "elements": [
+                {
+                    "tag": "collapsible_panel",
+                    "expanded": False,
+                    "header": {"title": {"tag": "plain_text", "content": "💭 思考过程"}},
+                    "elements": [{"tag": "markdown", "content": full_text}],
+                }
+            ]
+        },
+    }
+
+
 # ============================================================
 #  全局消息队列（跨消息串行化）
 # ============================================================
@@ -319,6 +344,9 @@ async def _process_message(msg: InboundMessage) -> None:
     executor_future = loop.run_in_executor(None, run_react)
 
     # ③ 双通道输出：正文走普通消息，思考过程走流式卡片
+    thoughts: List[str] = []
+    actions: List[str] = []
+
     async def producer(ctl):
         total = 0
         while True:
@@ -334,8 +362,15 @@ async def _process_message(msg: InboundMessage) -> None:
                     except Exception:
                         logger.exception("正文消息发送失败")
                 continue
-            # 思考通道：其余过程事件 → append 进流式卡片
+            # 思考通道：chat_thought / action_* → append 进流式卡片，同时分类记录
+            if event_type == "chat_thought":
+                thought = data.get("thought", "")
+                if not thought:
+                    continue
+                thoughts.append(thought)
             line = _render_event(event_type, data)
+            if event_type != "chat_thought" and line:
+                actions.append(line)
             if not line:
                 continue
             total += len(line)
@@ -344,10 +379,19 @@ async def _process_message(msg: InboundMessage) -> None:
                 break
             await ctl.append(line + "\n\n")
 
+    result = None
     try:
-        await sdk.stream_markdown(chat_id, producer)
+        result = await sdk.stream_markdown(chat_id, producer)
     except Exception:
         logger.exception("流式卡片输出失败")
+
+    # 流式结束：把思考折叠进 collapsible_panel（thought 折叠，action 展开）
+    message_id = getattr(result, "message_id", None) if result else None
+    if message_id and (thoughts or actions):
+        try:
+            await sdk.update_card(message_id, _build_folded_card(thoughts, actions))
+        except Exception:
+            logger.exception("折叠卡片更新失败")
 
     # ④ 等待 ReAct 完成（确保异常不中断回复流程）
     try:
