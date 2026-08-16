@@ -1,9 +1,13 @@
-import { PageContainer, Card } from '../../components/ui';
+import { useChat, MessageList, ChatInput } from '../../components/features/chat';
+import styles from './ChatPage.module.css';
 
 export function ChatPage() {
+  const { messages, isBusy, send } = useChat();
+
   return (
-    <PageContainer title="Chat" description="与 Avalon 对话，接入后端 LLM 能力。">
-      <Card variant="sunken" description="页面内容待搭建。" />
-    </PageContainer>
+    <div className={styles.chat}>
+      <MessageList messages={messages} />
+      <ChatInput onSubmit={send} disabled={isBusy} />
+    </div>
   );
 }

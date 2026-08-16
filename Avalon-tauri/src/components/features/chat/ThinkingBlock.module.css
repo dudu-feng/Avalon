@@ -1,0 +1,28 @@
+.block {
+  display: grid;
+  gap: 8px;
+}
+
+.toggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--muted-foreground);
+  font: 600 12px/1.2 var(--font-sans);
+  cursor: pointer;
+  text-align: left;
+}
+
+.toggle:hover {
+  color: var(--foreground);
+}
+
+.content {
+  font: 400 13px/1.6 var(--font-serif);
+  color: var(--muted-foreground);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

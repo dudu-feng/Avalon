@@ -1,0 +1,28 @@
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 2px;
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.emptyTitle {
+  font: 500 20px/1.2 var(--font-display);
+  color: var(--foreground);
+}
+
+.emptyHint {
+  font: 400 14px/1.6 var(--font-serif);
+  color: var(--muted-foreground);
+}

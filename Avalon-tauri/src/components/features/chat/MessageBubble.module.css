@@ -1,0 +1,46 @@
+.row {
+  display: flex;
+  flex-direction: column;
+}
+
+.user {
+  align-items: flex-end;
+}
+
+.assistant {
+  align-items: flex-start;
+}
+
+.bubble {
+  max-width: 78%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--popover);
+  color: var(--foreground);
+  display: grid;
+  gap: 8px;
+}
+
+.user .bubble {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: transparent;
+}
+
+.text {
+  font: 400 14px/1.6 var(--font-sans);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pending {
+  font: 400 14px/1.6 var(--font-sans);
+  color: var(--muted-foreground);
+}
+
+.error .bubble {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+  border-color: transparent;
+}
