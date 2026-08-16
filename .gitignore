@@ -49,3 +49,6 @@ __pycache__/
 
 #/ lark_doc
 lark_doc/
+
+#/ doc
+doc/

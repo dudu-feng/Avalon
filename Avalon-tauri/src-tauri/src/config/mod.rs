@@ -1,13 +1,16 @@
 // 配置中心模块
 //
-// 管理 Avalon 应用的所有配置项，包括 LLM API、路径、向量数据库、会话记忆等。
-// 配置文件为 JSON 格式，存储在用户数据目录下。
-//
-// 使用方式：
-//     use config::AppConfig;
-//     let config = AppConfig::load()?;
-//     let api_key = config.llm.api_key;
+// 职责：
+//   - 加载 data/config.toml（loader）
+//   - 定位配置文件 + 派生共享 data 路径（paths）
+//   - 配置数据结构（types）
+//   - 运行时共享与保存（store）
 
-pub mod app_config;
+pub mod loader;
+pub mod paths;
+pub mod store;
+pub mod types;
 
-pub use app_config::AppConfig;
+pub use loader::default_config;
+pub use store::ConfigStore;
+pub use types::*;
