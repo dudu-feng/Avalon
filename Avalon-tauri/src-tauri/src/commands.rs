@@ -1,11 +1,15 @@
 // Tauri IPC 命令定义
 //
 // 前端通过 invoke("command_name", { params }) 调用这些命令。
-// 当前仅承载配置管理命令，LLM 等业务命令由后续模块补充。
+// 分两类：配置管理命令 + LLM 调用命令（LLM 命令由 engine 层后续编排）。
 
+use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::config::{AppConfig, ConfigStore};
+use crate::llm::{ActionResult, ChatResult, CompressResult, LlmState, StreamEvent};
+
+// ============ 配置管理 ============
 
 /// 获取当前配置快照
 #[tauri::command]
@@ -46,4 +50,55 @@ pub fn init_app(store: State<'_, ConfigStore>) -> Result<Vec<String>, String> {
         println!("  ⚠️ {w}");
     }
     Ok(warnings)
+}
+
+// ============ LLM 调用 ============
+
+/// 对话层：流式调用。正文/思考通过 on_event 通道逐字推送，返回完整结果。
+#[tauri::command]
+pub async fn llm_chat(
+    system_prompt: String,
+    user_input: String,
+    chat_history: String,
+    config: State<'_, ConfigStore>,
+    llm: State<'_, LlmState>,
+    on_event: Channel<StreamEvent>,
+) -> Result<ChatResult, String> {
+    let client = llm.client(config.get().llm);
+    client
+        .chat_stream(&system_prompt, &user_input, &chat_history, move |ev| {
+            let _ = on_event.send(ev);
+        })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 动作层：非流式 JSON，返回工具调用/子分析/完成意图。
+#[tauri::command]
+pub async fn llm_action(
+    action_target: String,
+    action_history: String,
+    tool_list: Option<String>,
+    config: State<'_, ConfigStore>,
+    llm: State<'_, LlmState>,
+) -> Result<ActionResult, String> {
+    let client = llm.client(config.get().llm);
+    client
+        .action(&action_target, &action_history, &tool_list.unwrap_or_default())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 会话压缩：非流式 JSON，返回 summary + keywords。
+#[tauri::command]
+pub async fn llm_compress(
+    session_data: String,
+    config: State<'_, ConfigStore>,
+    llm: State<'_, LlmState>,
+) -> Result<CompressResult, String> {
+    let client = llm.client(config.get().llm);
+    client
+        .compress(&session_data)
+        .await
+        .map_err(|e| e.to_string())
 }

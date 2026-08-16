@@ -4,8 +4,11 @@
 
 mod commands;
 mod config;
+mod llm;
+mod tool;
 
 use config::ConfigStore;
+use llm::LlmState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -28,12 +31,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(store)
+        .manage(LlmState::new())
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
             commands::validate_config,
             commands::get_config_path,
             commands::init_app,
+            commands::llm_chat,
+            commands::llm_action,
+            commands::llm_compress,
         ])
         .setup(|_app| {
             println!("[App] Avalon Tauri 应用启动成功");
