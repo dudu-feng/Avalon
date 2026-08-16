@@ -1,0 +1,21 @@
+.container {
+  max-width: 760px;
+  display: grid;
+  gap: 24px;
+}
+
+.head {
+  display: grid;
+  gap: 8px;
+}
+
+.title {
+  font: 500 24px/1.2 var(--font-display);
+  color: var(--foreground);
+}
+
+.description {
+  font: 400 15px/1.6 var(--font-serif);
+  color: var(--secondary-foreground);
+  max-width: 560px;
+}

@@ -13,10 +13,35 @@
 
 .brand {
   margin: 0 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--sidebar-foreground);
+}
+
+.brandText {
   font: 600 11px/1.2 var(--font-serif);
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--sidebar-foreground);
+}
+
+.logo,
+.logoDark {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.logoDark {
+  display: none;
+}
+
+:global(.dark) .logo {
+  display: none;
+}
+
+:global(.dark) .logoDark {
+  display: block;
 }
 
 .stack {

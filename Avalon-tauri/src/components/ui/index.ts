@@ -12,3 +12,6 @@ export type { BadgeProps } from './Badge';
 
 export { ThemeToggle } from './ThemeToggle';
 export type { ThemeToggleProps } from './ThemeToggle';
+
+export { PageContainer } from './PageContainer';
+export type { PageContainerProps } from './PageContainer';

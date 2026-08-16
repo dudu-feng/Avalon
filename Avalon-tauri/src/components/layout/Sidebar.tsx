@@ -1,6 +1,8 @@
 import { MenuItem } from './MenuItem';
 import styles from './Sidebar.module.css';
 import type { MenuItemData } from '../../types';
+import blackLogo from '../../assets/avalon-logo/Avalon-black.png';
+import creamLogo from '../../assets/avalon-logo/Avalon-cream.png';
 
 export interface SidebarProps {
   title: string;
@@ -12,7 +14,11 @@ export interface SidebarProps {
 export function Sidebar({ title, items, activeId, onSelect }: SidebarProps) {
   return (
     <aside className={styles.sidebar} aria-label="Sidebar navigation">
-      <p className={styles.brand}>{title}</p>
+      <div className={styles.brand}>
+        <img className={styles.logo} src={creamLogo} alt="" />
+        <img className={styles.logoDark} src={blackLogo} alt="" />
+        <span className={styles.brandText}>{title}</span>
+      </div>
       <nav className={styles.stack}>
         {items.map((item) => (
           <MenuItem
