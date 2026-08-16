@@ -1,0 +1,32 @@
+.header {
+  height: 64px;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--popover);
+  flex-shrink: 0;
+}
+
+.title {
+  font: 600 21px/1.18 var(--font-sans);
+  color: var(--foreground);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+@media (max-width: 640px) {
+  .header {
+    padding: 0 16px;
+  }
+
+  .title {
+    font-size: 18px;
+  }
+}

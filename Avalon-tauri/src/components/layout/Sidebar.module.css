@@ -1,0 +1,33 @@
+.sidebar {
+  width: 240px;
+  max-width: 100%;
+  min-height: 100%;
+  padding: 16px;
+  border-right: 1px solid var(--sidebar-border);
+  background: var(--sidebar);
+  color: var(--sidebar-foreground);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.brand {
+  margin: 0 0 16px;
+  font: 600 11px/1.2 var(--font-serif);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sidebar-foreground);
+}
+
+.stack {
+  display: grid;
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--sidebar-border);
+  }
+}
