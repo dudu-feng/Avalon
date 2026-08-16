@@ -111,24 +111,19 @@ impl LlmClient {
         Ok(result)
     }
 
-    /// 动作层：非流式，低温度 JSON（含 response_format 降级）
-    pub async fn action(
-        &self,
-        action_target: &str,
-        action_history: &str,
-        tool_list: &str,
-    ) -> Result<ActionResult> {
-        let prompt = build_action_prompt(action_target, tool_list, action_history);
-        let (content, usage) = self.invoke_json(&prompt, None).await?;
+    /// 动作层：非流式，低温度 JSON（含 response_format 降级）。
+    /// system_prompt 由 engine 用 prompt::build_action_prompt 组装后传入。
+    pub async fn action(&self, system_prompt: &str) -> Result<ActionResult> {
+        let (content, usage) = self.invoke_json(system_prompt, None).await?;
         let mut result: ActionResult = parse_llm_json(&content)?;
         result.usage = usage;
         Ok(result)
     }
 
-    /// 压缩层：非流式，低温度 JSON
-    pub async fn compress(&self, session_data: &str) -> Result<CompressResult> {
-        let (system, user) = build_compress_prompt(session_data);
-        let (content, usage) = self.invoke_json(&system, Some(&user)).await?;
+    /// 压缩层：非流式，低温度 JSON。
+    /// (system_prompt, user_prompt) 由 engine 用 prompt::build_compress_prompt 组装后传入。
+    pub async fn compress(&self, system_prompt: &str, user_prompt: &str) -> Result<CompressResult> {
+        let (content, usage) = self.invoke_json(system_prompt, Some(user_prompt)).await?;
         let mut result: CompressResult = parse_llm_json(&content)?;
         result.usage = usage;
         Ok(result)
@@ -198,52 +193,6 @@ impl LlmClient {
         let usage = parse_usage(&v);
         Ok((content, usage))
     }
-}
-
-// ============ 提示词模板 ============
-
-fn build_action_prompt(action_target: &str, tool_list: &str, action_history: &str) -> String {
-    format!(
-        r#"这是一个action步骤模型调用，用于执行部分步式任务，请完成以下目标，当操作失败次数过多时，则停止执行操作：
-{action_target}
-遵守规则：
-1. 拒绝发散性思考，只根据执行历史和工具列表进行分析。
-2. 拒绝多次尝试同一错误操作，避免死循环。
-3. 简洁思考，限制思考过程不要太长，保持思考效率。
-
-返回纯JSON格式（不要用markdown代码块包裹）：
-样例JSON输出:
-{{
-    "analysis": "分析当前情况，思考下一步应该做什么",
-    "next": "tool_call / sub_analysis / finished",
-    "tool_call": {{
-        "name": "要调用的工具名称",
-        "arguments": {{}}
-    }},
-    "sub_analysis": "子步骤分析/规划返回（仅next=sub_analysis时需要）"
-}}
-
-可用的工具列表：
-{tool_list}
-
-本次action步骤执行历史，当操作失败次数过多时，则停止执行操作:
-{action_history}"#
-    )
-}
-
-fn build_compress_prompt(session_data: &str) -> (String, String) {
-    let system = r#"这是一个压缩模型调用，用于压缩历史会话记录，返回纯JSON格式。
-样例JSON输出:
-{
-    "summary": ["被压缩会话的总结1", "被压缩会话的总结2"],
-    "keywords": ["关键词1", "关键词2", "关键词3"]
-}
-注意：summary 是被压缩会话的总结，后续会向量化作会话语义检索，单个总结长度不超过200个字符，会话内容较多时可返回多个总结。
-keywords 是被压缩会话内容的精炼关键词，用于关键词检索，可以是概括性关键词，也可以是重要事件、关键事物的指向性关键词。"#
-        .to_string();
-
-    let user = format!("压缩以下历史会话：\n{session_data}");
-    (system, user)
 }
 
 // ============ SSE 解析辅助 ============

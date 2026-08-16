@@ -8,6 +8,7 @@ use tauri::State;
 
 use crate::config::{AppConfig, ConfigStore};
 use crate::llm::{ActionResult, ChatResult, CompressResult, LlmState, StreamEvent};
+use crate::prompt::{build_action_prompt, build_compress_prompt};
 
 // ============ 配置管理 ============
 
@@ -83,8 +84,9 @@ pub async fn llm_action(
     llm: State<'_, LlmState>,
 ) -> Result<ActionResult, String> {
     let client = llm.client(config.get().llm);
+    let prompt = build_action_prompt(&action_target, &tool_list.unwrap_or_default(), &action_history);
     client
-        .action(&action_target, &action_history, &tool_list.unwrap_or_default())
+        .action(&prompt)
         .await
         .map_err(|e| e.to_string())
 }
@@ -97,8 +99,9 @@ pub async fn llm_compress(
     llm: State<'_, LlmState>,
 ) -> Result<CompressResult, String> {
     let client = llm.client(config.get().llm);
+    let (system, user) = build_compress_prompt(&session_data);
     client
-        .compress(&session_data)
+        .compress(&system, &user)
         .await
         .map_err(|e| e.to_string())
 }

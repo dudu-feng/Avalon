@@ -6,6 +6,7 @@ mod commands;
 mod config;
 mod embedding;
 mod llm;
+mod prompt;
 mod tool;
 mod vector;
 
