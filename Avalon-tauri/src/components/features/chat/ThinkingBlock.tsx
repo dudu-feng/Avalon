@@ -6,7 +6,7 @@ export interface ThinkingBlockProps {
 }
 
 export function ThinkingBlock({ thought }: ThinkingBlockProps) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
 
   return (
     <div className={styles.block}>
@@ -16,7 +16,7 @@ export function ThinkingBlock({ thought }: ThinkingBlockProps) {
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
       >
-        {open ? '收起思考' : '展开思考'}
+        {open ? '▾ 思考过程' : '▸ 思考过程'}
       </button>
       {open && <p className={styles.content}>{thought}</p>}
     </div>

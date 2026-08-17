@@ -1,0 +1,67 @@
+.step {
+  display: grid;
+  gap: 6px;
+}
+
+.analysis {
+  font: 400 12px/1.6 var(--font-sans);
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.toolName {
+  font: 500 12px/1.4 var(--font-mono);
+  color: var(--foreground);
+}
+
+.args {
+  font: 400 12px/1.4 var(--font-mono);
+  color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.resultOk {
+  font: 400 12px/1.5 var(--font-sans);
+  color: var(--success-700);
+  background: var(--success-100);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.resultErr {
+  font: 400 12px/1.5 var(--font-sans);
+  color: var(--error-700);
+  background: var(--error-100);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sub {
+  font: 400 13px/1.6 var(--font-serif);
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.usage {
+  font: 400 11px/1.4 var(--font-sans);
+  color: var(--muted-foreground);
+}

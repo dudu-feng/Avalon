@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use super::types::{ChatResult, NextAction, StreamEvent, TokenUsage};
 
+const THOUGHT_START: &str = "<|thought|>";
 const THOUGHT_END: &str = "</|thought|>";
 const MESSAGE_END: &str = "</|message|>";
 const CONTROL_END: &str = "</|control|>";
@@ -32,6 +33,8 @@ pub struct StreamParser {
     thought: String,
     message: String,
     control: String,
+    /// 当前阶段待剥离的开始标记（流式可能分块到达，须持续尝试直到匹配）
+    pending_start: Option<&'static str>,
 }
 
 impl StreamParser {
@@ -42,6 +45,7 @@ impl StreamParser {
             thought: String::new(),
             message: String::new(),
             control: String::new(),
+            pending_start: Some(THOUGHT_START),
         }
     }
 
@@ -50,6 +54,15 @@ impl StreamParser {
         self.buffer.push_str(chunk);
 
         loop {
+            // 剥离当前阶段的开始标记（分块到达时可能尚未完整，须在每轮持续尝试）
+            if let Some(start) = self.pending_start {
+                if let Some(idx) = self.buffer.find(start) {
+                    let end = idx + start.len();
+                    self.buffer.drain(..end);
+                    self.pending_start = None;
+                }
+            }
+
             let end_marker = match self.phase {
                 Phase::Thought => THOUGHT_END,
                 Phase::Message => MESSAGE_END,
@@ -67,7 +80,11 @@ impl StreamParser {
                 }
                 None => {
                     // 未找到完整标记：发出安全前缀（保留尾部作前瞻）
-                    let safe = self.buffer.len().saturating_sub(end_marker.len() - 1);
+                    // safe 是字节索引，须向下对齐到 UTF-8 char boundary，否则会切在中文字符中间 panic
+                    let mut safe = self.buffer.len().saturating_sub(end_marker.len() - 1);
+                    while safe > 0 && !self.buffer.is_char_boundary(safe) {
+                        safe -= 1;
+                    }
                     if safe > 0 {
                         let content = self.buffer[..safe].to_string();
                         self.buffer.drain(..safe);
@@ -135,24 +152,17 @@ impl StreamParser {
         match self.phase {
             Phase::Thought => {
                 self.phase = Phase::Message;
-                self.skip_start(MESSAGE_START);
+                self.pending_start = Some(MESSAGE_START);
             }
             Phase::Message => {
                 self.phase = Phase::Control;
-                self.skip_start(CONTROL_START);
+                self.pending_start = Some(CONTROL_START);
             }
             Phase::Control => {
                 self.phase = Phase::Done;
+                self.pending_start = None;
             }
             Phase::Done => {}
-        }
-    }
-
-    /// 跳过下一段的开始标记（连同前导空白）。模型未输出标记时跳过为空。
-    fn skip_start(&mut self, start: &str) {
-        if let Some(idx) = self.buffer.find(start) {
-            let end = idx + start.len();
-            self.buffer.drain(..end);
         }
     }
 }

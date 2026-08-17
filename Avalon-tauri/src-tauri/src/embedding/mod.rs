@@ -40,36 +40,64 @@ pub fn build(config: &AppConfig) -> Result<Arc<dyn Embedder>> {
     }
 }
 
-/// 加载句柄：OnceCell 保证「只加载一次」，之后 Arc 常驻复用（lazy/eager 共用）。
+/// 加载句柄：OnceLock 保证「只加载一次」，之后 Arc 常驻复用（lazy/eager 共用）。
 /// lazy 与 eager 的区别仅在第一次 load 发生在首次使用时还是启动时。
+/// 决策甲：std::sync::OnceLock + get_sync，供 vector/session 的同步 trait 内部拿 embedder。
+#[derive(Clone)]
 pub struct EmbedderHandle {
-    cell: tokio::sync::OnceCell<Arc<dyn Embedder>>,
-    config: AppConfig,
+    cell: Arc<std::sync::OnceLock<Arc<dyn Embedder>>>,
+    /// 懒加载构建器（from_embedder 直接注入实例时为 None，cell 已预填）
+    config: Option<AppConfig>,
 }
 
 impl EmbedderHandle {
+    /// 由 config 构建：embedder 首次使用时才真正 load（load_mode 决定 eager 是否启动预热）
     pub fn new(config: AppConfig) -> Self {
         Self {
-            cell: tokio::sync::OnceCell::new(),
-            config,
+            cell: Arc::new(std::sync::OnceLock::new()),
+            config: Some(config),
         }
+    }
+
+    /// 直接注入已构造的 embedder（测试注入 mock / 复用现成实例）：OnceLock 预填，get_sync 秒回
+    pub fn from_embedder(embedder: Arc<dyn Embedder>) -> Self {
+        let cell = Arc::new(std::sync::OnceLock::new());
+        let _ = cell.set(embedder);
+        Self { cell, config: None }
+    }
+
+    /// 同步获取：首次调用同步加载（阻塞秒级，仅一次），之后热启动复用。
+    /// 供 vector/session 的同步 trait 内部使用（决策甲：trait 保持同步，不 async 化）。
+    /// 手动 get/set 而非 get_or_try_init（后者为 unstable once_cell_try）：失败不缓存，并发时后到者复用先到者实例。
+    pub fn get_sync(&self) -> Result<Arc<dyn Embedder>> {
+        if let Some(embedder) = self.cell.get() {
+            return Ok(embedder.clone());
+        }
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| anyhow!("EmbedderHandle 已注入实例，无 config 构建器"))?;
+        let embedder = build(config)?;
+        match self.cell.set(embedder.clone()) {
+            Ok(()) => Ok(embedder),
+            // set 失败说明已被其他线程先初始化，改用既有实例
+            Err(_) => Ok(self.cell.get().expect("set 失败说明 cell 已初始化").clone()),
+        }
+    }
+
+    /// 懒加载：已加载则秒回；未加载在 spawn_blocking 里加载，不阻塞 async worker
+    pub async fn get(&self) -> Result<Arc<dyn Embedder>> {
+        if let Some(embedder) = self.cell.get() {
+            return Ok(embedder.clone());
+        }
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || this.get_sync())
+            .await
+            .map_err(|e| anyhow!("embedding 加载任务失败: {e}"))?
     }
 
     /// 常驻热加载：启动时后台预热（spawn_blocking，不阻塞主线程）
     pub async fn warmup(&self) -> Result<Arc<dyn Embedder>> {
         self.get().await
-    }
-
-    /// 懒加载：首次调用才真正 load；OnceCell 保证只加载一次，之后都是热启动（复用 Arc）
-    pub async fn get(&self) -> Result<Arc<dyn Embedder>> {
-        self.cell
-            .get_or_try_init(|| async {
-                let config = self.config.clone();
-                tokio::task::spawn_blocking(move || build(&config))
-                    .await
-                    .map_err(|e| anyhow!("embedding 加载任务失败: {e}"))?
-            })
-            .await
-            .map(|a| a.clone())
     }
 }

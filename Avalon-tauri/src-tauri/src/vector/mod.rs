@@ -17,7 +17,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 
 use crate::config::{AppConfig, SearchMode, VectorBackend};
-use crate::embedding::Embedder;
+use crate::embedding::EmbedderHandle;
 
 pub use doc::{MemoryDoc, MemoryHit, RebuildStats};
 pub use memory::InMemoryStore;
@@ -59,11 +59,11 @@ pub trait VectorStore: MemoryIndex {
 }
 
 /// 按 config.vector.backend 构造向量库
-pub fn build(config: &AppConfig, embedder: Arc<dyn Embedder>) -> Result<Arc<dyn VectorStore>> {
+pub fn build(config: &AppConfig, handle: EmbedderHandle) -> Result<Arc<dyn VectorStore>> {
     match config.vector.backend {
         VectorBackend::Memory => {
             let path = config.vector_db_path().join("memory.bin");
-            Ok(Arc::new(InMemoryStore::open(&path, embedder)?))
+            Ok(Arc::new(InMemoryStore::open(&path, handle)?))
         }
         VectorBackend::Sqlite => Err(anyhow!("sqlite 后端尚未实现（预留扩展）")),
     }

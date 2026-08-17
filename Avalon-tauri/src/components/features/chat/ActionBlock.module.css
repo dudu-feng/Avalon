@@ -1,0 +1,38 @@
+.block {
+  display: grid;
+  gap: 8px;
+}
+
+.toggle {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--muted-foreground);
+  font: 600 12px/1.2 var(--font-sans);
+  cursor: pointer;
+  text-align: left;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toggle:hover {
+  color: var(--foreground);
+}
+
+.count {
+  font: 400 11px/1.2 var(--font-sans);
+  color: var(--muted-foreground);
+  background: var(--muted);
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+}
+
+.steps {
+  margin: 0;
+  padding: 0 0 0 12px;
+  border-left: 2px solid var(--brand-300);
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}

@@ -3,12 +3,16 @@
 // 前端通过 invoke("command_name", { params }) 调用这些命令。
 // 分两类：配置管理命令 + LLM 调用命令（LLM 命令由 engine 层后续编排）。
 
+use std::sync::Arc;
+
 use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::config::{AppConfig, ConfigStore};
+use crate::engine::{Engine, EngineEvent};
 use crate::llm::{ActionResult, ChatResult, CompressResult, LlmState, StreamEvent};
 use crate::prompt::{build_action_prompt, build_compress_prompt};
+use crate::session::SessionData;
 
 // ============ 配置管理 ============
 
@@ -102,6 +106,52 @@ pub async fn llm_compress(
     let (system, user) = build_compress_prompt(&session_data);
     client
         .compress(&system, &user)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ============ Engine 编排 ============
+
+/// 主聊天入口：跑完整 ReAct 双层循环，中间态经 Channel<EngineEvent> 逐事件推送。
+/// 会话生命周期：调用方先 invoke("init_session")，chat 后 invoke("save_session")（决策 D3）。
+#[tauri::command]
+pub async fn chat(
+    user_input: String,
+    channel_name: String,
+    engine: State<'_, Arc<Engine>>,
+    on_event: Channel<EngineEvent>,
+) -> Result<(), String> {
+    engine
+        .run(&user_input, &channel_name, move |ev| {
+            let _ = on_event.send(ev);
+        })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 初始化会话（channel 维度）：active 复用 / 否则新建
+#[tauri::command]
+pub fn init_session(channel_name: String, engine: State<'_, Arc<Engine>>) -> Result<(), String> {
+    engine.init_session(&channel_name).map_err(|e| e.to_string())
+}
+
+/// 读取当前会话完整数据（供前端加载历史 / 判断状态）
+#[tauri::command]
+pub fn get_current_session(
+    channel_name: String,
+    engine: State<'_, Arc<Engine>>,
+) -> Result<SessionData, String> {
+    engine.get_current_session(&channel_name).map_err(|e| e.to_string())
+}
+
+/// 归档当前会话（压缩 + 移入 history）
+#[tauri::command]
+pub async fn save_session(
+    channel_name: String,
+    engine: State<'_, Arc<Engine>>,
+) -> Result<(), String> {
+    engine
+        .save_session(&channel_name)
         .await
         .map_err(|e| e.to_string())
 }

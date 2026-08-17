@@ -364,6 +364,10 @@ impl SessionStore for FileSessionStore {
         self.write_current(channel, &fresh)
     }
 
+    fn get_current_session(&self, channel: &str) -> Result<SessionData> {
+        self.read_current(channel)
+    }
+
     fn get_context_for_prompt(&self, channel: &str) -> Result<String> {
         let data = self.read_current(channel)?;
         let max = self.config.get().session_memory.context_chunks;

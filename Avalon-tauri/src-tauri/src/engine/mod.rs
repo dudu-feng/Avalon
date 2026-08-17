@@ -18,7 +18,7 @@ use anyhow::Result;
 use crate::config::ConfigStore;
 use crate::llm::LlmState;
 use crate::prompt::PromptAssembler;
-use crate::session::SessionStore;
+use crate::session::{SessionData, SessionStore};
 use crate::tool::ToolRegistry;
 
 pub use events::EngineEvent;
@@ -69,5 +69,20 @@ impl Engine {
             &mut on_event,
         )
         .await
+    }
+
+    /// 初始化会话（channel 维度：active 复用 / 否则新建）—— 调用方在 run 前触发（决策 D3）
+    pub fn init_session(&self, channel: &str) -> Result<()> {
+        self.session.init_session(channel)
+    }
+
+    /// 读取当前会话完整数据（供前端加载历史消息）
+    pub fn get_current_session(&self, channel: &str) -> Result<SessionData> {
+        self.session.get_current_session(channel)
+    }
+
+    /// 归档当前会话（压缩 + 移入 history）—— 调用方在 run 后触发（决策 D3）
+    pub async fn save_session(&self, channel: &str) -> Result<()> {
+        self.session.save_current_session(channel).await
     }
 }

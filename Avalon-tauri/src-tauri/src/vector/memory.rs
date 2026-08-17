@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 use anyhow::{Context, Result};
 
 use crate::config::SearchMode;
-use crate::embedding::Embedder;
+use crate::embedding::{Embedder, EmbedderHandle};
 
 use super::doc::{MemoryDoc, MemoryHit, RebuildStats};
 use super::search;
@@ -71,17 +71,17 @@ pub struct InMemoryStore {
     index: RwLock<Index>,
     /// 持久化文件路径
     path: PathBuf,
-    /// 检索/入库编码器（semantic/hybrid 时 query_embedding，insert 时 doc_embedding）
-    embedder: Arc<dyn Embedder>,
+    /// 检索/入库编码器句柄（决策甲：持 handle 而非 Arc<dyn Embedder>，编码时 get_sync 取实例）
+    handle: EmbedderHandle,
 }
 
 impl InMemoryStore {
     /// 打开（存在则加载，不存在则空），对齐 Python「已存在 open / 不存在 create」
-    pub fn open(path: &Path, embedder: Arc<dyn Embedder>) -> Result<Self> {
+    pub fn open(path: &Path, handle: EmbedderHandle) -> Result<Self> {
         let store = Self {
             index: RwLock::new(Index::new()),
             path: path.to_path_buf(),
-            embedder,
+            handle,
         };
         store.load()?;
         Ok(store)
@@ -159,7 +159,7 @@ impl InMemoryStore {
         // 需向量编码的模式，先在锁外编码（candle 推理 CPU 密集，不持锁）
         let query_vec = match mode {
             SearchMode::Semantic | SearchMode::Hybrid => {
-                Some(self.embedder.query_embedding(query)?)
+                Some(self.handle.get_sync()?.query_embedding(query)?)
             }
             SearchMode::Keyword => None,
         };
@@ -245,7 +245,7 @@ impl VectorStore for InMemoryStore {
         keywords: &[String],
         timestamp: &str,
     ) -> Result<()> {
-        let vector = self.embedder.doc_embedding(text)?;
+        let vector = self.handle.get_sync()?.doc_embedding(text)?;
         self.write_doc(MemoryDoc {
             id: doc_id.to_string(),
             description: text.to_string(),

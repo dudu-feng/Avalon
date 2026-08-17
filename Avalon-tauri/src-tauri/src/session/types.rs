@@ -49,6 +49,22 @@ where
     }
 }
 
+/// super_compressed 反序列化：null / 空数组 []（Python 旧数据）/ 对象 → Option<CompressedChunk>
+fn deserialize_super_compressed<'de, D>(d: D) -> Result<Option<CompressedChunk>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(d)?;
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Array(arr) if arr.is_empty() => Ok(None),
+        other => match serde_json::from_value::<CompressedChunk>(other) {
+            Ok(chunk) => Ok(Some(chunk)),
+            Err(e) => Err(serde::de::Error::custom(e)),
+        },
+    }
+}
+
 /// 会话文件结构（current/{channel}.json 与 history/{id}/index.json 的内容）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionData {
@@ -60,7 +76,8 @@ pub struct SessionData {
     #[serde(default)]
     pub compressed: Vec<CompressedChunk>,
     /// 渐进式总结产出的超级摘要（0 或 1 个）
-    #[serde(default)]
+    /// 反序列化兼容 Python 旧数据的空列表 `[]`（等价 None）
+    #[serde(default, deserialize_with = "deserialize_super_compressed")]
     pub super_compressed: Option<CompressedChunk>,
     /// 当前未压缩的消息
     #[serde(default)]

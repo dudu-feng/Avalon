@@ -28,19 +28,32 @@
   border-color: transparent;
 }
 
+.error .bubble {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+  border-color: transparent;
+}
+
 .text {
   font: 400 14px/1.6 var(--font-sans);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.pending {
-  font: 400 14px/1.6 var(--font-sans);
-  color: var(--muted-foreground);
+.cursor {
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--primary);
+  animation: blink 1s step-end infinite;
 }
 
-.error .bubble {
-  background: var(--destructive);
-  color: var(--destructive-foreground);
-  border-color: transparent;
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.actions {
+  display: grid;
+  gap: 8px;
 }

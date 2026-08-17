@@ -22,6 +22,8 @@ pub use types::*;
 pub trait SessionStore: Send + Sync {
     /// 初始化：active 则复用，否则新建空会话（id = {channel}_{timestamp}）
     fn init_session(&self, channel: &str) -> Result<()>;
+    /// 读取当前会话完整数据（供前端加载历史消息 / 判断会话状态）
+    fn get_current_session(&self, channel: &str) -> Result<SessionData>;
     /// 限界会话上下文（JSON 字符串），供 engine 拼进 system_prompt
     fn get_context_for_prompt(&self, channel: &str) -> Result<String>;
     /// 持久化本轮 chat_history（追加到 session 字段）
