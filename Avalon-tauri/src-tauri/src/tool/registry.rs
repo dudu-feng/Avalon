@@ -5,10 +5,16 @@
 
 #![allow(dead_code)] // tool 模块供未来 engine 引用，当前无调用方，接入后移除
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::config::{ConfigStore, SearchMode};
+use crate::vector::MemoryIndex;
+
 use super::fs_tools;
+use super::memory_tools;
 use super::ToolRegistry;
 
 /// 工具元数据（名字 + 描述，供 get_tool_list 拼给 LLM）
@@ -40,12 +46,40 @@ const TOOL_DEFS: &[ToolDef] = &[
     },
 ];
 
-/// 工具注册表实现（当前无外部依赖，未来注入 MemoryIndex 做记忆检索）
-pub struct ToolSet;
+/// 工具注册表实现：基础文件/终端工具 + 可选记忆检索（注入 MemoryIndex 后启用）
+pub struct ToolSet {
+    /// 记忆检索后端（None 则不暴露 search_session_memory 工具）
+    memory: Option<Arc<dyn MemoryIndex>>,
+    /// 配置句柄（提供检索默认模式；None 时缺省 mode 兜底 hybrid）
+    config: Option<ConfigStore>,
+}
 
 impl ToolSet {
     pub fn new() -> Self {
-        Self
+        Self {
+            memory: None,
+            config: None,
+        }
+    }
+
+    /// 注入记忆检索后端，启用 search_session_memory 工具
+    pub fn with_memory(mut self, memory: Arc<dyn MemoryIndex>) -> Self {
+        self.memory = Some(memory);
+        self
+    }
+
+    /// 注入配置句柄，缺省检索模式跟随 config.session_memory.search_mode（支持热更新）
+    pub fn with_config(mut self, config: ConfigStore) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    /// 记忆检索的缺省模式：优先配置值，无配置兜底 hybrid
+    fn default_search_mode(&self) -> SearchMode {
+        self.config
+            .as_ref()
+            .map(|c| c.get().session_memory.search_mode)
+            .unwrap_or(SearchMode::Hybrid)
     }
 }
 
@@ -55,6 +89,12 @@ impl ToolRegistry for ToolSet {
         let mut out = String::from("## 可用工具列表\n");
         for t in TOOL_DEFS {
             out.push_str(&format!("- **{}**: {}\n", t.name, t.description));
+        }
+        // 记忆检索工具仅在注入后端后暴露
+        if self.memory.is_some() {
+            out.push_str(
+                "- **search_session_memory**: 查询历史会话记忆。参数 query: 检索关键词/问题（字符串）, mode: semantic/keyword/hybrid（可选，缺省取配置）, topk: 返回条数（可选，默认 5）, time_range: 时间范围 YYYY-MM-DD 或 YYYY-MM-DD,YYYY-MM-DD（可选）\n",
+            );
         }
         out.trim_end().to_string()
     }
@@ -66,6 +106,10 @@ impl ToolRegistry for ToolSet {
             "delete_file" => fs_tools::delete_file(args),
             "run_shell_command" => fs_tools::run_shell_command(args).await,
             "get_directory_contents" => fs_tools::get_directory_contents(args),
+            "search_session_memory" => match &self.memory {
+                Some(m) => memory_tools::search_session_memory(args, m.as_ref(), self.default_search_mode()),
+                None => "记忆检索未配置".to_string(),
+            },
             _ => format!("未找到工具: {name}"),
         }
     }

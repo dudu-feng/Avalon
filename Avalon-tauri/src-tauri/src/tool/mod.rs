@@ -1,12 +1,14 @@
 // Tool 工具层模块
 //
-// 职责：智能体基础操作工具（文件增删改查、目录列举、终端命令）与统一分发。
-// 仅依赖 std + tokio，定义 engine 层所需的 ToolRegistry 契约（依赖反转：
-// engine 依赖本模块的 trait，tool 不依赖 engine 的实现）。
+// 职责：智能体基础操作工具（文件增删改查、目录列举、终端命令）+ 记忆检索工具
+// （search_session_memory，接入 vector::MemoryIndex 检索契约），统一分发。
+// 定义 engine 层所需的 ToolRegistry 契约（依赖反转：engine 依赖本模块的 trait，
+// tool 不依赖 engine 的实现；记忆检索依赖 vector 的 MemoryIndex trait 而非具体实现）。
 
-#![allow(dead_code)] // tool 模块供未来 engine 引用，当前无调用方，接入后移除
+#![allow(dead_code)] // tool 模块部分工具供未来 engine 引用，接入后逐步移除
 
 pub mod fs_tools;
+pub mod memory_tools;
 pub mod registry;
 
 use async_trait::async_trait;

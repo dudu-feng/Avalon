@@ -42,7 +42,7 @@ pub fn run() {
     let handle = embedding::EmbedderHandle::new(cfg.clone());
     let llm = LlmState::new();
 
-    let vector_store: Arc<dyn vector::VectorStore> = match vector::build(&cfg, handle.clone()) {
+    let (vector_store, memory_index) = match vector::build(&cfg, handle.clone()) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("[Vector] 初始化向量库失败: {e}");
@@ -56,7 +56,8 @@ pub fn run() {
         vector_store,
     ));
     let prompt_asm = prompt::PromptAssembler::new(&cfg);
-    let tool_registry: Arc<dyn tool::ToolRegistry> = Arc::new(tool::ToolSet::new());
+    let tool_registry: Arc<dyn tool::ToolRegistry> =
+        Arc::new(tool::ToolSet::new().with_memory(memory_index).with_config(store.clone()));
     let engine = Arc::new(engine::Engine::new(
         store.clone(),
         llm.clone(),

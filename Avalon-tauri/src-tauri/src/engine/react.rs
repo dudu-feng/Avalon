@@ -154,6 +154,8 @@ pub(crate) fn tool_failed(result: &str) -> bool {
         "获取目录内容失败",
         "执行命令失败",
         "执行命令超时",
+        "记忆检索失败",
+        "记忆检索未配置",
         "未找到工具",
     ];
     FAIL_PREFIXES.iter().any(|p| result.starts_with(p))

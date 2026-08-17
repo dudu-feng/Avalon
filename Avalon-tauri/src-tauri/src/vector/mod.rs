@@ -58,12 +58,20 @@ pub trait VectorStore: MemoryIndex {
     fn len(&self) -> usize;
 }
 
-/// 按 config.vector.backend 构造向量库
-pub fn build(config: &AppConfig, handle: EmbedderHandle) -> Result<Arc<dyn VectorStore>> {
+/// 按 config.vector.backend 构造向量库，同时返回两个视角：
+/// `Arc<dyn VectorStore>` 供 session 写入，`Arc<dyn MemoryIndex>` 供 tool 检索（只读）。
+/// 二者共享同一底层实例（同源 Arc，仅 trait 视角收窄）。
+pub fn build(
+    config: &AppConfig,
+    handle: EmbedderHandle,
+) -> Result<(Arc<dyn VectorStore>, Arc<dyn MemoryIndex>)> {
     match config.vector.backend {
         VectorBackend::Memory => {
             let path = config.vector_db_path().join("memory.bin");
-            Ok(Arc::new(InMemoryStore::open(&path, handle)?))
+            let store: Arc<InMemoryStore> = Arc::new(InMemoryStore::open(&path, handle)?);
+            let memory: Arc<dyn MemoryIndex> = store.clone();
+            let vector: Arc<dyn VectorStore> = store;
+            Ok((vector, memory))
         }
         VectorBackend::Sqlite => Err(anyhow!("sqlite 后端尚未实现（预留扩展）")),
     }
