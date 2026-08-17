@@ -7,6 +7,7 @@ mod config;
 mod embedding;
 mod llm;
 mod prompt;
+mod session;
 mod tool;
 mod vector;
 

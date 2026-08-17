@@ -15,7 +15,9 @@ use super::parser::parse_llm_json;
 use super::stream::StreamParser;
 use super::types::*;
 
-/// 共享 HTTP 客户端状态（复用连接池，避免每次请求重建）
+/// 共享 HTTP 客户端状态（复用连接池，避免每次请求重建）。
+/// Clone 为浅拷贝（reqwest::Client 内部 Arc），供 session 等模块克隆共享。
+#[derive(Clone)]
 pub struct LlmState {
     http: reqwest::Client,
 }
