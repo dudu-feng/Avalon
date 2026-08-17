@@ -5,6 +5,7 @@
 mod commands;
 mod config;
 mod embedding;
+mod engine;
 mod llm;
 mod prompt;
 mod session;

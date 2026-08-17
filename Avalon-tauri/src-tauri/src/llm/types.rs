@@ -36,7 +36,7 @@ pub struct ChatResult {
 
 /// 动作层步骤意图
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ActionStep {
     ToolCall,
     SubAnalysis,
