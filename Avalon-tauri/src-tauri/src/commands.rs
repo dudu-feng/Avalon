@@ -13,6 +13,7 @@ use crate::engine::{Engine, EngineEvent};
 use crate::llm::{ActionResult, ChatResult, CompressResult, LlmState, StreamEvent};
 use crate::prompt::{build_action_prompt, build_compress_prompt};
 use crate::session::SessionData;
+use crate::vector::RebuildStats;
 
 // ============ 配置管理 ============
 
@@ -153,5 +154,16 @@ pub async fn save_session(
     engine
         .save_session(&channel_name)
         .await
+        .map_err(|e| e.to_string())
+}
+
+/// 重建会话向量库：清空 + 重扫 history/current + 重新入库（设置页维护操作）
+/// 同步 CPU/IO 密集，用 spawn_blocking 避免阻塞主线程。
+#[tauri::command]
+pub async fn rebuild_memory_index(engine: State<'_, Arc<Engine>>) -> Result<RebuildStats, String> {
+    let engine = engine.inner().clone();
+    tokio::task::spawn_blocking(move || engine.rebuild_memory_index())
+        .await
+        .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }

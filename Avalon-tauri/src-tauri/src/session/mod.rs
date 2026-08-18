@@ -14,6 +14,8 @@ pub mod types;
 use anyhow::Result;
 use async_trait::async_trait;
 
+use crate::vector::RebuildStats;
+
 pub use store::FileSessionStore;
 pub use types::*;
 
@@ -32,6 +34,8 @@ pub trait SessionStore: Send + Sync {
     async fn auto_compress_check(&self, channel: &str, chat_history: &[ChatMessage]) -> Result<bool>;
     /// 归档当前会话（先压缩，写 history/{id}/index.json，重置 current）
     async fn save_current_session(&self, channel: &str) -> Result<()>;
+    /// 重建向量索引：清空 + 重扫 history/current + 重新入库（维护操作，设置页触发）
+    fn rebuild_index(&self) -> Result<RebuildStats>;
 }
 
 /// 会话 ID 时间戳：YYYY-MM-DD-HH_MM_SS（下划线，文件名安全，字典序 = 时间序）

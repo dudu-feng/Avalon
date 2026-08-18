@@ -418,6 +418,10 @@ impl SessionStore for FileSessionStore {
             .with_context(|| "写入 index.json 失败")?;
         self.write_current(channel, &SessionData::empty())
     }
+
+    fn rebuild_index(&self) -> Result<RebuildStats> {
+        FileSessionStore::rebuild_index(self)
+    }
 }
 
 /// 遍历消息树（含嵌套 action_history）取最大 input_tokens

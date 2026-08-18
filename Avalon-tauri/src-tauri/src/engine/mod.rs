@@ -20,6 +20,7 @@ use crate::llm::LlmState;
 use crate::prompt::PromptAssembler;
 use crate::session::{SessionData, SessionStore};
 use crate::tool::ToolRegistry;
+use crate::vector::RebuildStats;
 
 pub use events::EngineEvent;
 
@@ -84,5 +85,10 @@ impl Engine {
     /// 归档当前会话（压缩 + 移入 history）—— 调用方在 run 后触发（决策 D3）
     pub async fn save_session(&self, channel: &str) -> Result<()> {
         self.session.save_current_session(channel).await
+    }
+
+    /// 重建会话向量库（维护操作，设置页触发）：清空 + 重扫 history/current + 重新入库
+    pub fn rebuild_memory_index(&self) -> Result<RebuildStats> {
+        self.session.rebuild_index()
     }
 }

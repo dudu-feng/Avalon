@@ -85,6 +85,7 @@ pub fn run() {
             commands::init_session,
             commands::save_session,
             commands::get_current_session,
+            commands::rebuild_memory_index,
         ])
         .setup(move |_app| {
             // eager 预热：启动时后台加载，不阻塞主线程；失败降级（首次使用时 get_sync 再试）
