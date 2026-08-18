@@ -1,0 +1,44 @@
+active_model = "default"
+
+[paths]
+data_root = "f:/Avalon/data"
+file_root = "f:/Avalon/file"
+
+[[models]]
+name = "default"
+url = "https://api.deepseek.com"
+key = "sk-17d3435ea890403f966657d3258bd500"
+modelname = "deepseek-v4-flash"
+
+[[models]]
+name = "mimo-tokenplan"
+url = "https://token-plan-cn.xiaomimimo.com/v1"
+key = "tp-c162nersrvds03vtihgosd9ni1dutwtjkfuvpj6ux2wmfqeo"
+modelname = "mimo-v2.5-pro"
+
+[llm]
+chat_temperature = 0.699999988079071
+json_temperature = 0.10000000149011612
+timeout_secs = 120
+
+[embedding]
+mode = "local"
+local_model = "bge-small-zh-v1.5"
+device = "cpu"
+load_mode = "lazy"
+api_key = ""
+api_model = ""
+api_base_url = ""
+
+[session_memory]
+compress_threshold = 10240
+max_chunks = 10
+context_chunks = 5
+search_mode = "hybrid"
+
+[whisper]
+model_name = "medium"
+device = "cpu"
+
+[vector]
+backend = "memory"

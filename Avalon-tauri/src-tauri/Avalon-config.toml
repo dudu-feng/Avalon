@@ -2,22 +2,32 @@
 #  Avalon 应用配置
 # ============================================================
 
+# 当前活跃模型（指向下方 [[models]] 中的 name）
+active_model = "deepseek"
+
 # ============================================================
 #  路径配置（配置驱动：留空 = 按约定自动推导）
 # ============================================================
 [paths]
 # 共享数据根目录（会话记忆/向量库/模型）。留空 = 项目根下的 data/
-data_root = "f:/Avalon/data"
+# 提示：Windows 绝对路径请用正斜杠（f:/Avalon/data），反斜杠在 TOML 中是转义符
+data_root = ""
 # 文件存放目录（临时文件等）。留空 = 项目根下的 file/
-file_root = "f:/Avalon/file"
+file_root = ""
 
 # ============================================================
-#  LLM 模型配置
+#  LLM 模型列表（连接/鉴权/模型名逐模型独立）
+# ============================================================
+[[models]]
+name = "deepseek"                         # 唯一标识（切换锚点）
+url = "https://api.deepseek.com"          # OpenAI 兼容 API 基础 URL
+key = ""                                  # API Key（支持环境变量 AVALON_LLM_API_KEY 覆盖）
+modelname = "deepseek-v4-flash"           # 实际模型名
+
+# ============================================================
+#  LLM 全局行为参数（所有模型共享）
 # ============================================================
 [llm]
-api_key = "sk-17d3435ea890403f966657d3258bd500"                              # 支持环境变量 AVALON_LLM_API_KEY 覆盖
-model = "deepseek-v4-flash"
-base_url = "https://api.deepseek.com"
 chat_temperature = 0.7                    # 对话层温度
 json_temperature = 0.1                    # JSON/动作层温度
 timeout_secs = 120                        # 请求超时秒数
@@ -30,7 +40,7 @@ mode = "local"                            # local | api
 local_model = "bge-small-zh-v1.5"
 device = "cpu"
 load_mode = "lazy"                        # lazy | eager（懒加载 | 常驻热加载）
-api_key = ""                              # 仅当 mode = api 时必填（环境变量 AVALON_EMBEDDING_API_KEY 覆盖）
+api_key = ""
 api_model = "text-embedding-3-small"
 api_base_url = ""
 

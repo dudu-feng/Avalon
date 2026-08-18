@@ -1,0 +1,33 @@
+.card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.name {
+  font: 600 15px/1.2 var(--font-sans);
+  color: var(--foreground);
+}
+
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

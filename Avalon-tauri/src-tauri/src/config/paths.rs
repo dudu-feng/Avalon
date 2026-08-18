@@ -23,7 +23,13 @@ pub fn locate_config() -> Result<PathBuf> {
     }
 
     if let Ok(m) = std::env::var("CARGO_MANIFEST_DIR") {
-        return Ok(PathBuf::from(m).join("Avalon-config.toml"));
+        // 开发态：配置放 src-tauri 上一层（Avalon-tauri/），避开 tauri dev 的 Rust watcher
+        let manifest = PathBuf::from(m);
+        let dir = manifest
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| manifest.clone());
+        return Ok(dir.join("Avalon-config.toml"));
     }
 
     std::env::current_exe()

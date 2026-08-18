@@ -1,6 +1,6 @@
 // 异步 LLM 客户端
 //
-// 只依赖 config::LlmConfig（依赖反转），不 import 工具/会话/提示词模块。
+// 只依赖 config::{ModelConfig, LlmParams}（依赖反转），不 import 工具/会话/提示词模块。
 // 提供三个调用入口：chat_stream（流式）/ action（非流式 JSON）/ compress（非流式 JSON）。
 
 use std::time::Duration;
@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
-use crate::config::LlmConfig;
+use crate::config::{LlmParams, ModelConfig};
 
 use super::parser::parse_llm_json;
 use super::stream::StreamParser;
@@ -30,23 +30,24 @@ impl LlmState {
     }
 
     /// 从配置快照构建客户端（配置变更后重建即生效，替代 Python 单例 refresh_models）
-    pub fn client(&self, cfg: LlmConfig) -> LlmClient {
-        LlmClient::new(self.http.clone(), cfg)
+    pub fn client(&self, model: ModelConfig, params: LlmParams) -> LlmClient {
+        LlmClient::new(self.http.clone(), model, params)
     }
 }
 
 pub struct LlmClient {
     http: reqwest::Client,
-    cfg: LlmConfig,
+    model: ModelConfig,
+    params: LlmParams,
 }
 
 impl LlmClient {
-    pub fn new(http: reqwest::Client, cfg: LlmConfig) -> Self {
-        Self { http, cfg }
+    pub fn new(http: reqwest::Client, model: ModelConfig, params: LlmParams) -> Self {
+        Self { http, model, params }
     }
 
     fn endpoint(&self) -> String {
-        format!("{}/chat/completions", self.cfg.base_url.trim_end_matches('/'))
+        format!("{}/chat/completions", self.model.url.trim_end_matches('/'))
     }
 
     /// 对话层：流式调用，逐字推正文/思考，流结束产出 ChatResult（含用量）
@@ -66,9 +67,9 @@ impl LlmClient {
         }
 
         let body = json!({
-            "model": self.cfg.model,
+            "model": self.model.modelname,
             "messages": messages,
-            "temperature": self.cfg.chat_temperature,
+            "temperature": self.params.chat_temperature,
             "stream": true,
             "stream_options": {"include_usage": true},
         });
@@ -136,8 +137,8 @@ impl LlmClient {
         let resp = self
             .http
             .post(self.endpoint())
-            .bearer_auth(&self.cfg.api_key)
-            .timeout(Duration::from_secs(self.cfg.timeout_secs))
+            .bearer_auth(&self.model.key)
+            .timeout(Duration::from_secs(self.params.timeout_secs))
             .json(body)
             .send()
             .await
@@ -176,9 +177,9 @@ impl LlmClient {
         json_mode: bool,
     ) -> Result<(String, TokenUsage)> {
         let mut body = json!({
-            "model": self.cfg.model,
+            "model": self.model.modelname,
             "messages": messages,
-            "temperature": self.cfg.json_temperature,
+            "temperature": self.params.json_temperature,
             "stream": false,
         });
         if json_mode {

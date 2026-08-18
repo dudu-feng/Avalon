@@ -70,7 +70,10 @@ pub async fn llm_chat(
     llm: State<'_, LlmState>,
     on_event: Channel<StreamEvent>,
 ) -> Result<ChatResult, String> {
-    let client = llm.client(config.get().llm);
+    let cfg = config.get();
+    let model = cfg.active_model_config().cloned()
+        .ok_or_else(|| "未配置活跃模型（active_model 无效）".to_string())?;
+    let client = llm.client(model, cfg.llm.clone());
     client
         .chat_stream(&system_prompt, &user_input, &chat_history, move |ev| {
             let _ = on_event.send(ev);
@@ -88,7 +91,10 @@ pub async fn llm_action(
     config: State<'_, ConfigStore>,
     llm: State<'_, LlmState>,
 ) -> Result<ActionResult, String> {
-    let client = llm.client(config.get().llm);
+    let cfg = config.get();
+    let model = cfg.active_model_config().cloned()
+        .ok_or_else(|| "未配置活跃模型（active_model 无效）".to_string())?;
+    let client = llm.client(model, cfg.llm.clone());
     let prompt = build_action_prompt(&action_target, &tool_list.unwrap_or_default(), &action_history);
     client
         .action(&prompt)
@@ -103,7 +109,10 @@ pub async fn llm_compress(
     config: State<'_, ConfigStore>,
     llm: State<'_, LlmState>,
 ) -> Result<CompressResult, String> {
-    let client = llm.client(config.get().llm);
+    let cfg = config.get();
+    let model = cfg.active_model_config().cloned()
+        .ok_or_else(|| "未配置活跃模型（active_model 无效）".to_string())?;
+    let client = llm.client(model, cfg.llm.clone());
     let (system, user) = build_compress_prompt(&session_data);
     client
         .compress(&system, &user)

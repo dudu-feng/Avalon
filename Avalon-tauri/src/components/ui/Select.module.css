@@ -1,0 +1,37 @@
+.wrapper {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+
+.label {
+  display: block;
+  font: 600 11px/1.2 var(--font-sans);
+  color: var(--muted-foreground);
+}
+
+.field {
+  width: 100%;
+  height: 40px;
+  padding: 0 calc(var(--spacing) * 3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  box-shadow: var(--shadow-sm);
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.field:focus {
+  border-color: var(--ring);
+}
+
+.field:disabled {
+  background: var(--card);
+  color: var(--muted-foreground);
+  box-shadow: none;
+  cursor: not-allowed;
+}

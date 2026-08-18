@@ -12,8 +12,14 @@ use serde::{Deserialize, Serialize};
 pub struct AppConfig {
     /// 路径配置（配置驱动：data_root / file_root 用户可指定）
     pub paths: PathsConfig,
-    /// LLM 模型配置
-    pub llm: LlmConfig,
+    /// 模型列表（连接/鉴权/模型名逐模型独立）
+    #[serde(default)]
+    pub models: Vec<ModelConfig>,
+    /// 当前活跃模型（指向 models[].name）
+    #[serde(default)]
+    pub active_model: String,
+    /// 全局 LLM 行为参数（温度/超时，所有模型共享）
+    pub llm: LlmParams,
     /// Embedding 向量化配置
     pub embedding: EmbeddingConfig,
     /// 会话记忆配置
@@ -29,6 +35,13 @@ pub struct AppConfig {
     pub config_path: PathBuf,
 }
 
+impl AppConfig {
+    /// 当前活跃模型（按名字查找，找不到返回 None）
+    pub fn active_model_config(&self) -> Option<&ModelConfig> {
+        self.models.iter().find(|m| m.name == self.active_model)
+    }
+}
+
 /// 路径配置：本项目为「配置驱动」，data 目录等路径是用户可配置项
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathsConfig {
@@ -38,15 +51,22 @@ pub struct PathsConfig {
     pub file_root: PathBuf,
 }
 
-/// LLM 模型配置
+/// 模型列表项：连接 + 鉴权 + 模型名，逐模型独立
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmConfig {
-    /// API Key（敏感，支持环境变量 AVALON_LLM_API_KEY 覆盖）
-    pub api_key: String,
-    /// 模型名称
-    pub model: String,
+pub struct ModelConfig {
+    /// 唯一标识（切换锚点，如 "deepseek" / "gpt"）
+    pub name: String,
     /// OpenAI 兼容 API 基础 URL
-    pub base_url: String,
+    pub url: String,
+    /// API Key（敏感，支持环境变量 AVALON_LLM_API_KEY 覆盖）
+    pub key: String,
+    /// 实际模型名
+    pub modelname: String,
+}
+
+/// 全局 LLM 行为参数（所有模型共享）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmParams {
     /// 对话层温度（原 Python llm.py 硬编码 0.7）
     pub chat_temperature: f32,
     /// JSON/动作层温度（原 Python llm.py 硬编码 0.1）

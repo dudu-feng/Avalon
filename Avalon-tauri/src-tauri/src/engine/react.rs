@@ -41,7 +41,10 @@ where
         // 每轮重读会话上下文（含最新压缩块）+ 动态构建 client（配置热更新）
         let session_context = session.get_context_for_prompt(channel)?;
         let system_prompt = prompt.assemble_chat_prompt(&tool_list, &session_context)?;
-        let client = llm.client(config.get().llm);
+        let cfg = config.get();
+        let model = cfg.active_model_config().cloned()
+            .ok_or_else(|| anyhow::anyhow!("未配置活跃模型（active_model 无效）"))?;
+        let client = llm.client(model, cfg.llm.clone());
         let history_str = serde_json::to_string(&chat_history)?;
 
         let chat_result = client

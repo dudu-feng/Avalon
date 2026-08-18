@@ -109,7 +109,10 @@ impl FileSessionStore {
         let (system, user) = build_compress_prompt(&payload);
 
         // 2. 调用 LLM 压缩（动态读最新配置构建 client）
-        let client = self.llm.client(self.config.get().llm);
+        let cfg = self.config.get();
+        let model = cfg.active_model_config().cloned()
+            .ok_or_else(|| anyhow::anyhow!("未配置活跃模型（active_model 无效）"))?;
+        let client = self.llm.client(model, cfg.llm.clone());
         let result: CompressResult = client.compress(&system, &user).await?;
 
         // 3. 组装压缩块
@@ -187,7 +190,10 @@ impl FileSessionStore {
                 .collect::<Vec<_>>()
         });
         let (system, user) = build_compress_prompt(&mock.to_string());
-        let client = self.llm.client(self.config.get().llm);
+        let cfg = self.config.get();
+        let model = cfg.active_model_config().cloned()
+            .ok_or_else(|| anyhow::anyhow!("未配置活跃模型（active_model 无效）"))?;
+        let client = self.llm.client(model, cfg.llm.clone());
         let merged_result: CompressResult = match client.compress(&system, &user).await {
             Ok(r) => r,
             Err(e) => {
