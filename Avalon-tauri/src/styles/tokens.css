@@ -233,8 +233,8 @@
   --muted-foreground: var(--text-500);
   --primary: var(--brand-500);
   --primary-foreground: #141413;
-  --secondary: var(--text-900);
-  --secondary-foreground: var(--bg-300);
+  --secondary: var(--bg-400);
+  --secondary-foreground: var(--text-600);
   --accent: #1a1915;
   --accent-foreground: #f5f4ee;
   --input: var(--border-500);
@@ -253,6 +253,6 @@
   --sidebar-primary-foreground: #fbfbfb;
   --sidebar-accent: #0f0f0e;
   --sidebar-accent-foreground: #c3c0b6;
-  --sidebar-border: #ebebeb;
+  --sidebar-border: var(--border-300);
   --sidebar-ring: #b5b5b5;
 }
