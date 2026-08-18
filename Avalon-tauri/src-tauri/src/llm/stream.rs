@@ -115,9 +115,11 @@ impl StreamParser {
         }
 
         let (next, action_target) = parse_control(&self.control);
+        // 兜底去除正文前导空白（流式路径已在 emit_content 处理，这里覆盖 flush/兜底残留）
+        let message = self.message.trim_start().to_string();
         ChatResult {
             thought: self.thought,
-            message: self.message,
+            message,
             next,
             action_target,
             usage: TokenUsage::default(),
@@ -136,6 +138,15 @@ impl StreamParser {
                 });
             }
             Phase::Message => {
+                // 跳过正文开头的前导空白（模型常在 <|message|> 标记后先输出换行）
+                let content = if self.message.is_empty() {
+                    content.trim_start()
+                } else {
+                    content
+                };
+                if content.is_empty() {
+                    return;
+                }
                 self.message.push_str(content);
                 emit(StreamEvent::MessageDelta {
                     delta: content.to_string(),

@@ -6,7 +6,7 @@ export interface ThinkingBlockProps {
 }
 
 export function ThinkingBlock({ thought }: ThinkingBlockProps) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   return (
     <div className={styles.block}>

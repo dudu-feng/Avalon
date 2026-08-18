@@ -254,5 +254,5 @@
   --sidebar-accent: #0f0f0e;
   --sidebar-accent-foreground: #c3c0b6;
   --sidebar-border: var(--border-300);
-  --sidebar-ring: #b5b5b5;
+  --sidebar-ring: var(--border-500);
 }
