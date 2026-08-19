@@ -1,3 +1,5 @@
+使用前请把文件名修改为Avalon-config.toml（即去掉template模板后缀）
+
 active_model = "default"
 
 [paths]
