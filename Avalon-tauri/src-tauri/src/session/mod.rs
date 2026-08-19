@@ -28,10 +28,10 @@ pub trait SessionStore: Send + Sync {
     fn get_current_session(&self, channel: &str) -> Result<SessionData>;
     /// 限界会话上下文（JSON 字符串），供 engine 拼进 system_prompt
     fn get_context_for_prompt(&self, channel: &str) -> Result<String>;
-    /// 持久化本轮 chat_history（追加到 session 字段）
-    fn update_current_session(&self, channel: &str, chat_history: &[ChatMessage]) -> Result<()>;
+    /// 持久化本轮 chat_history（追加到 messages 字段）
+    fn update_current_session(&self, channel: &str, chat_history: &[Message]) -> Result<()>;
     /// 自动压缩检查：输入 token 超阈值触发压缩，返回是否触发
-    async fn auto_compress_check(&self, channel: &str, chat_history: &[ChatMessage]) -> Result<bool>;
+    async fn auto_compress_check(&self, channel: &str, chat_history: &[Message]) -> Result<bool>;
     /// 归档当前会话（先压缩，写 history/{id}/index.json，重置 current）
     async fn save_current_session(&self, channel: &str) -> Result<()>;
     /// 重建向量索引：清空 + 重扫 history/current + 重新入库（维护操作，设置页触发）

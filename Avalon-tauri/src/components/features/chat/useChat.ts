@@ -5,7 +5,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
-  ActionRecord,
   ChatMessage,
   EngineEvent,
   HistoryMessage,
@@ -17,31 +16,82 @@ export interface UseChatOptions {
   channelName?: string;
 }
 
-/** 历史工具执行记录 → 展示工具摘要（action_history 只保留 tool_call 型） */
-function mapActionHistory(history: ActionRecord[] | null | undefined): ToolCallRecord[] {
-  if (!history) return [];
-  return history
-    .filter((r) => r.action_type === 'tool_call' && r.tool_call)
-    .map((r) => ({
-      toolName: r.tool_call!.name,
-      arguments: r.tool_call!.arguments,
-      result: r.tool_result ?? undefined,
-    }));
-}
+/** 后端历史消息（user/assistant/tool 平铺）→ 前端展示消息（assistant 合并工具摘要） */
+function mapHistoryMessages(msgs: HistoryMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  let idx = 0;
+  // 带 tool_calls 的 assistant 暂存于此，等 tool 消息补 tools / 最终 assistant 补正文
+  let pending: ChatMessage | null = null;
 
-/** 后端历史消息 → 前端展示消息 */
-function mapHistoryMessage(m: HistoryMessage, index: number): ChatMessage {
-  const tools = mapActionHistory(m.action_history);
-  return {
-    id: `hist-${index}`,
-    role: m.role,
-    status: 'done',
-    thought: m.thought ?? '',
-    // 执行记录消息：结构化 tools 已承载摘要，正文不再重复渲染
-    content: tools.length > 0 ? '' : m.content,
-    tools,
-    tokenUsage: m.token_usage,
+  const flushPending = () => {
+    if (pending) {
+      out.push(pending);
+      pending = null;
+    }
   };
+
+  for (const m of msgs) {
+    if (m.role === 'user') {
+      flushPending();
+      out.push({
+        id: `hist-${idx++}`,
+        role: 'user',
+        status: 'done',
+        thought: '',
+        content: m.content,
+        tools: [],
+      });
+    } else if (m.role === 'assistant') {
+      if (m.tool_calls && m.tool_calls.length > 0) {
+        // 中间轮（带 tool_calls）：首次创建 pending，后续中间轮忽略（引导语/中间思考丢弃）
+        if (!pending) {
+          pending = {
+            id: `hist-${idx++}`,
+            role: 'assistant',
+            status: 'done',
+            thought: '',
+            content: '',
+            tools: [],
+            tokenUsage: m.token_usage,
+          };
+        }
+      } else if (pending) {
+        // 最终正文轮：补全 pending 的正文/思考，push
+        pending.content = m.content;
+        pending.thought = m.reasoning_content ?? '';
+        pending.tokenUsage = m.token_usage;
+        flushPending();
+      } else {
+        // 纯对话（无工具）
+        out.push({
+          id: `hist-${idx++}`,
+          role: 'assistant',
+          status: 'done',
+          thought: m.reasoning_content ?? '',
+          content: m.content,
+          tools: [],
+          tokenUsage: m.token_usage,
+        });
+      }
+    } else {
+      // role === 'tool'
+      if (pending) {
+        pending.tools.push({ toolName: m.name, result: m.content, success: m.success });
+      } else {
+        // 孤立 tool（异常）：独立展示为一条工具摘要消息
+        out.push({
+          id: `hist-${idx++}`,
+          role: 'assistant',
+          status: 'done',
+          thought: '',
+          content: '',
+          tools: [{ toolName: m.name, result: m.content, success: m.success }],
+        });
+      }
+    }
+  }
+  flushPending();
+  return out;
 }
 
 /** 定位当前正在组装的 assistant 消息（最后一条 assistant） */
@@ -117,7 +167,7 @@ export function useChat(options: UseChatOptions = {}) {
     getCurrentSession(channelName)
       .then((s) => {
         if (cancelled) return;
-        setMessages(s.session.map(mapHistoryMessage));
+        setMessages(mapHistoryMessages(s.messages));
       })
       .catch((e) => console.error('get_current_session 失败:', e));
     return () => {

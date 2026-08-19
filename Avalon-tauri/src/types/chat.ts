@@ -27,30 +27,31 @@ export interface ChatResult {
   usage: TokenUsage;
 }
 
-/** 工具执行记录（对齐后端 ActionRecord，历史消息 action_history 元素） */
-export interface ActionRecord {
-  action_type: 'tool_call' | 'sub_analysis' | 'finished' | 'error';
-  time: string;
-  tool_call?: ToolCall | null;
-  tool_result?: string | null;
-  token_usage: TokenUsage;
-}
-
-/** 后端持久化的历史消息（get_current_session 返回的 session 元素） */
-export interface HistoryMessage {
-  role: 'user' | 'assistant';
-  time: string;
-  content: string;
-  thought?: string | null;
-  token_usage?: TokenUsage;
-  action_history?: ActionRecord[] | null;
-}
+/** 后端持久化的历史消息（get_current_session 返回的 messages 元素，判别联合） */
+export type HistoryMessage =
+  | { role: 'user'; time: string; content: string }
+  | {
+      role: 'assistant';
+      time: string;
+      content: string;
+      reasoning_content?: string | null;
+      tool_calls?: ToolCall[] | null;
+      token_usage: TokenUsage;
+    }
+  | {
+      role: 'tool';
+      time: string;
+      tool_call_id: string;
+      name: string;
+      success: boolean;
+      content: string;
+    };
 
 /** get_current_session 返回（精简，前端只用这些字段） */
 export interface CurrentSession {
   id: string;
   status: 'active' | 'inactive' | 'archived';
-  session: HistoryMessage[];
+  messages: HistoryMessage[];
 }
 
 /** chat 命令经 Channel 推送的事件（判别联合，按 type 分发） */
@@ -68,7 +69,7 @@ export type MessageRole = 'user' | 'assistant';
 
 export type MessageStatus = 'streaming' | 'done' | 'error';
 
-/** 单个工具调用摘要（tool_call → tool_result 组装） */
+/** 单个工具调用摘要（tool_call → tool_result 组装 / 历史 tool 消息还原） */
 export interface ToolCallRecord {
   toolName: string;
   arguments?: unknown;

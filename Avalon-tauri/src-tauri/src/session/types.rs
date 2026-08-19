@@ -1,7 +1,7 @@
 // 会话模块数据结构定义
 //
 // SessionData 是会话文件的 JSON 结构（current/{channel}.json 与 history/{id}/index.json 的内容）；
-// ChatMessage / ActionRecord 是消息与动作记录（记忆落库的载体，engine 产生、session 持久化）。
+// Message 是判别联合消息（user/assistant/tool 三种形态，对齐 OpenAI 消息模型），是记忆落库的载体。
 
 #![allow(dead_code)] // session 模块供未来 engine/tool 引用，当前无调用方，接入后移除
 
@@ -79,9 +79,9 @@ pub struct SessionData {
     /// 反序列化兼容 Python 旧数据的空列表 `[]`（等价 None）
     #[serde(default, deserialize_with = "deserialize_super_compressed")]
     pub super_compressed: Option<CompressedChunk>,
-    /// 当前未压缩的消息
+    /// 当前未压缩的消息（user/assistant/tool 平铺）
     #[serde(default)]
-    pub session: Vec<ChatMessage>,
+    pub messages: Vec<Message>,
 }
 
 impl SessionData {
@@ -93,7 +93,7 @@ impl SessionData {
             compress_round: 0,
             compressed: Vec::new(),
             super_compressed: None,
-            session: Vec::new(),
+            messages: Vec::new(),
         }
     }
 
@@ -105,57 +105,41 @@ impl SessionData {
             compress_round: 0,
             compressed: Vec::new(),
             super_compressed: None,
-            session: Vec::new(),
+            messages: Vec::new(),
         }
     }
 }
 
-/// 消息角色
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum MessageRole {
-    User,
-    Assistant,
-}
-
-/// 一条对话消息（持久化 + 前端展示）
+/// 一条会话消息（判别联合：user/assistant/tool 结构各异，对齐 OpenAI 消息模型）
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: MessageRole,
-    pub time: String,
-    pub content: String,
-    #[serde(default)]
-    pub thought: Option<String>,
-    #[serde(default)]
-    pub token_usage: TokenUsage,
-    /// 动作层执行记录（仅 assistant 且触发 action 时存在）
-    #[serde(default)]
-    pub action_history: Option<Vec<ActionRecord>>,
-}
-
-/// 动作步骤类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ActionType {
-    ToolCall,
-    SubAnalysis,
-    Finished,
-    Error,
-}
-
-/// 工具执行记录（单模型 ReAct 精简形态：工具调用 + 精简结果）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActionRecord {
-    pub action_type: ActionType,
-    pub time: String,
-    #[serde(default)]
-    pub tool_call: Option<ToolCall>,
-    /// 精简后的工具结果（供会话历史持久化，避免全量结果塞满上下文）
-    #[serde(default)]
-    pub tool_result: Option<String>,
-    /// token 用量（供 auto_compress_check 遍历）
-    #[serde(default)]
-    pub token_usage: TokenUsage,
+#[serde(tag = "role", rename_all = "lowercase")]
+pub enum Message {
+    /// 用户输入（只有正文，无思考/用量）
+    User {
+        time: String,
+        content: String,
+    },
+    /// 智能体回复（对齐 OpenAI assistant 消息：正文 + 思考 + 工具调用 + 用量）
+    Assistant {
+        time: String,
+        content: String,
+        /// 思考过程（DeepSeek reasoning_content，非空才落盘）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
+        /// 本轮发起的工具调用（无则省略；arguments 为 JSON 对象）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_calls: Option<Vec<ToolCall>>,
+        #[serde(default)]
+        token_usage: TokenUsage,
+    },
+    /// 工具执行结果（对齐 OpenAI tool 消息，content 为精简摘要）
+    Tool {
+        time: String,
+        tool_call_id: String,
+        name: String,
+        success: bool,
+        content: String,
+    },
 }
 
 /// 限界会话上下文（get_context_for_prompt 的输出，序列化为 JSON 拼进 system_prompt）
@@ -168,7 +152,7 @@ pub struct SessionContext {
     /// 最近 context_chunks 个普通压缩块
     pub compressed: Vec<CompressedChunk>,
     /// 当前未压缩消息
-    pub session: Vec<ChatMessage>,
+    pub messages: Vec<Message>,
     /// 裁剪掉的旧块数（超限时存在）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub older_chunks_omitted: Option<usize>,

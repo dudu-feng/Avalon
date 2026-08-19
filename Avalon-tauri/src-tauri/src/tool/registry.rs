@@ -1,6 +1,5 @@
 // 工具注册表：工具元数据集中管理 + 按名分发
 //
-// get_tool_list 按注册顺序拼格式化列表（供 LLM 理解可用工具）；
 // get_tools_schema 生成 OpenAI 原生 tools 参数（function.name + description + parameters JSON Schema）；
 // invoke_tool 用 match 分发（5 个工具 O(1) 命中，替代 Python 线性遍历）。
 
@@ -18,7 +17,7 @@ use super::fs_tools;
 use super::memory_tools;
 use super::ToolRegistry;
 
-/// 工具元数据（名字 + 描述 + 参数 JSON Schema，供 get_tool_list / get_tools_schema 复用）
+/// 工具元数据（名字 + 描述 + 参数 JSON Schema，供 get_tools_schema 使用）
 struct ToolDef {
     name: &'static str,
     description: &'static str,
@@ -161,14 +160,6 @@ impl ToolSet {
 
 #[async_trait]
 impl ToolRegistry for ToolSet {
-    fn get_tool_list(&self) -> String {
-        let mut out = String::from("## 可用工具列表\n");
-        for t in self.defs() {
-            out.push_str(&format!("- **{}**: {}\n", t.name, t.description));
-        }
-        out.trim_end().to_string()
-    }
-
     fn get_tools_schema(&self) -> Vec<Value> {
         self.defs()
             .into_iter()

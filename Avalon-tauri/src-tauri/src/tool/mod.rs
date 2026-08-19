@@ -17,8 +17,6 @@ use serde_json::Value;
 /// 工具注册表契约：engine 通过此 trait 调用工具（不依赖具体实现）
 #[async_trait]
 pub trait ToolRegistry: Send + Sync {
-    /// 生成供 LLM 理解的格式化工具列表（拼进 system prompt 的工具说明文本）
-    fn get_tool_list(&self) -> String;
     /// 生成 OpenAI 原生 `tools` 参数（function.name + description + parameters JSON Schema）
     fn get_tools_schema(&self) -> Vec<Value>;
     /// 按名字调用工具，统一返回字符串结果（含错误信息）

@@ -1,7 +1,7 @@
 // Prompt 提示词组装模块
 //
 // 职责：对话层 system prompt 的组装 —— 加载用户自定义 .md 提示词文件（灵魂/画像）
-// + 内置标记协议约束 + 工具列表 + 会话上下文。
+// + 会话上下文。工具走 OpenAI 原生 tools 参数传入，不再写进 system prompt。
 // 只依赖 config（拿 prompt 目录路径）；tool/session 以 &str 参数注入（依赖反转）。
 // action/compress 提示词模板仍硬编码在 llm/client.rs（协议耦合，本期不迁移）。
 
@@ -78,25 +78,17 @@ impl PromptAssembler {
     }
 
     /// 对话层完整组装：load_files + 纯函数拼接
-    pub fn assemble_chat_prompt(&self, tool_list: &str, session_context: &str) -> Result<String> {
+    pub fn assemble_chat_prompt(&self, session_context: &str) -> Result<String> {
         let files = self.load_files()?;
-        Ok(assemble_chat_system_prompt(&files, tool_list, session_context))
+        Ok(assemble_chat_system_prompt(&files, session_context))
     }
 }
 
-/// 纯函数：文件列表 + 标记协议约束 + 工具列表 + 会话上下文 → 完整 system prompt
-pub fn assemble_chat_system_prompt(
-    files: &[String],
-    tool_list: &str,
-    session_context: &str,
-) -> String {
+/// 纯函数：文件列表 + 会话上下文 → 完整 system prompt（工具走原生 tools 参数，不再写进提示词）
+pub fn assemble_chat_system_prompt(files: &[String], session_context: &str) -> String {
     let mut out = String::new();
     for f in files {
         out.push_str(f);
-        out.push('\n');
-    }
-    if !tool_list.trim().is_empty() {
-        out.push_str(tool_list);
         out.push('\n');
     }
     if !session_context.trim().is_empty() {

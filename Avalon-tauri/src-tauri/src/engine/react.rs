@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::config::ConfigStore;
 use crate::llm::{ChatResult, LlmState, StreamEvent, TokenUsage};
 use crate::prompt::PromptAssembler;
-use crate::session::{ActionRecord, ActionType, ChatMessage, SessionStore};
+use crate::session::{Message, SessionStore};
 use crate::tool::ToolRegistry;
 
 use super::events::EngineEvent;
@@ -33,10 +33,9 @@ pub(crate) async fn run_loop<F>(
 where
     F: FnMut(EngineEvent) + Send,
 {
-    let tool_list = tools.get_tool_list();
     let tools_schema = tools.get_tools_schema();
     let session_context = session.get_context_for_prompt(channel)?;
-    let system_prompt = prompt.assemble_chat_prompt(&tool_list, &session_context)?;
+    let system_prompt = prompt.assemble_chat_prompt(&session_context)?;
     let cfg = config.get();
     let model = cfg
         .active_model_config()
@@ -50,8 +49,8 @@ where
         json!({"role": "user", "content": user_input}),
     ];
 
-    // 工具执行记录（精简后持久化）+ 跨轮累积的正文/思考/用量
-    let mut tool_records: Vec<ActionRecord> = Vec::new();
+    // 持久化轨迹（user + 每轮 assistant + tool 消息）+ 跨轮累积的正文/思考/用量
+    let mut persisted: Vec<Message> = vec![history::user_entry(user_input)];
     let mut accumulated_message = String::new();
     let mut accumulated_thought = String::new();
     let mut accumulated_usage = TokenUsage::default();
@@ -70,6 +69,9 @@ where
         accumulated_usage.input_tokens += result.usage.input_tokens;
         accumulated_usage.output_tokens += result.usage.output_tokens;
         accumulated_usage.total_tokens += result.usage.total_tokens;
+
+        // 持久化本轮 assistant 消息（中间 tool_calls 轮 / 最终正文轮都存）
+        persisted.push(history::assistant_entry(&result));
 
         if result.tool_calls.is_empty() {
             break ChatResult {
@@ -96,13 +98,8 @@ where
                 success,
                 result: summary.clone(),
             });
-            tool_records.push(ActionRecord {
-                action_type: ActionType::ToolCall,
-                time: history::now_str(),
-                tool_call: Some(tc.clone()),
-                tool_result: Some(summary),
-                token_usage: TokenUsage::default(),
-            });
+            // 持久化 tool 消息（content 存精简摘要，注意力隔离；回填 LLM 仍用完整 out）
+            persisted.push(history::tool_entry(&tc.id, &tc.name, success, &summary));
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -111,14 +108,9 @@ where
         }
     };
 
-    // 每轮收尾：持久化 + 自动压缩检查（决策 D3：init/save 留给调用方）
-    let mut chat_history: Vec<ChatMessage> = vec![history::user_entry(user_input)];
-    chat_history.push(history::assistant_entry(&last_result));
-    if !tool_records.is_empty() {
-        chat_history.push(history::execution_record(tool_records));
-    }
-    session.update_current_session(channel, &chat_history)?;
-    session.auto_compress_check(channel, &chat_history).await?;
+    // 每轮收尾：持久化完整轨迹 + 自动压缩检查（决策 D3：init/save 留给调用方）
+    session.update_current_session(channel, &persisted)?;
+    session.auto_compress_check(channel, &persisted).await?;
 
     on_event(EngineEvent::Done { result: last_result });
     Ok(())

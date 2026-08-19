@@ -56,7 +56,14 @@ impl FileSessionStore {
         }
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("读取会话文件失败: {}", path.display()))?;
-        serde_json::from_str(&content).with_context(|| format!("解析会话文件失败: {}", path.display()))
+        // 旧格式（扁平 ChatMessage / 三段标记）不再兼容，解析失败降级空会话，避免阻断启动
+        match serde_json::from_str(&content) {
+            Ok(data) => Ok(data),
+            Err(e) => {
+                eprintln!("[Session] 旧格式会话已忽略（{}）: {e}", path.display());
+                Ok(SessionData::empty())
+            }
+        }
     }
 
     /// 写当前会话（原子：tmp + rename，自动建目录）
@@ -99,13 +106,13 @@ impl FileSessionStore {
     /// 会话压缩：把 session 压成摘要，追加 compressed，清空 session，同步向量库，触发渐进式总结
     async fn compress(&self, channel: &str) -> Result<()> {
         let mut data = self.read_current(channel)?;
-        if data.session.is_empty() {
+        if data.messages.is_empty() {
             println!("当前会话为空，无需压缩。");
             return Ok(());
         }
 
         // 1. 组装压缩提示词（只压未压缩消息，不传已压缩的 compressed/super_compressed）
-        let payload = serde_json::to_string(&data.session).context("序列化待压缩会话失败")?;
+        let payload = serde_json::to_string(&data.messages).context("序列化待压缩会话失败")?;
         let (system, user) = build_compress_prompt(&payload);
 
         // 2. 调用 LLM 压缩（动态读最新配置构建 client）
@@ -130,12 +137,12 @@ impl FileSessionStore {
         let raw_dir = self.history_dir().join(&data.id).join("raw");
         std::fs::create_dir_all(&raw_dir)
             .with_context(|| format!("创建 raw 目录失败: {}", raw_dir.display()))?;
-        let raw_content = serde_json::to_string_pretty(&data.session).context("序列化 raw 失败")?;
+        let raw_content = serde_json::to_string_pretty(&data.messages).context("序列化 raw 失败")?;
         std::fs::write(raw_dir.join(format!("{round}.json")), raw_content)
             .with_context(|| "写入 raw 文件失败")?;
 
-        // 5. 清空 session + 落盘
-        data.session.clear();
+        // 5. 清空 messages + 落盘
+        data.messages.clear();
         self.write_current(channel, &data)?;
 
         // 6. 同步向量库
@@ -184,7 +191,7 @@ impl FileSessionStore {
 
         // 二次压缩（把旧摘要当作 assistant 消息）
         let mock = json!({
-            "session": all_summaries
+            "messages": all_summaries
                 .iter()
                 .map(|s| json!({"role": "assistant", "content": s}))
                 .collect::<Vec<_>>()
@@ -384,19 +391,19 @@ impl SessionStore for FileSessionStore {
             status: data.status,
             super_compressed: data.super_compressed,
             compressed: data.compressed[start..].to_vec(),
-            session: data.session,
+            messages: data.messages,
             older_chunks_omitted: (omitted > 0).then_some(omitted),
         };
         serde_json::to_string(&ctx).context("序列化会话上下文失败")
     }
 
-    fn update_current_session(&self, channel: &str, chat_history: &[ChatMessage]) -> Result<()> {
+    fn update_current_session(&self, channel: &str, chat_history: &[Message]) -> Result<()> {
         let mut data = self.ensure_active(channel)?;
-        data.session.extend_from_slice(chat_history);
+        data.messages.extend_from_slice(chat_history);
         self.write_current(channel, &data)
     }
 
-    async fn auto_compress_check(&self, channel: &str, chat_history: &[ChatMessage]) -> Result<bool> {
+    async fn auto_compress_check(&self, channel: &str, chat_history: &[Message]) -> Result<bool> {
         let max_input = max_input_tokens(chat_history);
         let threshold = self.config.get().session_memory.compress_threshold;
         if max_input >= threshold {
@@ -430,18 +437,16 @@ impl SessionStore for FileSessionStore {
     }
 }
 
-/// 遍历消息树（含嵌套 action_history）取最大 input_tokens
-pub(crate) fn max_input_tokens(messages: &[ChatMessage]) -> usize {
-    let mut max = 0usize;
-    for m in messages {
-        max = max.max(m.token_usage.input_tokens as usize);
-        if let Some(actions) = &m.action_history {
-            for a in actions {
-                max = max.max(a.token_usage.input_tokens as usize);
-            }
-        }
-    }
-    max
+/// 遍历消息取最大 input_tokens（只有 assistant 消息带 token_usage）
+pub(crate) fn max_input_tokens(messages: &[Message]) -> usize {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            Message::Assistant { token_usage, .. } => Some(token_usage.input_tokens as usize),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// 从 chunk 字符串提取块编号："" 或 "merged_1_5" → 数字列表
