@@ -1,7 +1,7 @@
 // 异步 LLM 客户端
 //
 // 只依赖 config::{ModelConfig, LlmParams}（依赖反转），不 import 工具/会话/提示词模块。
-// 提供三个调用入口：chat_stream（流式）/ action（非流式 JSON）/ compress（非流式 JSON）。
+// 提供两个调用入口：chat_stream（带 tools 的流式，单模型 ReAct）/ compress（非流式 JSON）。
 
 use std::time::Duration;
 
@@ -12,7 +12,6 @@ use serde_json::{json, Value};
 use crate::config::{LlmParams, ModelConfig};
 
 use super::parser::parse_llm_json;
-use super::stream::StreamParser;
 use super::types::*;
 
 /// 共享 HTTP 客户端状态（复用连接池，避免每次请求重建）。
@@ -50,34 +49,33 @@ impl LlmClient {
         format!("{}/chat/completions", self.model.url.trim_end_matches('/'))
     }
 
-    /// 对话层：流式调用，逐字推正文/思考，流结束产出 ChatResult（含用量）
+    /// 对话层：带 tools 的流式调用。
+    /// `messages` 由调用方构造（含 system/user/历史 assistant(tool_calls)/tool 消息），
+    /// 流式推正文（content）/思考（reasoning_content），流结束产出 ChatResult（含 tool_calls）。
     pub async fn chat_stream(
         &self,
-        system_prompt: &str,
-        user_input: &str,
-        chat_history: &str,
+        messages: &[Value],
+        tools: &[Value],
         mut on_event: impl FnMut(StreamEvent),
     ) -> Result<ChatResult> {
-        let mut messages = vec![
-            json!({"role": "system", "content": system_prompt}),
-            json!({"role": "user", "content": user_input}),
-        ];
-        if !chat_history.trim().is_empty() {
-            messages.push(json!({"role": "assistant", "content": chat_history}));
-        }
-
-        let body = json!({
+        let mut body = json!({
             "model": self.model.modelname,
             "messages": messages,
             "temperature": self.params.chat_temperature,
             "stream": true,
             "stream_options": {"include_usage": true},
         });
+        if !tools.is_empty() {
+            body["tools"] = json!(tools);
+            body["tool_choice"] = json!("auto");
+        }
 
         let resp = self.post(&body).await?;
 
-        let mut parser = StreamParser::new();
         let mut usage = TokenUsage::default();
+        let mut thought = String::new();
+        let mut message = String::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut sse_buf = String::new();
         let mut stream = resp.bytes_stream();
 
@@ -88,7 +86,7 @@ impl LlmClient {
             while let Some((event, rest)) = take_sse_event(&sse_buf) {
                 sse_buf = rest;
                 if let Some(delta) = sse_delta(&event) {
-                    parser.push(&delta, &mut on_event);
+                    apply_delta(&delta, &mut thought, &mut message, &mut tool_calls, &mut on_event);
                 }
                 if let Some(u) = sse_usage(&event) {
                     usage = u;
@@ -99,27 +97,29 @@ impl LlmClient {
         // 流结束后处理无尾随空行的残余事件（通常是最后一个 usage / [DONE]）
         if !sse_buf.trim().is_empty() {
             if let Some(delta) = sse_delta(&sse_buf) {
-                parser.push(&delta, &mut on_event);
+                apply_delta(&delta, &mut thought, &mut message, &mut tool_calls, &mut on_event);
             }
             if let Some(u) = sse_usage(&sse_buf) {
                 usage = u;
             }
         }
 
-        let mut result = parser.finish();
-        result.usage = usage;
+        // 工具调用 arguments 在流式阶段是 JSON 字符串片段，此处统一解析为 Value
+        for tc in &mut tool_calls {
+            if let Some(s) = tc.arguments.as_str() {
+                tc.arguments = serde_json::from_str(s).unwrap_or(Value::Null);
+            }
+        }
+
+        let result = ChatResult {
+            thought,
+            message,
+            tool_calls,
+            usage,
+        };
         on_event(StreamEvent::Done {
             result: result.clone(),
         });
-        Ok(result)
-    }
-
-    /// 动作层：非流式，低温度 JSON（含 response_format 降级）。
-    /// system_prompt 由 engine 用 prompt::build_action_prompt 组装后传入。
-    pub async fn action(&self, system_prompt: &str) -> Result<ActionResult> {
-        let (content, usage) = self.invoke_json(system_prompt, None).await?;
-        let mut result: ActionResult = parse_llm_json(&content)?;
-        result.usage = usage;
         Ok(result)
     }
 
@@ -201,7 +201,7 @@ impl LlmClient {
 // ============ SSE 解析辅助 ============
 
 /// 从缓冲区提取一个完整 SSE 事件（以空行分隔），返回 (事件, 剩余)。
-fn take_sse_event(buf: &str) -> Option<(String, String)> {
+pub(crate) fn take_sse_event(buf: &str) -> Option<(String, String)> {
     if let Some(idx) = buf.find("\n\n") {
         let event = buf[..idx].to_string();
         let rest = buf[idx + 2..].to_string();
@@ -215,8 +215,8 @@ fn take_sse_event(buf: &str) -> Option<(String, String)> {
     None
 }
 
-/// 从 SSE 事件中提取 delta.content（无则返回 None）。
-fn sse_delta(event: &str) -> Option<String> {
+/// 从 SSE 事件中提取 delta 对象（choices[0].delta，无则返回 None）。
+pub(crate) fn sse_delta(event: &str) -> Option<Value> {
     for line in event.lines() {
         let line = line.trim();
         if let Some(data) = line.strip_prefix("data:") {
@@ -225,14 +225,73 @@ fn sse_delta(event: &str) -> Option<String> {
                 return None;
             }
             let v: Value = serde_json::from_str(data).ok()?;
-            return v["choices"][0]["delta"]["content"].as_str().map(|s| s.to_string());
+            return Some(v["choices"][0]["delta"].clone());
         }
     }
     None
 }
 
+/// 累加一个 delta 增量：正文 / 思考 / 工具调用，并推流式事件。
+pub(crate) fn apply_delta(
+    delta: &Value,
+    thought: &mut String,
+    message: &mut String,
+    tool_calls: &mut Vec<ToolCall>,
+    on_event: &mut dyn FnMut(StreamEvent),
+) {
+    // 正文增量（content）
+    if let Some(c) = delta.get("content").and_then(Value::as_str) {
+        if !c.is_empty() {
+            message.push_str(c);
+            on_event(StreamEvent::MessageDelta { delta: c.to_string() });
+        }
+    }
+
+    // 思考增量（DeepSeek reasoning_content，换其他模型可能缺省）
+    if let Some(r) = delta.get("reasoning_content").and_then(Value::as_str) {
+        if !r.is_empty() {
+            thought.push_str(r);
+            on_event(StreamEvent::ThoughtDelta { delta: r.to_string() });
+        }
+    }
+
+    // 工具调用增量（tool_calls 数组，按 index 累加；首片带 id/name，arguments 跨 chunk 拼接）
+    if let Some(tcs) = delta.get("tool_calls").and_then(Value::as_array) {
+        for tc in tcs {
+            let index = tc.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            while tool_calls.len() <= index {
+                tool_calls.push(ToolCall {
+                    id: String::new(),
+                    name: String::new(),
+                    arguments: Value::Null,
+                });
+            }
+            let slot = &mut tool_calls[index];
+            if let Some(id) = tc.get("id").and_then(Value::as_str) {
+                slot.id = id.to_string();
+            }
+            if let Some(f) = tc.get("function") {
+                if let Some(name) = f.get("name").and_then(Value::as_str) {
+                    slot.name = name.to_string();
+                }
+                if let Some(args) = f.get("arguments").and_then(Value::as_str) {
+                    // arguments 是 JSON 字符串片段，跨 chunk 拼接
+                    match slot.arguments.as_str() {
+                        Some(existing) => {
+                            slot.arguments = Value::String(format!("{existing}{args}"));
+                        }
+                        None => {
+                            slot.arguments = Value::String(args.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// 从 SSE 事件中提取 usage（无则返回 None）。
-fn sse_usage(event: &str) -> Option<TokenUsage> {
+pub(crate) fn sse_usage(event: &str) -> Option<TokenUsage> {
     for line in event.lines() {
         let line = line.trim();
         if let Some(data) = line.strip_prefix("data:") {
@@ -250,7 +309,7 @@ fn sse_usage(event: &str) -> Option<TokenUsage> {
 }
 
 /// 从 usage 对象提取 token 用量（OpenAI 字段名）。
-fn parse_usage(u: &Value) -> TokenUsage {
+pub(crate) fn parse_usage(u: &Value) -> TokenUsage {
     TokenUsage {
         input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
         output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,

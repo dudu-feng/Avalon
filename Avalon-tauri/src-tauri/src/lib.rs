@@ -78,8 +78,6 @@ pub fn run() {
             commands::validate_config,
             commands::get_config_path,
             commands::init_app,
-            commands::llm_chat,
-            commands::llm_action,
             commands::llm_compress,
             commands::chat,
             commands::init_session,

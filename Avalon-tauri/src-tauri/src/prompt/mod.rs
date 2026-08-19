@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 
 use crate::config::AppConfig;
 
-pub use templates::{build_action_prompt, build_compress_prompt, BASIC_SETTING, RESPONSE_TEMPLATE};
+pub use templates::{build_compress_prompt, BASIC_SETTING};
 
 /// 提示词组装器：从 prompt 目录加载 .md 文件，带线程安全缓存
 pub struct PromptAssembler {
@@ -95,8 +95,6 @@ pub fn assemble_chat_system_prompt(
         out.push_str(f);
         out.push('\n');
     }
-    out.push_str(RESPONSE_TEMPLATE);
-    out.push_str("\n\n");
     if !tool_list.trim().is_empty() {
         out.push_str(tool_list);
         out.push('\n');

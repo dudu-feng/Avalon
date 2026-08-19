@@ -5,11 +5,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
-  ActionBlock,
-  ActionStepRecord,
+  ActionRecord,
   ChatMessage,
   EngineEvent,
   HistoryMessage,
+  ToolCallRecord,
 } from '../../../types/chat';
 import { chat, DEFAULT_CHANNEL, getCurrentSession, initSession, saveSession } from '../../../lib/chatApi';
 
@@ -17,15 +17,29 @@ export interface UseChatOptions {
   channelName?: string;
 }
 
-/** 后端历史消息 → 前端展示消息（action_history 本期暂不还原） */
+/** 历史工具执行记录 → 展示工具摘要（action_history 只保留 tool_call 型） */
+function mapActionHistory(history: ActionRecord[] | null | undefined): ToolCallRecord[] {
+  if (!history) return [];
+  return history
+    .filter((r) => r.action_type === 'tool_call' && r.tool_call)
+    .map((r) => ({
+      toolName: r.tool_call!.name,
+      arguments: r.tool_call!.arguments,
+      result: r.tool_result ?? undefined,
+    }));
+}
+
+/** 后端历史消息 → 前端展示消息 */
 function mapHistoryMessage(m: HistoryMessage, index: number): ChatMessage {
+  const tools = mapActionHistory(m.action_history);
   return {
     id: `hist-${index}`,
     role: m.role,
     status: 'done',
     thought: m.thought ?? '',
-    content: m.content,
-    actions: [],
+    // 执行记录消息：结构化 tools 已承载摘要，正文不再重复渲染
+    content: tools.length > 0 ? '' : m.content,
+    tools,
     tokenUsage: m.token_usage,
   };
 }
@@ -38,21 +52,10 @@ function lastAssistantIndex(messages: ChatMessage[]): number {
   return -1;
 }
 
-/** 向末 ActionBlock 追加一个步骤（不可变） */
-function pushStep(actions: ActionBlock[], step: ActionStepRecord): ActionBlock[] {
-  const next = [...actions];
-  const last = next[next.length - 1];
-  next[next.length - 1] = { ...last, steps: [...last.steps, step] };
-  return next;
-}
-
-/** 更新末 ActionBlock 的末步骤（不可变） */
-function updateLastStep(actions: ActionBlock[], patch: Partial<ActionStepRecord>): ActionBlock[] {
-  const next = [...actions];
-  const last = next[next.length - 1];
-  const steps = [...last.steps];
-  steps[steps.length - 1] = { ...steps[steps.length - 1], ...patch };
-  next[next.length - 1] = { ...last, steps };
+/** 更新末工具摘要（不可变；tool_call/tool_result 由后端严格成对发射） */
+function updateLastTool(tools: ToolCallRecord[], patch: Partial<ToolCallRecord>): ToolCallRecord[] {
+  const next = [...tools];
+  next[next.length - 1] = { ...next[next.length - 1], ...patch };
   return next;
 }
 
@@ -71,37 +74,13 @@ function applyEvent(prev: ChatMessage[], ev: EngineEvent): ChatMessage[] {
     case 'message_delta':
       next = { ...current, content: current.content + ev.delta };
       break;
-    case 'action_start':
-      next = { ...current, actions: [...current.actions, { target: ev.target, steps: [] }] };
+    case 'tool_call':
+      next = { ...current, tools: [...current.tools, { toolName: ev.tool_name }] };
       break;
-    case 'action_step':
-      next = { ...current, actions: pushStep(current.actions, { analysis: ev.analysis, next: ev.next }) };
-      break;
-    case 'action_tool_call':
+    case 'tool_result':
       next = {
         ...current,
-        actions: updateLastStep(current.actions, {
-          toolCall: { toolName: ev.tool_name, arguments: ev.arguments },
-        }),
-      };
-      break;
-    case 'action_tool_result':
-      next = {
-        ...current,
-        actions: updateLastStep(current.actions, {
-          toolResult: { toolName: ev.tool_name, success: ev.success, result: ev.result },
-        }),
-      };
-      break;
-    case 'action_sub_analysis':
-      next = { ...current, actions: updateLastStep(current.actions, { subAnalysis: ev.sub_analysis }) };
-      break;
-    case 'action_finished':
-      next = {
-        ...current,
-        actions: updateLastStep(current.actions, {
-          finished: { analysis: ev.analysis, tokenUsage: ev.token_usage },
-        }),
+        tools: updateLastTool(current.tools, { result: ev.result, success: ev.success }),
       };
       break;
     case 'done':
@@ -169,7 +148,7 @@ export function useChat(options: UseChatOptions = {}) {
         role: 'user',
         content: trimmed,
         thought: '',
-        actions: [],
+        tools: [],
         status: 'done',
       };
       const assistantId = nextId();
@@ -182,7 +161,7 @@ export function useChat(options: UseChatOptions = {}) {
           role: 'assistant',
           content: '',
           thought: '',
-          actions: [],
+          tools: [],
           status: 'streaming',
         },
       ]);

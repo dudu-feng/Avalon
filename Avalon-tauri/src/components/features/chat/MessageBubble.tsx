@@ -38,11 +38,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             {isStreaming && <span className={styles.cursor}>▌</span>}
           </p>
         )}
-        {message.actions.length > 0 && (
+        {message.tools.length > 0 && (
           <div className={styles.actions}>
-            {message.actions.map((block, i) => (
-              <ActionBlock key={i} block={block} />
-            ))}
+            <ActionBlock tools={message.tools} />
           </div>
         )}
       </div>

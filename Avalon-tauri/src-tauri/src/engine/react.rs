@@ -1,18 +1,18 @@
-// ReAct 双层循环编排
+// ReAct 单循环编排
 //
-// 对话层（流式 chat_stream）→ 动作层（非流式 action）双层循环：
-// 对话层产出 ChatResult 驱动「继续对话 / 进动作层」，动作层产出 ActionResult
-// 驱动「调用工具 / 子分析 / 结束」。全部中间态经 on_event 发射，每轮收尾做会话持久化。
+// 单模型 ReAct：一轮 chat_stream（带 tools）产出正文 + 思考 + tool_calls，
+// 有 tool_calls 则逐个执行工具、以 role=tool 回填、继续循环，直到无工具调用。
+// 全部中间态经 on_event 发射，收尾做会话持久化。
 // 依赖 trait（ToolRegistry / SessionStore），llm 通过 LlmState 动态构建 client（配置热更新）。
 
 #![allow(dead_code)]
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::config::ConfigStore;
-use crate::llm::{ActionResult, ActionStep, LlmClient, LlmState, NextAction, StreamEvent};
-use crate::prompt::{build_action_prompt, PromptAssembler};
+use crate::llm::{ChatResult, LlmState, StreamEvent, TokenUsage};
+use crate::prompt::PromptAssembler;
 use crate::session::{ActionRecord, ActionType, ChatMessage, SessionStore};
 use crate::tool::ToolRegistry;
 
@@ -33,43 +33,90 @@ pub(crate) async fn run_loop<F>(
 where
     F: FnMut(EngineEvent) + Send,
 {
-    let mut chat_history: Vec<ChatMessage> = vec![history::user_entry(user_input)];
     let tool_list = tools.get_tool_list();
+    let tools_schema = tools.get_tools_schema();
+    let session_context = session.get_context_for_prompt(channel)?;
+    let system_prompt = prompt.assemble_chat_prompt(&tool_list, &session_context)?;
+    let cfg = config.get();
+    let model = cfg
+        .active_model_config()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("未配置活跃模型（active_model 无效）"))?;
+    let client = llm.client(model, cfg.llm.clone());
 
-    // loop 的 break 值携带最终对话结果（Stop 分支是唯一退出路径）
+    // 本轮 messages：system + user + 循环内累加的 assistant(tool_calls)/tool 消息
+    let mut messages: Vec<Value> = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": user_input}),
+    ];
+
+    // 工具执行记录（精简后持久化）+ 跨轮累积的正文/思考/用量
+    let mut tool_records: Vec<ActionRecord> = Vec::new();
+    let mut accumulated_message = String::new();
+    let mut accumulated_thought = String::new();
+    let mut accumulated_usage = TokenUsage::default();
+
     let last_result = loop {
-        // 每轮重读会话上下文（含最新压缩块）+ 动态构建 client（配置热更新）
-        let session_context = session.get_context_for_prompt(channel)?;
-        let system_prompt = prompt.assemble_chat_prompt(&tool_list, &session_context)?;
-        let cfg = config.get();
-        let model = cfg.active_model_config().cloned()
-            .ok_or_else(|| anyhow::anyhow!("未配置活跃模型（active_model 无效）"))?;
-        let client = llm.client(model, cfg.llm.clone());
-        let history_str = serde_json::to_string(&chat_history)?;
-
-        let chat_result = client
-            .chat_stream(&system_prompt, user_input, &history_str, |ev| match ev {
+        let result = client
+            .chat_stream(&messages, &tools_schema, |ev| match ev {
                 StreamEvent::ThoughtDelta { delta } => on_event(EngineEvent::ThoughtDelta { delta }),
                 StreamEvent::MessageDelta { delta } => on_event(EngineEvent::MessageDelta { delta }),
                 StreamEvent::Done { .. } => {}
             })
             .await?;
 
-        let next = chat_result.next;
-        chat_history.push(history::assistant_entry(&chat_result));
+        accumulated_message.push_str(&result.message);
+        accumulated_thought.push_str(&result.thought);
+        accumulated_usage.input_tokens += result.usage.input_tokens;
+        accumulated_usage.output_tokens += result.usage.output_tokens;
+        accumulated_usage.total_tokens += result.usage.total_tokens;
 
-        match next {
-            NextAction::Stop => break chat_result,
-            NextAction::Action => {
-                let target = chat_result.action_target.clone().unwrap_or_default();
-                on_event(EngineEvent::ActionStart { target: target.clone() });
-                let records = run_action_loop(&target, &tool_list, tools, &client, on_event).await?;
-                chat_history.push(history::execution_record(records));
-            }
+        if result.tool_calls.is_empty() {
+            break ChatResult {
+                message: accumulated_message,
+                thought: accumulated_thought,
+                tool_calls: Vec::new(),
+                usage: accumulated_usage,
+            };
+        }
+
+        // 追加 assistant 消息（tool_calls 转 OpenAI 格式，arguments 序列化为字符串）
+        messages.push(assistant_tool_calls_msg(&result));
+
+        // 逐个执行工具，回填 role=tool，推前端事件，记精简记录
+        for tc in &result.tool_calls {
+            on_event(EngineEvent::ToolCall {
+                tool_name: tc.name.clone(),
+            });
+            let out = tools.invoke_tool(&tc.name, &tc.arguments).await;
+            let success = !tool_failed(&out);
+            let summary = summarize(&out);
+            on_event(EngineEvent::ToolResult {
+                tool_name: tc.name.clone(),
+                success,
+                result: summary.clone(),
+            });
+            tool_records.push(ActionRecord {
+                action_type: ActionType::ToolCall,
+                time: history::now_str(),
+                tool_call: Some(tc.clone()),
+                tool_result: Some(summary),
+                token_usage: TokenUsage::default(),
+            });
+            messages.push(json!({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": out,
+            }));
         }
     };
 
     // 每轮收尾：持久化 + 自动压缩检查（决策 D3：init/save 留给调用方）
+    let mut chat_history: Vec<ChatMessage> = vec![history::user_entry(user_input)];
+    chat_history.push(history::assistant_entry(&last_result));
+    if !tool_records.is_empty() {
+        chat_history.push(history::execution_record(tool_records));
+    }
     session.update_current_session(channel, &chat_history)?;
     session.auto_compress_check(channel, &chat_history).await?;
 
@@ -77,73 +124,44 @@ where
     Ok(())
 }
 
-/// 动作层内循环：直到 Finished（无步数上限，提示词软规范，决策 D2）
-async fn run_action_loop<F>(
-    target: &str,
-    tool_list: &str,
-    tools: &dyn ToolRegistry,
-    client: &LlmClient,
-    on_event: &mut F,
-) -> Result<Vec<ActionRecord>>
-where
-    F: FnMut(EngineEvent) + Send,
-{
-    let mut records: Vec<ActionRecord> = Vec::new();
+/// 把 ChatResult 的 tool_calls 转成 OpenAI assistant 消息（arguments 必须是 JSON 字符串）
+fn assistant_tool_calls_msg(result: &ChatResult) -> Value {
+    let tool_calls: Vec<Value> = result
+        .tool_calls
+        .iter()
+        .map(|tc| {
+            json!({
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.name,
+                    "arguments": serde_json::to_string(&tc.arguments).unwrap_or_else(|_| "{}".to_string()),
+                }
+            })
+        })
+        .collect();
+    json!({
+        "role": "assistant",
+        "content": result.message,
+        "tool_calls": tool_calls,
+    })
+}
 
-    loop {
-        let history_str = serde_json::to_string(&records)?;
-        let system_prompt = build_action_prompt(target, tool_list, &history_str);
-        let result: ActionResult = client.action(&system_prompt).await?;
-
-        let analysis = result.analysis.clone();
-        on_event(EngineEvent::ActionStep {
-            analysis: analysis.clone(),
-            next: result.next,
-        });
-
-        match result.next {
-            ActionStep::ToolCall => {
-                let (tool_name, arguments) = match &result.tool_call {
-                    Some(tc) => (tc.name.clone(), tc.arguments.clone()),
-                    None => (String::new(), Value::Null),
-                };
-                on_event(EngineEvent::ActionToolCall {
-                    tool_name: tool_name.clone(),
-                    arguments: arguments.clone(),
-                });
-                let tool_result = tools.invoke_tool(&tool_name, &arguments).await;
-                let success = !tool_failed(&tool_result);
-                on_event(EngineEvent::ActionToolResult {
-                    tool_name: tool_name.clone(),
-                    success,
-                    result: tool_result.clone(),
-                });
-                records.push(history::action_record(
-                    &result,
-                    ActionType::ToolCall,
-                    Some(tool_result),
-                ));
-            }
-            ActionStep::SubAnalysis => {
-                let sub_analysis = result.sub_analysis.clone().unwrap_or_default();
-                on_event(EngineEvent::ActionSubAnalysis {
-                    analysis: analysis.clone(),
-                    sub_analysis,
-                });
-                records.push(history::action_record(&result, ActionType::SubAnalysis, None));
-            }
-            ActionStep::Finished => {
-                on_event(EngineEvent::ActionFinished {
-                    analysis: analysis.clone(),
-                    token_usage: result.usage.clone(),
-                });
-                records.push(history::action_record(&result, ActionType::Finished, None));
-                break;
-            }
-        }
+/// 精简工具结果：取首行 + 截断（供持久化，避免全量结果塞满会话历史）
+fn summarize(result: &str) -> String {
+    const MAX_LEN: usize = 200;
+    let first_line = result.lines().next().unwrap_or("").trim();
+    let s = if first_line.is_empty() {
+        result.trim()
+    } else {
+        first_line
+    };
+    if s.chars().count() > MAX_LEN {
+        let truncated: String = s.chars().take(MAX_LEN).collect();
+        format!("{truncated}…")
+    } else {
+        s.to_string()
     }
-
-    Ok(records)
 }
 
 /// 工具结果失败判定：fs_tools 的错误消息均以固定前缀开头（成功结果无固定前缀）。

@@ -143,19 +143,17 @@ pub enum ActionType {
     Error,
 }
 
-/// 动作层执行记录
+/// 工具执行记录（单模型 ReAct 精简形态：工具调用 + 精简结果）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionRecord {
     pub action_type: ActionType,
     pub time: String,
-    pub analysis: String,
     #[serde(default)]
     pub tool_call: Option<ToolCall>,
+    /// 精简后的工具结果（供会话历史持久化，避免全量结果塞满上下文）
     #[serde(default)]
     pub tool_result: Option<String>,
-    #[serde(default)]
-    pub sub_analysis: Option<String>,
-    /// action 步骤的 token 用量（对齐 Python action_result 的 token_usage，供 auto_compress_check 遍历）
+    /// token 用量（供 auto_compress_check 遍历）
     #[serde(default)]
     pub token_usage: TokenUsage,
 }

@@ -1,34 +1,20 @@
-import { useState } from 'react';
-import type { ActionBlock as ActionBlockModel } from '../../../types/chat';
+import type { ToolCallRecord } from '../../../types/chat';
 import { ActionStepItem } from './ActionStepItem';
 import styles from './ActionBlock.module.css';
 
 export interface ActionBlockProps {
-  block: ActionBlockModel;
+  tools: ToolCallRecord[];
 }
 
-export function ActionBlock({ block }: ActionBlockProps) {
-  const [open, setOpen] = useState(true);
-
+/** 工具调用摘要区：平铺展示本轮所有工具调用（工具名 + 结果摘要） */
+export function ActionBlock({ tools }: ActionBlockProps) {
   return (
     <div className={styles.block}>
-      <button
-        type="button"
-        className={styles.toggle}
-        onClick={() => setOpen((prev) => !prev)}
-        aria-expanded={open}
-      >
-        <span>{open ? '▾' : '▸'}</span>
-        <span>动作层 · {block.target || '执行任务'}</span>
-        <span className={styles.count}>{block.steps.length} 步</span>
-      </button>
-      {open && (
-        <ol className={styles.steps}>
-          {block.steps.map((step, i) => (
-            <ActionStepItem key={i} step={step} />
-          ))}
-        </ol>
-      )}
+      <ul className={styles.steps}>
+        {tools.map((tool, i) => (
+          <ActionStepItem key={i} tool={tool} />
+        ))}
+      </ul>
     </div>
   );
 }

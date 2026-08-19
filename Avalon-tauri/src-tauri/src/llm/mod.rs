@@ -5,7 +5,6 @@
 
 pub mod client;
 pub mod parser;
-pub mod stream;
 pub mod types;
 
 #[allow(unused_imports)] // LlmClient 供未来 engine 层显式引用
