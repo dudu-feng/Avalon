@@ -4,118 +4,109 @@
 // messages（ChatMessage[]）供展示组件渲染。会话生命周期（init/save）也收在此。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type {
-  ChatMessage,
-  EngineEvent,
-  HistoryMessage,
-  ToolCallRecord,
-} from '../../../types/chat';
+import type { ChatMessage, EngineEvent, HistoryMessage } from '../../../types/chat';
 import { chat, DEFAULT_CHANNEL, getCurrentSession, initSession, saveSession } from '../../../lib/chatApi';
 
 export interface UseChatOptions {
   channelName?: string;
 }
 
-/** 后端历史消息（user/assistant/tool 平铺）→ 前端展示消息（assistant 合并工具摘要） */
+type AssistantMessage = Extract<ChatMessage, { role: 'assistant' }>;
+type ToolMessage = Extract<ChatMessage, { role: 'tool' }>;
+
+/** 后端历史消息（user/assistant/tool 平铺）→ 前端展示消息（逐条直映，无归并） */
 function mapHistoryMessages(msgs: HistoryMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   let idx = 0;
-  // 带 tool_calls 的 assistant 暂存于此，等 tool 消息补 tools / 最终 assistant 补正文
-  let pending: ChatMessage | null = null;
-
-  const flushPending = () => {
-    if (pending) {
-      out.push(pending);
-      pending = null;
-    }
-  };
 
   for (const m of msgs) {
     if (m.role === 'user') {
-      flushPending();
+      out.push({ id: `hist-${idx++}`, role: 'user', status: 'done', content: m.content });
+    } else if (m.role === 'assistant') {
       out.push({
         id: `hist-${idx++}`,
-        role: 'user',
+        role: 'assistant',
         status: 'done',
-        thought: '',
+        thought: m.reasoning_content ?? '',
         content: m.content,
-        tools: [],
+        tokenUsage: m.token_usage,
       });
-    } else if (m.role === 'assistant') {
-      if (m.tool_calls && m.tool_calls.length > 0) {
-        // 中间轮（带 tool_calls）：首次创建 pending，后续中间轮忽略（引导语/中间思考丢弃）
-        if (!pending) {
-          pending = {
-            id: `hist-${idx++}`,
-            role: 'assistant',
-            status: 'done',
-            thought: '',
-            content: '',
-            tools: [],
-            tokenUsage: m.token_usage,
-          };
-        }
-      } else if (pending) {
-        // 最终正文轮：补全 pending 的正文/思考，push
-        pending.content = m.content;
-        pending.thought = m.reasoning_content ?? '';
-        pending.tokenUsage = m.token_usage;
-        flushPending();
-      } else {
-        // 纯对话（无工具）
-        out.push({
-          id: `hist-${idx++}`,
-          role: 'assistant',
-          status: 'done',
-          thought: m.reasoning_content ?? '',
-          content: m.content,
-          tools: [],
-          tokenUsage: m.token_usage,
-        });
-      }
     } else {
-      // role === 'tool'
-      if (pending) {
-        pending.tools.push({ toolName: m.name, result: m.content, success: m.success });
-      } else {
-        // 孤立 tool（异常）：独立展示为一条工具摘要消息
-        out.push({
-          id: `hist-${idx++}`,
-          role: 'assistant',
-          status: 'done',
-          thought: '',
-          content: '',
-          tools: [{ toolName: m.name, result: m.content, success: m.success }],
-        });
-      }
+      // role === 'tool'：独立折叠卡片，参数/状态/结果自包含，不依附 assistant
+      out.push({
+        id: `hist-${idx++}`,
+        role: 'tool',
+        tool: {
+          id: m.tool_call_id,
+          toolName: m.name,
+          arguments: m.arguments,
+          status: m.success ? 'success' : 'error',
+          result: m.content,
+        },
+      });
     }
   }
-  flushPending();
   return out;
 }
 
-/** 定位当前正在组装的 assistant 消息（最后一条 assistant） */
-function lastAssistantIndex(messages: ChatMessage[]): number {
+/** 定位最后一条指定 role 的消息（assistant 事件更新末 assistant；tool_result 更新末 tool） */
+function lastIndexByRole(messages: ChatMessage[], role: ChatMessage['role']): number {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'assistant') return i;
+    if (messages[i].role === role) return i;
   }
   return -1;
 }
 
-/** 更新末工具摘要（不可变；tool_call/tool_result 由后端严格成对发射） */
-function updateLastTool(tools: ToolCallRecord[], patch: Partial<ToolCallRecord>): ToolCallRecord[] {
-  const next = [...tools];
-  next[next.length - 1] = { ...next[next.length - 1], ...patch };
-  return next;
+/** 新建一条空的 streaming assistant 气泡（首轮由 send 预创建，后续轮由 round_start 触发） */
+function newAssistant(id: string): ChatMessage {
+  return { id, role: 'assistant', status: 'streaming', thought: '', content: '' };
 }
 
 /** 事件 → 新消息数组（纯函数，供 setMessages 函数式更新） */
-function applyEvent(prev: ChatMessage[], ev: EngineEvent): ChatMessage[] {
-  const idx = lastAssistantIndex(prev);
+function applyEvent(prev: ChatMessage[], ev: EngineEvent, newId: () => string): ChatMessage[] {
+  // 轮次边界：封口上一轮 assistant、开新气泡（第一轮复用 send 预创建的空气泡）
+  if (ev.type === 'round_start') {
+    const idx = lastIndexByRole(prev, 'assistant');
+    if (idx < 0) return prev;
+    const current = prev[idx] as AssistantMessage;
+    const isEmpty = !current.thought && !current.content;
+    if (isEmpty) return prev;
+    const copy = [...prev];
+    copy[idx] = { ...current, status: 'done' };
+    return [...copy, newAssistant(newId())];
+  }
+
+  // 工具发起：追加独立 tool 消息（running 状态，tool_result 再回填结果）
+  if (ev.type === 'tool_call') {
+    return [
+      ...prev,
+      {
+        id: newId(),
+        role: 'tool',
+        tool: { id: ev.id, toolName: ev.tool_name, arguments: ev.arguments, status: 'running' },
+      },
+    ];
+  }
+
+  // 工具结果：更新最后一条 tool 消息的状态与结果
+  if (ev.type === 'tool_result') {
+    const idx = lastIndexByRole(prev, 'tool');
+    if (idx < 0) return prev;
+    const copy = [...prev];
+    const current = copy[idx] as ToolMessage;
+    copy[idx] = {
+      ...current,
+      tool: { ...current.tool, result: ev.result, status: ev.success ? 'success' : 'error' },
+    };
+    return copy;
+  }
+
+  // 其余事件作用于最后一条 assistant
+  const idx = lastIndexByRole(prev, 'assistant');
   if (idx < 0) return prev;
 
-  const current = prev[idx];
-  let next: ChatMessage = current;
+  const current = prev[idx] as AssistantMessage;
+  let next: AssistantMessage = current;
 
   switch (ev.type) {
     case 'thought_delta':
@@ -123,15 +114,6 @@ function applyEvent(prev: ChatMessage[], ev: EngineEvent): ChatMessage[] {
       break;
     case 'message_delta':
       next = { ...current, content: current.content + ev.delta };
-      break;
-    case 'tool_call':
-      next = { ...current, tools: [...current.tools, { toolName: ev.tool_name }] };
-      break;
-    case 'tool_result':
-      next = {
-        ...current,
-        tools: updateLastTool(current.tools, { result: ev.result, success: ev.success }),
-      };
       break;
     case 'done':
       next = {
@@ -197,34 +179,23 @@ export function useChat(options: UseChatOptions = {}) {
         id: nextId(),
         role: 'user',
         content: trimmed,
-        thought: '',
-        tools: [],
         status: 'done',
       };
       const assistantId = nextId();
 
-      setMessages((prev) => [
-        ...prev,
-        userMsg,
-        {
-          id: assistantId,
-          role: 'assistant',
-          content: '',
-          thought: '',
-          tools: [],
-          status: 'streaming',
-        },
-      ]);
+      setMessages((prev) => [...prev, userMsg, newAssistant(assistantId)]);
       setIsBusy(true);
 
       try {
         await chat(trimmed, channelName, (ev) => {
-          setMessages((prev) => applyEvent(prev, ev));
+          setMessages((prev) => applyEvent(prev, ev, nextId));
         });
       } catch (error) {
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId ? { ...m, status: 'error', error: String(error) } : m,
+            m.id === assistantId && m.role === 'assistant'
+              ? { ...m, status: 'error', error: String(error) }
+              : m,
           ),
         );
       } finally {

@@ -59,6 +59,8 @@ where
     let mut accumulated_usage = TokenUsage::default();
 
     let last_result = loop {
+        // 轮次边界：每轮大模型调用开始前发标记，前端据此封口上一轮气泡、开新气泡
+        on_event(EngineEvent::RoundStart);
         let result = client
             .chat_stream(&messages, &tools_schema, |ev| match ev {
                 StreamEvent::ThoughtDelta { delta } => on_event(EngineEvent::ThoughtDelta { delta }),
@@ -92,7 +94,9 @@ where
         // 逐个执行工具，回填 role=tool，推前端事件，记精简记录
         for tc in &result.tool_calls {
             on_event(EngineEvent::ToolCall {
+                id: tc.id.clone(),
                 tool_name: tc.name.clone(),
+                arguments: tc.arguments.clone(),
             });
             let out = tools.invoke_tool(&tc.name, &tc.arguments).await;
             let success = !tool_failed(&out);
@@ -103,7 +107,7 @@ where
                 result: summary.clone(),
             });
             // 持久化 tool 消息（content 存精简摘要，注意力隔离；回填 LLM 仍用完整 out）
-            persisted.push(history::tool_entry(&tc.id, &tc.name, success, &summary));
+            persisted.push(history::tool_entry(&tc.id, &tc.name, tc.arguments.clone(), success, &summary));
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": tc.id,

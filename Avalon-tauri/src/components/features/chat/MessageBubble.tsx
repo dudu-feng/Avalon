@@ -1,6 +1,6 @@
 import type { ChatMessage } from '../../../types/chat';
 import { ThinkingBlock } from './ThinkingBlock';
-import { ActionBlock } from './ActionBlock';
+import { ActionStepItem } from './ActionStepItem';
 import styles from './MessageBubble.module.css';
 
 export interface MessageBubbleProps {
@@ -8,6 +8,17 @@ export interface MessageBubbleProps {
 }
 
 export function MessageBubble({ message }: MessageBubbleProps) {
+  // tool 消息：独立折叠卡片（左对齐，不套气泡外壳，参数/结果自包含）
+  if (message.role === 'tool') {
+    return (
+      <div className={`${styles.row} ${styles.assistant}`}>
+        <div className={styles.tool}>
+          <ActionStepItem tool={message.tool} />
+        </div>
+      </div>
+    );
+  }
+
   const isUser = message.role === 'user';
   const isError = message.status === 'error';
   const isStreaming = message.status === 'streaming';
@@ -33,15 +44,12 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {isError ? (
           <p className={styles.text}>{message.error}</p>
         ) : (
-          <p className={styles.text}>
-            {message.content}
-            {isStreaming && <span className={styles.cursor}>▌</span>}
-          </p>
-        )}
-        {message.tools.length > 0 && (
-          <div className={styles.actions}>
-            <ActionBlock tools={message.tools} />
-          </div>
+          (message.content || isStreaming) && (
+            <p className={styles.text}>
+              {message.content}
+              {isStreaming && <span className={styles.cursor}>▌</span>}
+            </p>
+          )
         )}
       </div>
     </div>

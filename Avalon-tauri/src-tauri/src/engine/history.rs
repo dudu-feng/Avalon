@@ -5,6 +5,8 @@
 
 #![allow(dead_code)]
 
+use serde_json::Value;
+
 use crate::llm::ChatResult;
 use crate::session::Message;
 
@@ -36,12 +38,19 @@ pub fn assistant_entry(result: &ChatResult) -> Message {
     }
 }
 
-/// 工具执行结果消息（对齐 OpenAI tool 消息，content 存精简摘要）
-pub fn tool_entry(tool_call_id: &str, name: &str, success: bool, content: &str) -> Message {
+/// 工具执行结果消息（对齐 OpenAI tool 消息，content 存精简摘要，arguments 自包含）
+pub fn tool_entry(
+    tool_call_id: &str,
+    name: &str,
+    arguments: Value,
+    success: bool,
+    content: &str,
+) -> Message {
     Message::Tool {
         time: now_str(),
         tool_call_id: tool_call_id.to_string(),
         name: name.to_string(),
+        arguments,
         success,
         content: content.to_string(),
     }

@@ -135,11 +135,14 @@ pub enum Message {
         #[serde(default)]
         model: String,
     },
-    /// 工具执行结果（对齐 OpenAI tool 消息，content 为精简摘要）
+    /// 工具执行结果（对齐 OpenAI tool 消息，content 为精简摘要，arguments 自包含供前端独立渲染）
     Tool {
         time: String,
         tool_call_id: String,
         name: String,
+        /// 本次调用的参数（JSON 对象，自包含；旧数据缺失时反序列化为 Null）
+        #[serde(default)]
+        arguments: serde_json::Value,
         success: bool,
         content: String,
     },

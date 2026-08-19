@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::llm::ChatResult;
 
@@ -13,12 +14,14 @@ use crate::llm::ChatResult;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EngineEvent {
+    /// 轮次边界：每轮大模型调用开始前发射，前端据此封口上一轮气泡、开新气泡
+    RoundStart,
     /// 思考增量（reasoning_content，前端思考块逐字渲染）
     ThoughtDelta { delta: String },
     /// 正文增量（前端逐字渲染）
     MessageDelta { delta: String },
-    /// 工具调用（发起）
-    ToolCall { tool_name: String },
+    /// 工具调用（发起，携带 id + 参数供前端展示）
+    ToolCall { id: String, tool_name: String, arguments: Value },
     /// 工具执行结果（精简摘要）
     ToolResult { tool_name: String, success: bool, result: String },
     /// 整体结束（结果驱动前端落库展示）

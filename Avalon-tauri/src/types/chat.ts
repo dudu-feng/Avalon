@@ -50,6 +50,8 @@ export type HistoryMessage =
       time: string;
       tool_call_id: string;
       name: string;
+      /** 工具调用参数（自包含，历史/旧数据可能缺失） */
+      arguments?: unknown;
       success: boolean;
       content: string;
     };
@@ -63,38 +65,44 @@ export interface CurrentSession {
 
 /** chat 命令经 Channel 推送的事件（判别联合，按 type 分发） */
 export type EngineEvent =
+  | { type: 'round_start' }
   | { type: 'thought_delta'; delta: string }
   | { type: 'message_delta'; delta: string }
-  | { type: 'tool_call'; tool_name: string }
+  | { type: 'tool_call'; id: string; tool_name: string; arguments?: unknown }
   | { type: 'tool_result'; tool_name: string; success: boolean; result: string }
   | { type: 'done'; result: ChatResult }
   | { type: 'error'; code: number; message: string };
 
 // ============ 展示模型（camelCase，前端内部）============
 
-export type MessageRole = 'user' | 'assistant';
-
 export type MessageStatus = 'streaming' | 'done' | 'error';
 
-/** 单个工具调用摘要（tool_call → tool_result 组装 / 历史 tool 消息还原） */
+/** 单个工具调用记录（tool 消息的自包含载体：参数 + 状态 + 结果） */
 export interface ToolCallRecord {
+  /** 工具调用唯一 id（对齐后端 tool_call_id） */
+  id?: string;
   toolName: string;
   arguments?: unknown;
+  /** 执行状态：running（执行中）/ success / error */
+  status: 'running' | 'success' | 'error';
   result?: string;
-  success?: boolean;
 }
 
-/** 会话中的一条消息 */
-export interface ChatMessage {
-  id: string;
-  role: MessageRole;
-  status: MessageStatus;
-  /** 思考过程（assistant 的 thought，reasoning_content delta 累加；user 为空串） */
-  thought: string;
-  /** 正文（assistant 的 message，delta 累加） */
-  content: string;
-  /** 工具调用摘要列表（单模型 ReAct：一次 chat 可多次工具调用，平铺展示） */
-  tools: ToolCallRecord[];
-  error?: string;
-  tokenUsage?: TokenUsage;
-}
+/**
+ * 会话中的一条消息（三态判别联合，对齐后端 messages 的 user/assistant/tool 平铺）
+ * - user：正文
+ * - assistant：思考 + 正文 + 用量（一轮大模型调用一个气泡）
+ * - tool：独立折叠卡片，参数/状态/结果自包含，不依附 assistant
+ */
+export type ChatMessage =
+  | { id: string; role: 'user'; status: MessageStatus; content: string }
+  | {
+      id: string;
+      role: 'assistant';
+      status: MessageStatus;
+      thought: string;
+      content: string;
+      error?: string;
+      tokenUsage?: TokenUsage;
+    }
+  | { id: string; role: 'tool'; tool: ToolCallRecord };

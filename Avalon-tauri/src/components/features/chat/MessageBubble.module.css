@@ -22,6 +22,11 @@
   gap: 8px;
 }
 
+/* 思考/回复气泡（assistant）给最小宽度，避免只有「思考过程」或极短正文时过窄 */
+.assistant .bubble {
+  min-width: 30%;
+}
+
 .user .bubble {
   background: var(--primary);
   color: var(--primary-foreground);
@@ -53,7 +58,7 @@
   }
 }
 
-.actions {
-  display: grid;
-  gap: 8px;
+.tool {
+  min-width: 30%;
+  max-width: 78%;
 }
