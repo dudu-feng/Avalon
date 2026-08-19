@@ -106,6 +106,18 @@ impl AppConfig {
         self.data_root().join("models/whisper")
     }
 
+    // —— log 相关（日志/统计数据，独立于 memory/session 生命周期）——
+
+    /// 日志数据根：data_root/log（存放各类日志与统计，usage 是其中一类）
+    pub fn log_path(&self) -> PathBuf {
+        self.data_root().join("log")
+    }
+
+    /// 用量统计文件：data_root/log/usage/usage.json
+    pub fn usage_path(&self) -> PathBuf {
+        self.log_path().join("usage/usage.json")
+    }
+
     // —— 二级派生 ——
 
     /// 本地 embedding 模型完整路径 = model_cache_dir + local_model

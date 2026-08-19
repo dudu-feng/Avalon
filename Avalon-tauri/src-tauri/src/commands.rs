@@ -13,6 +13,7 @@ use crate::engine::{Engine, EngineEvent};
 use crate::llm::{CompressResult, LlmState};
 use crate::prompt::build_compress_prompt;
 use crate::session::SessionData;
+use crate::usage::{DailyUsageRow, UsageStore};
 use crate::vector::RebuildStats;
 
 // ============ 配置管理 ============
@@ -133,4 +134,15 @@ pub async fn rebuild_memory_index(engine: State<'_, Arc<Engine>>) -> Result<Rebu
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
+}
+
+// ============ 用量统计 ============
+
+/// 查询最近 N 天用量（按「天 × 模型」展平），供首页控制台报表读取
+#[tauri::command]
+pub fn query_daily_usage(
+    days: usize,
+    usage: State<'_, Arc<UsageStore>>,
+) -> Result<Vec<DailyUsageRow>, String> {
+    Ok(usage.query_daily(days))
 }

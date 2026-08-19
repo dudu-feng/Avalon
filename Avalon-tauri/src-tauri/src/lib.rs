@@ -10,6 +10,7 @@ mod llm;
 mod prompt;
 mod session;
 mod tool;
+mod usage;
 mod vector;
 
 #[cfg(test)]
@@ -58,12 +59,14 @@ pub fn run() {
     let prompt_asm = prompt::PromptAssembler::new(&cfg);
     let tool_registry: Arc<dyn tool::ToolRegistry> =
         Arc::new(tool::ToolSet::new().with_memory(memory_index).with_config(store.clone()));
+    let usage_store: Arc<usage::UsageStore> = Arc::new(usage::UsageStore::new(cfg.usage_path()));
     let engine = Arc::new(engine::Engine::new(
         store.clone(),
         llm.clone(),
         prompt_asm,
         tool_registry,
         session_store,
+        usage_store.clone(),
     ));
 
     // 4. 构建 Tauri 应用
@@ -72,6 +75,7 @@ pub fn run() {
         .manage(store)
         .manage(llm)
         .manage(engine)
+        .manage(usage_store)
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
@@ -84,6 +88,7 @@ pub fn run() {
             commands::save_session,
             commands::get_current_session,
             commands::rebuild_memory_index,
+            commands::query_daily_usage,
         ])
         .setup(move |_app| {
             // eager 预热：启动时后台加载，不阻塞主线程；失败降级（首次使用时 get_sync 再试）

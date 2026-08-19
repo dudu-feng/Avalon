@@ -20,6 +20,7 @@ use crate::llm::LlmState;
 use crate::prompt::PromptAssembler;
 use crate::session::{SessionData, SessionStore};
 use crate::tool::ToolRegistry;
+use crate::usage::UsageStore;
 use crate::vector::RebuildStats;
 
 pub use events::EngineEvent;
@@ -31,6 +32,7 @@ pub struct Engine {
     prompt: PromptAssembler,
     tools: Arc<dyn ToolRegistry>,
     session: Arc<dyn SessionStore>,
+    usage: Arc<UsageStore>,
 }
 
 impl Engine {
@@ -40,6 +42,7 @@ impl Engine {
         prompt: PromptAssembler,
         tools: Arc<dyn ToolRegistry>,
         session: Arc<dyn SessionStore>,
+        usage: Arc<UsageStore>,
     ) -> Self {
         Self {
             config,
@@ -47,6 +50,7 @@ impl Engine {
             prompt,
             tools,
             session,
+            usage,
         }
     }
 
@@ -67,6 +71,7 @@ impl Engine {
             &self.prompt,
             self.tools.as_ref(),
             self.session.as_ref(),
+            self.usage.as_ref(),
             &mut on_event,
         )
         .await

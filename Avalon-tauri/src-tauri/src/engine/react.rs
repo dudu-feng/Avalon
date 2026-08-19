@@ -15,6 +15,7 @@ use crate::llm::{ChatResult, LlmState, StreamEvent, TokenUsage};
 use crate::prompt::PromptAssembler;
 use crate::session::{Message, SessionStore};
 use crate::tool::ToolRegistry;
+use crate::usage::UsageStore;
 
 use super::events::EngineEvent;
 use super::history;
@@ -28,6 +29,7 @@ pub(crate) async fn run_loop<F>(
     prompt: &PromptAssembler,
     tools: &dyn ToolRegistry,
     session: &dyn SessionStore,
+    usage: &UsageStore,
     on_event: &mut F,
 ) -> Result<()>
 where
@@ -113,6 +115,11 @@ where
     // 每轮收尾：持久化完整轨迹 + 自动压缩检查（决策 D3：init/save 留给调用方）
     session.update_current_session(channel, &persisted)?;
     session.auto_compress_check(channel, &persisted).await?;
+
+    // 旁路统计：失败只记日志，绝不把 chat 主流程带崩（决策 D5）
+    if let Err(e) = usage.record_usage(&last_result.model, &last_result.usage) {
+        eprintln!("[Usage] 记录 token 用量失败: {e}");
+    }
 
     on_event(EngineEvent::Done { result: last_result });
     Ok(())
