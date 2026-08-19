@@ -131,6 +131,9 @@ pub enum Message {
         tool_calls: Option<Vec<ToolCall>>,
         #[serde(default)]
         token_usage: TokenUsage,
+        /// 生成该回复的模型名（供各模型 token 报表归集）
+        #[serde(default)]
+        model: String,
     },
     /// 工具执行结果（对齐 OpenAI tool 消息，content 为精简摘要）
     Tool {

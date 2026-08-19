@@ -32,6 +32,7 @@ pub fn assistant_entry(result: &ChatResult) -> Message {
         // 空 tool_calls → None（最终正文轮）
         tool_calls: (!result.tool_calls.is_empty()).then(|| result.tool_calls.clone()),
         token_usage: result.usage.clone(),
+        model: result.model.clone(),
     }
 }
 

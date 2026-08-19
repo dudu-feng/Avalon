@@ -41,6 +41,7 @@ where
         .active_model_config()
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("未配置活跃模型（active_model 无效）"))?;
+    let model_name = model.modelname.clone();
     let client = llm.client(model, cfg.llm.clone());
 
     // 本轮 messages：system + user + 循环内累加的 assistant(tool_calls)/tool 消息
@@ -79,6 +80,7 @@ where
                 thought: accumulated_thought,
                 tool_calls: Vec::new(),
                 usage: accumulated_usage,
+                model: model_name.clone(),
             };
         }
 

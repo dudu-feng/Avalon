@@ -116,6 +116,7 @@ impl LlmClient {
             message,
             tool_calls,
             usage,
+            model: self.model.modelname.clone(),
         };
         on_event(StreamEvent::Done {
             result: result.clone(),
@@ -314,5 +315,11 @@ pub(crate) fn parse_usage(u: &Value) -> TokenUsage {
         input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as u32,
         output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as u32,
         total_tokens: u["total_tokens"].as_u64().unwrap_or(0) as u32,
+        reasoning_tokens: u["completion_tokens_details"]["reasoning_tokens"]
+            .as_u64()
+            .unwrap_or(0) as u32,
+        cached_tokens: u["prompt_tokens_details"]["cached_tokens"]
+            .as_u64()
+            .unwrap_or(0) as u32,
     }
 }

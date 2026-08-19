@@ -12,6 +12,12 @@ pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub total_tokens: u32,
+    /// 思考 token 数（completion_tokens_details.reasoning_tokens，DeepSeek reasoner 才有）
+    #[serde(default)]
+    pub reasoning_tokens: u32,
+    /// 缓存命中的输入 token 数（prompt_tokens_details.cached_tokens）
+    #[serde(default)]
+    pub cached_tokens: u32,
 }
 
 /// 工具调用描述（对齐 OpenAI tool_calls 数组元素）
@@ -38,6 +44,9 @@ pub struct ChatResult {
     pub tool_calls: Vec<ToolCall>,
     #[serde(default)]
     pub usage: TokenUsage,
+    /// 生成本结果的模型名（供落盘 / 报表按模型归集）
+    #[serde(default)]
+    pub model: String,
 }
 
 /// 压缩层结果

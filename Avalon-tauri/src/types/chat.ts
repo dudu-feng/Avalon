@@ -10,6 +10,10 @@ export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  /** 思考 token（completion_tokens_details.reasoning_tokens，DeepSeek reasoner） */
+  reasoning_tokens?: number;
+  /** 缓存命中的输入 token（prompt_tokens_details.cached_tokens） */
+  cached_tokens?: number;
 }
 
 /** 工具调用（对齐后端 ToolCall） */
@@ -25,6 +29,8 @@ export interface ChatResult {
   message: string;
   tool_calls: ToolCall[];
   usage: TokenUsage;
+  /** 生成本结果的模型名（供按模型归集统计） */
+  model: string;
 }
 
 /** 后端持久化的历史消息（get_current_session 返回的 messages 元素，判别联合） */
@@ -37,6 +43,7 @@ export type HistoryMessage =
       reasoning_content?: string | null;
       tool_calls?: ToolCall[] | null;
       token_usage: TokenUsage;
+      model?: string;
     }
   | {
       role: 'tool';
