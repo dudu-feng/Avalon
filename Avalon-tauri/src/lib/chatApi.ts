@@ -5,7 +5,7 @@
 // Tauri 命令参数默认 camelCase，与 Rust 端 snake_case 自动映射。
 
 import { Channel, invoke } from '@tauri-apps/api/core';
-import type { CurrentSession, EngineEvent } from '../types/chat';
+import type { ContextUsage, CurrentSession, EngineEvent } from '../types/chat';
 
 /** 默认会话渠道（应用渠道，对应 current/app.json） */
 export const DEFAULT_CHANNEL = 'app';
@@ -18,6 +18,11 @@ export async function initSession(channelName: string): Promise<void> {
 /** 读取当前会话（含历史消息 + 状态），供 chat 页加载历史 */
 export async function getCurrentSession(channelName: string): Promise<CurrentSession> {
   return invoke<CurrentSession>('get_current_session', { channelName });
+}
+
+/** 读取当前会话上下文用量（最大输入 token vs 压缩阈值），供圆形进度条展示 */
+export async function getContextUsage(channelName: string): Promise<ContextUsage> {
+  return invoke<ContextUsage>('get_context_usage', { channelName });
 }
 
 /** 归档当前会话：压缩 + 移入 history */

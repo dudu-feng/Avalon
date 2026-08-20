@@ -19,7 +19,7 @@ use anyhow::{anyhow, Result};
 use crate::config::{AppConfig, SearchMode, VectorBackend};
 use crate::embedding::EmbedderHandle;
 
-pub use doc::{MemoryDoc, MemoryHit, RebuildStats};
+pub use doc::{MemoryDoc, MemoryHit, RebuildProgress, RebuildStats};
 pub use memory::InMemoryStore;
 
 /// 检索契约：检索工具（04 search_session_memory）依赖，只读语义

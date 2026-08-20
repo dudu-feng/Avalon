@@ -18,3 +18,12 @@ export type { ThemeToggleProps } from './ThemeToggle';
 
 export { PageContainer } from './PageContainer';
 export type { PageContainerProps } from './PageContainer';
+
+export { ScrollArea } from './ScrollArea';
+export type { ScrollAreaProps } from './ScrollArea';
+
+export { CircleProgress } from './CircleProgress';
+export type { CircleProgressProps } from './CircleProgress';
+
+export { ProgressBar } from './ProgressBar';
+export type { ProgressBarProps } from './ProgressBar';

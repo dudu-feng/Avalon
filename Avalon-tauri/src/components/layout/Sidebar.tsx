@@ -1,4 +1,5 @@
 import { MenuItem } from './MenuItem';
+import { ScrollArea } from '../ui';
 import styles from './Sidebar.module.css';
 import type { MenuItemData } from '../../types';
 import blackLogo from '../../assets/avalon-logo/Avalon-black.png';
@@ -13,7 +14,12 @@ export interface SidebarProps {
 
 export function Sidebar({ title, items, activeId, onSelect }: SidebarProps) {
   return (
-    <aside className={styles.sidebar} aria-label="Sidebar navigation">
+    <ScrollArea
+      as="aside"
+      className={styles.sidebar}
+      viewportClassName={styles.sidebarViewport}
+      aria-label="Sidebar navigation"
+    >
       <div className={styles.brand}>
         <img className={styles.logo} src={creamLogo} alt="" />
         <img className={styles.logoDark} src={blackLogo} alt="" />
@@ -30,6 +36,6 @@ export function Sidebar({ title, items, activeId, onSelect }: SidebarProps) {
           />
         ))}
       </nav>
-    </aside>
+    </ScrollArea>
   );
 }

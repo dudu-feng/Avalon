@@ -38,6 +38,17 @@ pub struct RebuildStats {
     pub errors: Vec<String>,
 }
 
+/// 重建进度事件（rebuild_memory_index 经 Channel 推送）
+#[derive(Debug, Clone, Serialize)]
+pub struct RebuildProgress {
+    /// 已处理 session 数（1-based）
+    pub processed: usize,
+    /// 待处理 session 总数
+    pub total: usize,
+    /// 当前处理的文件名（供 UI 展示）
+    pub current: String,
+}
+
 impl Default for RebuildStats {
     fn default() -> Self {
         Self {

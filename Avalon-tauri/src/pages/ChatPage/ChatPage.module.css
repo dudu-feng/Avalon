@@ -9,5 +9,17 @@
 .toolbar {
   flex-shrink: 0;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.usage {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.usageLabel {
+  font-size: 12px;
+  color: var(--muted-foreground);
 }

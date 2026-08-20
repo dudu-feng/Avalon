@@ -148,6 +148,15 @@ pub enum Message {
     },
 }
 
+/// 当前会话上下文用量（get_context_usage 命令返回）
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextUsage {
+    /// 当前会话最大输入 token（遍历 assistant 消息的 token_usage.input_tokens 取最大）
+    pub used_tokens: usize,
+    /// 压缩阈值（config.session_memory.compress_threshold）
+    pub threshold: usize,
+}
+
 /// 限界会话上下文（get_context_for_prompt 的输出，序列化为 JSON 拼进 system_prompt）
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionContext {

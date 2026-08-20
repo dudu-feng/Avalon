@@ -63,6 +63,12 @@ export interface CurrentSession {
   messages: HistoryMessage[];
 }
 
+/** 当前会话上下文用量（get_context_usage 命令返回） */
+export interface ContextUsage {
+  used_tokens: number;
+  threshold: number;
+}
+
 /** chat 命令经 Channel 推送的事件（判别联合，按 type 分发） */
 export type EngineEvent =
   | { type: 'round_start' }

@@ -87,6 +87,7 @@ pub fn run() {
             commands::init_session,
             commands::save_session,
             commands::get_current_session,
+            commands::get_context_usage,
             commands::rebuild_memory_index,
             commands::query_daily_usage,
         ])

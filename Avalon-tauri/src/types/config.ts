@@ -62,3 +62,10 @@ export interface RebuildStats {
   total_chunks: number;
   errors: string[];
 }
+
+/** 重建进度事件（rebuild_memory_index 经 Channel 推送） */
+export interface RebuildProgress {
+  processed: number;
+  total: number;
+  current: string;
+}

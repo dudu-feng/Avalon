@@ -14,7 +14,7 @@ pub mod types;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::vector::RebuildStats;
+use crate::vector::{RebuildProgress, RebuildStats};
 
 pub use store::FileSessionStore;
 pub use types::*;
@@ -26,6 +26,8 @@ pub trait SessionStore: Send + Sync {
     fn init_session(&self, channel: &str) -> Result<()>;
     /// 读取当前会话完整数据（供前端加载历史消息 / 判断会话状态）
     fn get_current_session(&self, channel: &str) -> Result<SessionData>;
+    /// 当前会话上下文用量（最大输入 token vs 压缩阈值），供前端圆形进度条展示
+    fn get_context_usage(&self, channel: &str) -> Result<ContextUsage>;
     /// 限界会话上下文（JSON 字符串），供 engine 拼进 system_prompt
     fn get_context_for_prompt(&self, channel: &str) -> Result<String>;
     /// 持久化本轮 chat_history（追加到 messages 字段）
@@ -35,7 +37,11 @@ pub trait SessionStore: Send + Sync {
     /// 归档当前会话（先压缩，写 history/{id}/index.json，重置 current）
     async fn save_current_session(&self, channel: &str) -> Result<()>;
     /// 重建向量索引：清空 + 重扫 history/current + 重新入库（维护操作，设置页触发）
-    fn rebuild_index(&self) -> Result<RebuildStats>;
+    /// 逐 session 处理时经 on_progress 上报进度（跨 spawn_blocking 线程，回调须 Send + Sync）
+    fn rebuild_index(
+        &self,
+        on_progress: &(dyn Fn(RebuildProgress) + Send + Sync),
+    ) -> Result<RebuildStats>;
 }
 
 /// 会话 ID 时间戳：YYYY-MM-DD-HH_MM_SS（下划线，文件名安全，字典序 = 时间序）

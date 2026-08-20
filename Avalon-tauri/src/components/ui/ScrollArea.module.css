@@ -1,0 +1,41 @@
+.root {
+  position: relative;
+  display: flex;
+  overflow: hidden;
+}
+
+.viewport {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+  scrollbar-width: none; /* Firefox */
+}
+
+/* Chromium / WebView2：隐藏原生滚动条（含两端三角箭头） */
+.viewport::-webkit-scrollbar {
+  display: none;
+}
+
+/* 独立滚动条列：不与 viewport 内容重叠，常驻预留 10px 触达区 */
+.track {
+  flex-shrink: 0;
+  width: 10px;
+  position: relative;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.trackVisible {
+  opacity: 1;
+}
+
+.thumb {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  width: 6px;
+  border-radius: 9999px;
+  background: var(--muted-foreground);
+  opacity: 0.45;
+}

@@ -57,6 +57,12 @@
   flex-wrap: wrap;
 }
 
+.rebuildProgress {
+  display: grid;
+  gap: 6px;
+  flex-basis: 100%;
+}
+
 .rebuildResult {
   font-size: 13px;
   color: var(--secondary-foreground);

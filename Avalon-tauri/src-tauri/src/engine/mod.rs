@@ -18,10 +18,10 @@ use anyhow::Result;
 use crate::config::ConfigStore;
 use crate::llm::LlmState;
 use crate::prompt::PromptAssembler;
-use crate::session::{SessionData, SessionStore};
+use crate::session::{ContextUsage, SessionData, SessionStore};
 use crate::tool::ToolRegistry;
 use crate::usage::UsageStore;
-use crate::vector::RebuildStats;
+use crate::vector::{RebuildProgress, RebuildStats};
 
 pub use events::EngineEvent;
 
@@ -87,13 +87,22 @@ impl Engine {
         self.session.get_current_session(channel)
     }
 
+    /// 读取当前会话上下文用量（供前端圆形进度条展示）
+    pub fn get_context_usage(&self, channel: &str) -> Result<ContextUsage> {
+        self.session.get_context_usage(channel)
+    }
+
     /// 归档当前会话（压缩 + 移入 history）—— 调用方在 run 后触发（决策 D3）
     pub async fn save_session(&self, channel: &str) -> Result<()> {
         self.session.save_current_session(channel).await
     }
 
     /// 重建会话向量库（维护操作，设置页触发）：清空 + 重扫 history/current + 重新入库
-    pub fn rebuild_memory_index(&self) -> Result<RebuildStats> {
-        self.session.rebuild_index()
+    /// 逐 session 处理时经 on_progress 上报进度（跨 spawn_blocking 线程，回调须 Send + Sync）
+    pub fn rebuild_memory_index(
+        &self,
+        on_progress: impl Fn(RebuildProgress) + Send + Sync,
+    ) -> Result<RebuildStats> {
+        self.session.rebuild_index(&on_progress)
     }
 }

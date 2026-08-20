@@ -1,14 +1,16 @@
 .sidebar {
   width: 240px;
   max-width: 100%;
-  padding: 16px;
-  overflow-y: auto;
   border-right: 1px solid var(--sidebar-border);
   background: var(--sidebar);
   color: var(--sidebar-foreground);
+  flex-shrink: 0;
+}
+
+.sidebarViewport {
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  padding: 16px;
 }
 
 .brand {

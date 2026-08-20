@@ -4,8 +4,15 @@
 // messages（ChatMessage[]）供展示组件渲染。会话生命周期（init/save）也收在此。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChatMessage, EngineEvent, HistoryMessage } from '../../../types/chat';
-import { chat, DEFAULT_CHANNEL, getCurrentSession, initSession, saveSession } from '../../../lib/chatApi';
+import type { ChatMessage, ContextUsage, EngineEvent, HistoryMessage } from '../../../types/chat';
+import {
+  chat,
+  DEFAULT_CHANNEL,
+  getContextUsage,
+  getCurrentSession,
+  initSession,
+  saveSession,
+} from '../../../lib/chatApi';
 
 export interface UseChatOptions {
   channelName?: string;
@@ -139,9 +146,19 @@ export function useChat(options: UseChatOptions = {}) {
   const { channelName = DEFAULT_CHANNEL } = options;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isBusy, setIsBusy] = useState(false);
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const idRef = useRef(0);
 
   const nextId = useCallback(() => `msg-${(idRef.current += 1)}`, []);
+
+  // 拉取当前会话上下文用量（挂载 + 每轮对话落库后刷新）
+  const refreshUsage = useCallback(async () => {
+    try {
+      setContextUsage(await getContextUsage(channelName));
+    } catch (e) {
+      console.error('get_context_usage 失败:', e);
+    }
+  }, [channelName]);
 
   // 挂载时加载当前会话历史：active 复用 → 有历史消息；新建 → 空
   useEffect(() => {
@@ -152,10 +169,11 @@ export function useChat(options: UseChatOptions = {}) {
         setMessages(mapHistoryMessages(s.messages));
       })
       .catch((e) => console.error('get_current_session 失败:', e));
+    refreshUsage();
     return () => {
       cancelled = true;
     };
-  }, [channelName]);
+  }, [channelName, refreshUsage]);
 
   // 新会话：归档当前 + 新建 + 清空前端列表
   const newSession = useCallback(async () => {
@@ -200,10 +218,11 @@ export function useChat(options: UseChatOptions = {}) {
         );
       } finally {
         setIsBusy(false);
+        refreshUsage();
       }
     },
-    [isBusy, channelName, nextId],
+    [isBusy, channelName, nextId, refreshUsage],
   );
 
-  return { messages, isBusy, send, newSession };
+  return { messages, isBusy, send, newSession, contextUsage };
 }

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { ScrollArea } from '../ui';
 import styles from './MainLayout.module.css';
 
 export interface MainLayoutProps {
@@ -13,7 +14,9 @@ export function MainLayout({ sidebar, header, children }: MainLayoutProps) {
       {sidebar}
       <div className={styles.main}>
         {header}
-        <main className={styles.content}>{children}</main>
+        <ScrollArea as="main" className={styles.contentRoot} viewportClassName={styles.content}>
+          {children}
+        </ScrollArea>
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ChangeEvent } from 'react';
-import { PageContainer, Card, Button, Input, Select, Badge } from '../../components/ui';
+import { PageContainer, Card, Button, Input, Select, Badge, ProgressBar } from '../../components/ui';
 import { ModelCard } from '../../components/features/settings';
 import { getConfig, saveConfig, rebuildMemoryIndex } from '../../lib/settingsApi';
 import type {
@@ -7,6 +7,7 @@ import type {
   ModelConfig,
   EmbeddingMode,
   EmbeddingLoadMode,
+  RebuildProgress,
   SearchMode,
   VectorBackend,
 } from '../../types/config';
@@ -45,6 +46,7 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildProgress, setRebuildProgress] = useState<RebuildProgress | null>(null);
   const [rebuildResult, setRebuildResult] = useState<string | null>(null);
 
   useEffect(() => {
@@ -111,9 +113,10 @@ export function SettingsPage() {
   async function handleRebuild() {
     if (!window.confirm('确定重建会话向量库？将清空现有索引并重新扫描全部会话。')) return;
     setRebuilding(true);
+    setRebuildProgress(null);
     setRebuildResult(null);
     try {
-      const stats = await rebuildMemoryIndex();
+      const stats = await rebuildMemoryIndex((p) => setRebuildProgress(p));
       setRebuildResult(
         `重建完成：归档 ${stats.archived_sessions}、活跃 ${stats.active_sessions}、共 ${stats.total_chunks} 块` +
           (stats.errors.length ? `，${stats.errors.length} 个错误` : ''),
@@ -122,6 +125,7 @@ export function SettingsPage() {
       setRebuildResult(`重建失败: ${e}`);
     } finally {
       setRebuilding(false);
+      setRebuildProgress(null);
     }
   }
 
@@ -354,6 +358,22 @@ export function SettingsPage() {
           <Button variant="secondary" size="sm" onClick={handleRebuild} disabled={rebuilding}>
             {rebuilding ? '重建中…' : '重建会话向量库'}
           </Button>
+          {rebuilding && (
+            <div className={styles.rebuildProgress}>
+              <ProgressBar
+                value={
+                  rebuildProgress
+                    ? (rebuildProgress.processed / rebuildProgress.total) * 100
+                    : undefined
+                }
+              />
+              <p className={styles.rebuildResult}>
+                {rebuildProgress
+                  ? `重建中 ${rebuildProgress.processed}/${rebuildProgress.total} — ${rebuildProgress.current}`
+                  : '重建中…'}
+              </p>
+            </div>
+          )}
           {rebuildResult && <p className={styles.rebuildResult}>{rebuildResult}</p>}
         </div>
       </Card>

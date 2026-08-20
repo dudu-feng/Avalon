@@ -12,9 +12,9 @@ use crate::config::{AppConfig, ConfigStore};
 use crate::engine::{Engine, EngineEvent};
 use crate::llm::{CompressResult, LlmState};
 use crate::prompt::build_compress_prompt;
-use crate::session::SessionData;
+use crate::session::{ContextUsage, SessionData};
 use crate::usage::{DailyUsageRow, UsageStore};
-use crate::vector::RebuildStats;
+use crate::vector::{RebuildProgress, RebuildStats};
 
 // ============ 配置管理 ============
 
@@ -113,6 +113,15 @@ pub fn get_current_session(
     engine.get_current_session(&channel_name).map_err(|e| e.to_string())
 }
 
+/// 读取当前会话上下文用量（最大输入 token vs 压缩阈值，供前端圆形进度条展示）
+#[tauri::command]
+pub fn get_context_usage(
+    channel_name: String,
+    engine: State<'_, Arc<Engine>>,
+) -> Result<ContextUsage, String> {
+    engine.get_context_usage(&channel_name).map_err(|e| e.to_string())
+}
+
 /// 归档当前会话（压缩 + 移入 history）
 #[tauri::command]
 pub async fn save_session(
@@ -126,14 +135,22 @@ pub async fn save_session(
 }
 
 /// 重建会话向量库：清空 + 重扫 history/current + 重新入库（设置页维护操作）
+/// 逐 session 处理时经 Channel<RebuildProgress> 上报进度。
 /// 同步 CPU/IO 密集，用 spawn_blocking 避免阻塞主线程。
 #[tauri::command]
-pub async fn rebuild_memory_index(engine: State<'_, Arc<Engine>>) -> Result<RebuildStats, String> {
+pub async fn rebuild_memory_index(
+    engine: State<'_, Arc<Engine>>,
+    on_event: Channel<RebuildProgress>,
+) -> Result<RebuildStats, String> {
     let engine = engine.inner().clone();
-    tokio::task::spawn_blocking(move || engine.rebuild_memory_index())
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        engine.rebuild_memory_index(move |p| {
+            let _ = on_event.send(p);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 // ============ 用量统计 ============

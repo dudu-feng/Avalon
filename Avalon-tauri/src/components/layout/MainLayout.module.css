@@ -14,11 +14,13 @@
   flex-direction: column;
 }
 
-.content {
+.contentRoot {
   flex: 1;
   min-height: 0;
+}
+
+.content {
   padding: 24px;
-  overflow-y: auto;
 }
 
 @media (max-width: 640px) {

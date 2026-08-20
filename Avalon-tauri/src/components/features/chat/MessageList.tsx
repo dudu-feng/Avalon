@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { ChatMessage } from '../../../types/chat';
 import { MessageBubble } from './MessageBubble';
+import { ScrollArea } from '../../ui';
 import styles from './MessageList.module.css';
 
 export interface MessageListProps {
@@ -24,11 +25,11 @@ export function MessageList({ messages }: MessageListProps) {
   }
 
   return (
-    <div className={styles.list}>
+    <ScrollArea className={styles.listRoot} viewportClassName={styles.list}>
       {messages.map((m) => (
         <MessageBubble key={m.id} message={m} />
       ))}
       <div ref={endRef} />
-    </div>
+    </ScrollArea>
   );
 }
