@@ -24,6 +24,8 @@ pub use types::*;
 pub trait SessionStore: Send + Sync {
     /// 初始化：active 则复用，否则新建空会话（id = {channel}_{timestamp}）
     fn init_session(&self, channel: &str) -> Result<()>;
+    /// 新建会话：归档当前（若非空），再创建新的 active 会话（写 current + history 初始存档），返回新会话
+    async fn create_session(&self, channel: &str) -> Result<SessionData>;
     /// 读取当前会话完整数据（供前端加载历史消息 / 判断会话状态）
     fn get_current_session(&self, channel: &str) -> Result<SessionData>;
     /// 当前会话上下文用量（最大输入 token vs 压缩阈值），供前端圆形进度条展示
@@ -42,6 +44,16 @@ pub trait SessionStore: Send + Sync {
         &self,
         on_progress: &(dyn Fn(RebuildProgress) + Send + Sync),
     ) -> Result<RebuildStats>;
+    /// 列出全部会话元信息（active 置顶 + 归档按时间倒序），供会话历史列表
+    fn list_sessions(&self, channel: &str) -> Result<Vec<SessionMeta>>;
+    /// 切换会话：归档当前（若非空），将目标历史会话设为 active 并返回其完整数据
+    async fn switch_session(&self, channel: &str, id: &str) -> Result<SessionData>;
+    /// 读取某会话最新压缩块的原始消息（history/{id}/raw 下最大普通块），供前端渲染归档历史
+    fn load_session_raw(&self, id: &str) -> Result<Vec<Message>>;
+    /// 删除归档会话（目录 + 向量库该会话 chunk 一并清理）
+    fn delete_session(&self, id: &str) -> Result<()>;
+    /// 重命名会话标题（活跃或归档均可）
+    fn rename_session(&self, channel: &str, id: &str, title: &str) -> Result<()>;
 }
 
 /// 会话 ID 时间戳：YYYY-MM-DD-HH_MM_SS（下划线，文件名安全，字典序 = 时间序）

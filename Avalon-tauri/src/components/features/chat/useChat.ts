@@ -3,16 +3,26 @@
 // 对接后端 engine 的 EngineEvent 流式协议，把扁平事件流组装成
 // messages（ChatMessage[]）供展示组件渲染。会话生命周期（init/save）也收在此。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ChatMessage, ContextUsage, EngineEvent, HistoryMessage } from '../../../types/chat';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type {
+  ChatMessage,
+  ContextUsage,
+  EngineEvent,
+  HistoryMessage,
+  SessionMeta,
+} from '../../../types/chat';
 import {
   chat,
+  createSession,
   DEFAULT_CHANNEL,
+  deleteSession as deleteSessionApi,
   getContextUsage,
   getCurrentSession,
-  initSession,
-  saveSession,
+  listSessions,
+  loadSessionRaw,
+  renameSession as renameSessionApi,
   stopChat,
+  switchSession as switchSessionApi,
 } from '../../../lib/chatApi';
 
 export interface UseChatOptions {
@@ -150,9 +160,30 @@ export function useChat(options: UseChatOptions = {}) {
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [resetting, setResetting] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
   const idRef = useRef(0);
 
   const nextId = useCallback(() => `msg-${(idRef.current += 1)}`, []);
+
+  // 当前活跃会话 id：由列表推导（后端保证 active 唯一且置顶），切换/新建后随 refreshSessions 更新
+  const activeId = useMemo(() => sessions.find((s) => s.status === 'active')?.id ?? '', [sessions]);
+
+  // 拉取会话历史列表（挂载 + 新建/切换/删除/重命名后刷新）
+  const refreshSessions = useCallback(async () => {
+    try {
+      setSessions(await listSessions(channelName));
+    } catch (e) {
+      console.error('list_sessions 失败:', e);
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, [channelName]);
+
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
 
   // 拉取当前会话上下文用量（挂载 + 每轮对话落库后刷新）
   const refreshUsage = useCallback(async () => {
@@ -184,18 +215,69 @@ export function useChat(options: UseChatOptions = {}) {
   // 新会话：归档当前 + 新建 + 清空前端列表
   // 点击后先置 resetting 并乐观清空（立即反馈，避免等后端导致的静止），后端收尾后复位
   const newSession = useCallback(async () => {
-    if (isBusy || resetting) return;
+    if (isBusy || resetting || switching) return;
     setResetting(true);
     setMessages([]);
     try {
-      await saveSession(channelName);
-      await initSession(channelName);
+      await createSession(channelName);
+      await refreshSessions();
+      refreshUsage();
     } catch (e) {
       console.error('new_session 失败:', e);
     } finally {
       setResetting(false);
     }
-  }, [channelName, isBusy, resetting]);
+  }, [channelName, isBusy, resetting, switching, refreshSessions, refreshUsage]);
+
+  // 切换会话：归档当前（后端处理），将目标历史会话设为 active，读取其最新压缩块原始消息渲染
+  const switchSession = useCallback(
+    async (id: string) => {
+      if (isBusy || resetting || switching || !id || id === activeId) return;
+      setSwitching(true);
+      try {
+        await switchSessionApi(channelName, id);
+        const raw = await loadSessionRaw(id);
+        setMessages(mapHistoryMessages(raw));
+        await refreshSessions();
+        refreshUsage();
+      } catch (e) {
+        console.error('switch_session 失败:', e);
+      } finally {
+        setSwitching(false);
+      }
+    },
+    [channelName, isBusy, resetting, switching, activeId, refreshSessions, refreshUsage],
+  );
+
+  // 删除归档会话：后端清目录 + 向量 chunk，随后刷新列表
+  const deleteSession = useCallback(
+    async (id: string) => {
+      try {
+        await deleteSessionApi(id);
+      } catch (e) {
+        console.error('delete_session 失败:', e);
+      } finally {
+        await refreshSessions();
+      }
+    },
+    [refreshSessions],
+  );
+
+  // 重命名会话标题（活跃或归档均可），随后刷新列表
+  const renameSession = useCallback(
+    async (id: string, title: string) => {
+      const trimmed = title.trim();
+      if (!trimmed) return;
+      try {
+        await renameSessionApi(channelName, id, trimmed);
+      } catch (e) {
+        console.error('rename_session 失败:', e);
+      } finally {
+        await refreshSessions();
+      }
+    },
+    [channelName, refreshSessions],
+  );
 
   // 停止当前流式生成：置位后端取消标志，chat 提前收尾返回部分结果
   const stop = useCallback(() => {
@@ -206,7 +288,7 @@ export function useChat(options: UseChatOptions = {}) {
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || isBusy) return;
+      if (!trimmed || isBusy || resetting || switching) return;
 
       const userMsg: ChatMessage = {
         id: nextId(),
@@ -236,7 +318,7 @@ export function useChat(options: UseChatOptions = {}) {
         refreshUsage();
       }
     },
-    [isBusy, channelName, nextId, refreshUsage],
+    [isBusy, resetting, switching, channelName, nextId, refreshUsage],
   );
 
   return {
@@ -246,7 +328,14 @@ export function useChat(options: UseChatOptions = {}) {
     newSession,
     stop,
     contextUsage,
-    loading: initialLoading || resetting,
+    loading: initialLoading || resetting || switching,
     resetting,
+    switching,
+    sessions,
+    sessionsLoading,
+    activeId,
+    switchSession,
+    deleteSession,
+    renameSession,
   };
 }

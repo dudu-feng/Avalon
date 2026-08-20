@@ -63,6 +63,17 @@ export interface CurrentSession {
   messages: HistoryMessage[];
 }
 
+/** 会话列表元信息（list_sessions 返回，对齐后端 SessionMeta） */
+export interface SessionMeta {
+  id: string;
+  title: string;
+  status: 'active' | 'inactive' | 'archived';
+  /** 消息数量（未压缩消息 + 压缩块，粗略表示内容量） */
+  message_count: number;
+  /** 创建时间（epoch 秒，由 id 时间戳解析，供前端时间分组） */
+  created_at: number;
+}
+
 /** 当前会话上下文用量（get_context_usage 命令返回） */
 export interface ContextUsage {
   used_tokens: number;

@@ -1,12 +1,25 @@
 import { useEffect, useState } from 'react';
-import { useChat, MessageList, ChatInput } from '../../components/features/chat';
-import { Button } from '../../components/ui';
+import { useChat, MessageList, ChatInput, SessionList } from '../../components/features/chat';
 import { getConfig, setActiveModel } from '../../lib/settingsApi';
 import type { ModelConfig } from '../../types/config';
 import styles from './ChatPage.module.css';
 
 export function ChatPage() {
-  const { messages, isBusy, send, newSession, stop, contextUsage, loading, resetting } = useChat();
+  const {
+    messages,
+    isBusy,
+    send,
+    newSession,
+    stop,
+    contextUsage,
+    loading,
+    sessions,
+    sessionsLoading,
+    activeId,
+    switchSession,
+    deleteSession,
+    renameSession,
+  } = useChat();
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [activeModel, setActiveModelName] = useState('');
 
@@ -33,21 +46,27 @@ export function ChatPage() {
 
   return (
     <div className={styles.chat}>
-      <div className={styles.toolbar}>
-        <Button variant="ghost" size="sm" onClick={newSession} disabled={isBusy || resetting}>
-          {resetting ? '创建中…' : '⊕ 新会话'}
-        </Button>
-      </div>
-      <MessageList messages={messages} loading={loading} />
-      <ChatInput
-        onSubmit={send}
-        onStop={stop}
-        isBusy={isBusy}
-        models={models}
-        activeModel={activeModel}
-        onModelChange={onModelChange}
-        contextUsage={contextUsage}
+      <SessionList
+        sessions={sessions}
+        activeId={activeId}
+        loading={sessionsLoading}
+        onSelect={switchSession}
+        onNew={newSession}
+        onRename={renameSession}
+        onDelete={deleteSession}
       />
+      <div className={styles.conversation}>
+        <MessageList messages={messages} loading={loading} resetKey={activeId} />
+        <ChatInput
+          onSubmit={send}
+          onStop={stop}
+          isBusy={isBusy}
+          models={models}
+          activeModel={activeModel}
+          onModelChange={onModelChange}
+          contextUsage={contextUsage}
+        />
+      </div>
     </div>
   );
 }

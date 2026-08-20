@@ -2,13 +2,20 @@
   height: 100%;
   width: 100%;
   display: flex;
+  gap: 16px;
+}
+
+/* 右侧对话区：消息列表（flex:1）+ 输入卡片 */
+.conversation {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-.toolbar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
+@media (max-width: 640px) {
+  .chat {
+    flex-direction: column;
+  }
 }

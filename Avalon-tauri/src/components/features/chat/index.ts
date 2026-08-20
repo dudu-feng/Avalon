@@ -15,3 +15,6 @@ export type { ActionStepItemProps } from './ActionStepItem';
 
 export { ChatInput } from './ChatInput';
 export type { ChatInputProps } from './ChatInput';
+
+export { SessionList } from './SessionList';
+export type { SessionListProps } from './SessionList';

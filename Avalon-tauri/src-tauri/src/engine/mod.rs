@@ -20,7 +20,7 @@ use anyhow::Result;
 use crate::config::ConfigStore;
 use crate::llm::LlmState;
 use crate::prompt::PromptAssembler;
-use crate::session::{ContextUsage, SessionData, SessionStore};
+use crate::session::{ContextUsage, Message, SessionData, SessionMeta, SessionStore};
 use crate::tool::ToolRegistry;
 use crate::usage::UsageStore;
 use crate::vector::{RebuildProgress, RebuildStats};
@@ -106,6 +106,11 @@ impl Engine {
         self.session.init_session(channel)
     }
 
+    /// 新建会话：归档当前（若非空）+ 创建新 active 会话（写 current + history 初始存档）
+    pub async fn create_session(&self, channel: &str) -> Result<SessionData> {
+        self.session.create_session(channel).await
+    }
+
     /// 读取当前会话完整数据（供前端加载历史消息）
     pub fn get_current_session(&self, channel: &str) -> Result<SessionData> {
         self.session.get_current_session(channel)
@@ -128,5 +133,30 @@ impl Engine {
         on_progress: impl Fn(RebuildProgress) + Send + Sync,
     ) -> Result<RebuildStats> {
         self.session.rebuild_index(&on_progress)
+    }
+
+    /// 列出全部会话元信息（active 置顶 + 归档按时间倒序）
+    pub fn list_sessions(&self, channel: &str) -> Result<Vec<SessionMeta>> {
+        self.session.list_sessions(channel)
+    }
+
+    /// 切换会话：归档当前（若非空），将目标历史会话设为 active 并返回其完整数据
+    pub async fn switch_session(&self, channel: &str, id: &str) -> Result<SessionData> {
+        self.session.switch_session(channel, id).await
+    }
+
+    /// 读取某会话最新压缩块的原始消息（供前端渲染归档历史）
+    pub fn load_session_raw(&self, id: &str) -> Result<Vec<Message>> {
+        self.session.load_session_raw(id)
+    }
+
+    /// 删除归档会话（目录 + 向量库 chunk）
+    pub fn delete_session(&self, id: &str) -> Result<()> {
+        self.session.delete_session(id)
+    }
+
+    /// 重命名会话标题
+    pub fn rename_session(&self, channel: &str, id: &str, title: &str) -> Result<()> {
+        self.session.rename_session(channel, id, title)
     }
 }

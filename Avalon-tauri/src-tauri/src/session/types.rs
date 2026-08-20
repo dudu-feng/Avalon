@@ -70,6 +70,9 @@ where
 pub struct SessionData {
     pub id: String,
     pub status: SessionStatus,
+    /// 会话标题（归档时由首条 user 消息截断生成，空则前端回退时间戳）
+    #[serde(default)]
+    pub title: String,
     /// 已压缩轮数（下一普通块的 chunk 编号）
     #[serde(default)]
     pub compress_round: usize,
@@ -90,6 +93,7 @@ impl SessionData {
         Self {
             id: String::new(),
             status: SessionStatus::Inactive,
+            title: String::new(),
             compress_round: 0,
             compressed: Vec::new(),
             super_compressed: None,
@@ -99,15 +103,30 @@ impl SessionData {
 
     /// 新建活跃会话（id = {channel}_{timestamp}）
     pub fn new_active(id: String) -> Self {
+        // 初始标题 = id 的时间戳部分（去掉 {channel}_ 前缀），归档时若未手动改名则被首条消息覆盖
+        let title = id.splitn(2, '_').nth(1).unwrap_or(id.as_str()).to_string();
         Self {
             id,
             status: SessionStatus::Active,
+            title,
             compress_round: 0,
             compressed: Vec::new(),
             super_compressed: None,
             messages: Vec::new(),
         }
     }
+}
+
+/// 会话列表元信息（list_sessions 返回）
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionMeta {
+    pub id: String,
+    pub title: String,
+    pub status: SessionStatus,
+    /// 消息数量（未压缩消息 + 压缩块，粗略表示内容量）
+    pub message_count: usize,
+    /// 创建时间（epoch 秒，由 id 时间戳解析，供前端时间分组）
+    pub created_at: i64,
 }
 
 /// 一条会话消息（判别联合：user/assistant/tool 结构各异，对齐 OpenAI 消息模型）

@@ -12,7 +12,7 @@ use crate::config::{AppConfig, ConfigStore};
 use crate::engine::{Engine, EngineEvent};
 use crate::llm::{CompressResult, LlmState};
 use crate::prompt::build_compress_prompt;
-use crate::session::{ContextUsage, SessionData};
+use crate::session::{ContextUsage, Message, SessionData, SessionMeta};
 use crate::usage::{DailyUsageRow, UsageStore};
 use crate::vector::{RebuildProgress, RebuildStats};
 
@@ -118,6 +118,18 @@ pub fn init_session(channel_name: String, engine: State<'_, Arc<Engine>>) -> Res
     engine.init_session(&channel_name).map_err(|e| e.to_string())
 }
 
+/// 新建会话：归档当前（若非空），创建新的 active 会话，返回新会话完整数据
+#[tauri::command]
+pub async fn create_session(
+    channel_name: String,
+    engine: State<'_, Arc<Engine>>,
+) -> Result<SessionData, String> {
+    engine
+        .create_session(&channel_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// 读取当前会话完整数据（供前端加载历史 / 判断状态）
 #[tauri::command]
 pub fn get_current_session(
@@ -145,6 +157,56 @@ pub async fn save_session(
     engine
         .save_session(&channel_name)
         .await
+        .map_err(|e| e.to_string())
+}
+
+/// 列出全部会话元信息（active 置顶 + 归档按时间倒序），供会话历史列表
+#[tauri::command]
+pub fn list_sessions(
+    channel_name: String,
+    engine: State<'_, Arc<Engine>>,
+) -> Result<Vec<SessionMeta>, String> {
+    engine.list_sessions(&channel_name).map_err(|e| e.to_string())
+}
+
+/// 切换会话：归档当前（若非空），将目标历史会话设为 active 并返回其完整数据
+#[tauri::command]
+pub async fn switch_session(
+    channel_name: String,
+    id: String,
+    engine: State<'_, Arc<Engine>>,
+) -> Result<SessionData, String> {
+    engine
+        .switch_session(&channel_name, &id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 读取某会话最新压缩块的原始消息（供前端渲染归档历史）
+#[tauri::command]
+pub fn load_session_raw(
+    id: String,
+    engine: State<'_, Arc<Engine>>,
+) -> Result<Vec<Message>, String> {
+    engine.load_session_raw(&id).map_err(|e| e.to_string())
+}
+
+/// 删除归档会话（目录 + 向量库该会话 chunk 一并清理）
+#[tauri::command]
+pub fn delete_session(id: String, engine: State<'_, Arc<Engine>>) -> Result<(), String> {
+    engine.delete_session(&id).map_err(|e| e.to_string())
+}
+
+/// 重命名会话标题（活跃或归档均可）
+#[tauri::command]
+pub fn rename_session(
+    channel_name: String,
+    id: String,
+    title: String,
+    engine: State<'_, Arc<Engine>>,
+) -> Result<(), String> {
+    engine
+        .rename_session(&channel_name, &id, &title)
         .map_err(|e| e.to_string())
 }
 

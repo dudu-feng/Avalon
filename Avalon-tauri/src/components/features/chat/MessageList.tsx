@@ -8,9 +8,11 @@ export interface MessageListProps {
   messages: ChatMessage[];
   /** 加载中（初始拉取历史 / 新会话处理中）：显示骨架屏占位 */
   loading?: boolean;
+  /** 会话切换标识（activeId）：变化时重置滚动定位，切到新会话后从底部开始 */
+  resetKey?: string;
 }
 
-export function MessageList({ messages, loading = false }: MessageListProps) {
+export function MessageList({ messages, loading = false, resetKey }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const initializedRef = useRef(false);
 
@@ -20,6 +22,11 @@ export function MessageList({ messages, loading = false }: MessageListProps) {
     if (!vp) return true;
     return vp.scrollHeight - vp.scrollTop - vp.clientHeight < 120;
   };
+
+  // 会话切换（resetKey 变化）：重置初始化标志，令下方 useLayoutEffect 重新 instant 定位到底
+  useLayoutEffect(() => {
+    if (resetKey !== undefined) initializedRef.current = false;
+  }, [resetKey]);
 
   // 首次加载历史：在绘制前 instant 定位到底，消除「先渲染顶部再滚到底」的闪烁与慢滚动
   useLayoutEffect(() => {
