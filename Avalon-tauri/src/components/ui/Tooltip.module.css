@@ -1,0 +1,60 @@
+.root {
+  display: inline-flex;
+}
+
+.tip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--shadow-lg);
+  font: 500 12px/1.45 var(--font-sans);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.96);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.tip[data-open='true'] {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* 箭头（单层三角，颜色跟随背景） */
+.tip::after {
+  content: '';
+  position: absolute;
+  border: 5px solid transparent;
+}
+
+.tip[data-side='top']::after {
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-top-color: var(--popover);
+}
+
+.tip[data-side='bottom']::after {
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-bottom-color: var(--popover);
+}
+
+.tip[data-side='left']::after {
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  border-left-color: var(--popover);
+}
+
+.tip[data-side='right']::after {
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  border-right-color: var(--popover);
+}

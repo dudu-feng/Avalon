@@ -52,3 +52,6 @@ lark_doc/
 
 #/ doc
 doc/
+
+# config
+Avalon-config.toml

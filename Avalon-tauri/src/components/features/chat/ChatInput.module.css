@@ -35,8 +35,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 10px;
+  padding: 6px 10px;
   border-top: 1px solid var(--border);
+}
+
+.left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .hint {
@@ -48,24 +54,4 @@
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-/* 模型选择 pill：无边框、低调文字，hover/focus 时提亮 */
-.model {
-  max-width: 160px;
-  padding: 4px 6px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted-foreground);
-  font: inherit;
-  font-size: 13px;
-  outline: none;
-  cursor: pointer;
-}
-
-.model:hover,
-.model:focus {
-  background: var(--muted);
-  color: var(--foreground);
 }

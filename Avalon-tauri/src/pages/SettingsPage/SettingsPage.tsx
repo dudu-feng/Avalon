@@ -1,5 +1,5 @@
 import { useEffect, useState, type ChangeEvent } from 'react';
-import { PageContainer, Card, Button, Input, Select, Badge, ProgressBar } from '../../components/ui';
+import { PageContainer, Card, Button, Input, Dropdown, Badge, ProgressBar } from '../../components/ui';
 import { ModelCard } from '../../components/features/settings';
 import { getConfig, saveConfig, rebuildMemoryIndex } from '../../lib/settingsApi';
 import type {
@@ -216,13 +216,13 @@ export function SettingsPage() {
       {/* Embedding */}
       <Card eyebrow="Embedding" title="向量化" description="文本嵌入模型与加载时机。">
         <div className={styles.grid}>
-          <Select
+          <Dropdown
             label="模式 mode"
             options={EMBEDDING_MODES}
             value={config.embedding.mode}
             onChange={(v) => update('embedding', { ...config.embedding, mode: v as EmbeddingMode })}
           />
-          <Select
+          <Dropdown
             label="加载时机 load_mode"
             options={LOAD_MODES}
             value={config.embedding.load_mode}
@@ -297,7 +297,7 @@ export function SettingsPage() {
               update('session_memory', { ...config.session_memory, context_chunks: n }),
             )}
           />
-          <Select
+          <Dropdown
             label="检索模式 search_mode"
             options={SEARCH_MODES}
             value={config.session_memory.search_mode}
@@ -327,7 +327,7 @@ export function SettingsPage() {
       {/* 向量库 */}
       <Card eyebrow="向量库" title="后端存储" description="向量检索的后端实现。">
         <div className={styles.grid}>
-          <Select
+          <Dropdown
             label="后端 backend"
             options={VECTOR_BACKENDS}
             value={config.vector.backend}

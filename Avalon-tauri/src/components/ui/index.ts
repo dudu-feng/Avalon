@@ -4,9 +4,6 @@ export type { ButtonProps } from './Button';
 export { Input } from './Input';
 export type { InputProps } from './Input';
 
-export { Select } from './Select';
-export type { SelectProps, SelectOption } from './Select';
-
 export { Card } from './Card';
 export type { CardProps } from './Card';
 
@@ -27,3 +24,9 @@ export type { CircleProgressProps } from './CircleProgress';
 
 export { ProgressBar } from './ProgressBar';
 export type { ProgressBarProps } from './ProgressBar';
+
+export { Tooltip } from './Tooltip';
+export type { TooltipProps, TooltipSide } from './Tooltip';
+
+export { Dropdown } from './Dropdown';
+export type { DropdownProps, DropdownOption } from './Dropdown';

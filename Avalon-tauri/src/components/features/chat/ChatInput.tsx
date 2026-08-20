@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
-import { Button } from '../../ui';
+import { Button, CircleProgress, Dropdown, Tooltip } from '../../ui';
+import type { ContextUsage } from '../../../types/chat';
 import styles from './ChatInput.module.css';
 
 export interface ModelOption {
@@ -15,6 +16,7 @@ export interface ChatInputProps {
   models: ModelOption[];
   activeModel: string;
   onModelChange: (name: string) => void;
+  contextUsage?: ContextUsage | null;
 }
 
 /** textarea 自动增长的封顶高度（与 CSS 的 max-height 一致） */
@@ -27,6 +29,7 @@ export function ChatInput({
   models,
   activeModel,
   onModelChange,
+  contextUsage,
 }: ChatInputProps) {
   const [value, setValue] = useState('');
   const fieldRef = useRef<HTMLTextAreaElement>(null);
@@ -73,21 +76,29 @@ export function ChatInput({
         onKeyDown={onKeyDown}
       />
       <div className={styles.toolbar}>
-        <span className={styles.hint}>Enter 发送 · Shift+Enter 换行</span>
+        <div className={styles.left}>
+          {contextUsage && (
+            <Tooltip label={`上下文 ${contextUsage.used_tokens} / ${contextUsage.threshold} tokens`}>
+              <CircleProgress
+                value={contextUsage.used_tokens}
+                max={contextUsage.threshold}
+                size={18}
+                strokeWidth={3}
+                label=""
+              />
+            </Tooltip>
+          )}
+          <span className={styles.hint}>Enter 发送 · Shift+Enter 换行</span>
+        </div>
         <div className={styles.right}>
-          <select
-            className={styles.model}
+          <Dropdown
+            options={models.map((m) => ({ value: m.name, label: m.name }))}
             value={activeModel}
-            onChange={(e) => onModelChange(e.currentTarget.value)}
-            aria-label="选择模型"
-          >
-            {models.map((m) => (
-              <option key={m.name} value={m.name}>
-                {m.name}
-              </option>
-            ))}
-          </select>
+            onChange={onModelChange}
+            align="end"
+          />
           <Button
+            size="sm"
             variant={isBusy ? 'secondary' : 'primary'}
             onClick={isBusy ? onStop : submit}
             disabled={!isBusy && !value.trim()}
