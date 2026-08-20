@@ -30,3 +30,12 @@ export type { TooltipProps, TooltipSide } from './Tooltip';
 
 export { Dropdown } from './Dropdown';
 export type { DropdownProps, DropdownOption } from './Dropdown';
+
+export { Modal } from './Modal';
+export type { ModalProps } from './Modal';
+
+export { ConfirmDialog } from './ConfirmDialog';
+export type { ConfirmDialogProps } from './ConfirmDialog';
+
+export { Tabs } from './Tabs';
+export type { TabsProps, TabsOption } from './Tabs';

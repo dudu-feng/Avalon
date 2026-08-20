@@ -82,3 +82,19 @@
   color: var(--muted-foreground);
   border-color: transparent;
 }
+
+.danger {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+  box-shadow: var(--shadow-sm);
+}
+
+.danger:hover:not(:disabled) {
+  box-shadow: var(--shadow-md);
+}
+
+.danger:disabled {
+  background: var(--secondary);
+  color: var(--muted-foreground);
+  border-color: var(--border);
+}

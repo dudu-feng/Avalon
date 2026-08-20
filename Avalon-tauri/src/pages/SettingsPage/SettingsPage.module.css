@@ -11,6 +11,12 @@
   gap: 8px;
 }
 
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .warningList {
   margin: 0;
   padding-left: 20px;
