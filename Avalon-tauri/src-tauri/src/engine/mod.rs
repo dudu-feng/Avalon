@@ -11,7 +11,9 @@ pub mod events;
 pub mod history;
 pub mod react;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
@@ -33,6 +35,8 @@ pub struct Engine {
     tools: Arc<dyn ToolRegistry>,
     session: Arc<dyn SessionStore>,
     usage: Arc<UsageStore>,
+    /// 按 channel 维度的取消标志（chat 运行时注册，stop_chat 置位中断流式循环）
+    cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl Engine {
@@ -51,6 +55,7 @@ impl Engine {
             tools,
             session,
             usage,
+            cancels: Mutex::new(HashMap::new()),
         }
     }
 
@@ -60,6 +65,7 @@ impl Engine {
         &self,
         user_input: &str,
         channel: &str,
+        cancel: Arc<AtomicBool>,
         on_event: impl FnMut(EngineEvent) + Send,
     ) -> Result<()> {
         let mut on_event = on_event;
@@ -72,9 +78,27 @@ impl Engine {
             self.tools.as_ref(),
             self.session.as_ref(),
             self.usage.as_ref(),
+            &cancel,
             &mut on_event,
         )
         .await
+    }
+
+    /// 注册一次 chat 运行的取消标志（返回 Arc 供 run 传入），channel 维度的最新一次覆盖旧值
+    pub fn begin_chat(&self, channel: &str) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        self.cancels
+            .lock()
+            .unwrap()
+            .insert(channel.to_string(), flag.clone());
+        flag
+    }
+
+    /// 置位某 channel 的取消标志，中断正在进行的流式生成
+    pub fn stop_chat(&self, channel: &str) {
+        if let Some(flag) = self.cancels.lock().unwrap().get(channel) {
+            flag.store(true, Ordering::SeqCst);
+        }
     }
 
     /// 初始化会话（channel 维度：active 复用 / 否则新建）—— 调用方在 run 前触发（决策 D3）

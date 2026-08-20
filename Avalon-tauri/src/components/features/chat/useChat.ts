@@ -12,6 +12,7 @@ import {
   getCurrentSession,
   initSession,
   saveSession,
+  stopChat,
 } from '../../../lib/chatApi';
 
 export interface UseChatOptions {
@@ -187,6 +188,11 @@ export function useChat(options: UseChatOptions = {}) {
     }
   }, [channelName, isBusy]);
 
+  // 停止当前流式生成：置位后端取消标志，chat 提前收尾返回部分结果
+  const stop = useCallback(() => {
+    stopChat(channelName);
+  }, [channelName]);
+
   // 发送一条消息：推 user + 空 assistant，跑 chat，逐事件组装
   const send = useCallback(
     async (text: string) => {
@@ -224,5 +230,5 @@ export function useChat(options: UseChatOptions = {}) {
     [isBusy, channelName, nextId, refreshUsage],
   );
 
-  return { messages, isBusy, send, newSession, contextUsage };
+  return { messages, isBusy, send, newSession, stop, contextUsage };
 }

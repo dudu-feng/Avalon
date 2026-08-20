@@ -1,29 +1,71 @@
-.bar {
+.card {
   flex-shrink: 0;
   display: flex;
-  gap: 12px;
-  align-items: flex-end;
-}
-
-.field {
-  flex: 1;
-  min-height: 44px;
-  max-height: 160px;
-  padding: 12px 14px;
+  flex-direction: column;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--background);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+/* 聚焦态：整卡描边高亮（textarea 本身无边框） */
+.card:focus-within {
+  border-color: var(--ring);
+}
+
+.field {
+  width: 100%;
+  min-height: 44px;
+  max-height: 160px;
+  padding: 12px 14px;
+  border: none;
+  background: transparent;
   color: var(--foreground);
   font: inherit;
   resize: none;
   outline: none;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease;
-}
-
-.field:focus {
-  border-color: var(--ring);
 }
 
 .field::placeholder {
   color: var(--muted-foreground);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 模型选择 pill：无边框、低调文字，hover/focus 时提亮 */
+.model {
+  max-width: 160px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+}
+
+.model:hover,
+.model:focus {
+  background: var(--muted);
+  color: var(--foreground);
 }

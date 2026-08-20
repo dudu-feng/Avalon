@@ -16,6 +16,11 @@ export async function saveConfig(config: AppConfig): Promise<string[]> {
   return invoke<string[]>('save_config', { newConfig: config });
 }
 
+/** 切换活跃模型（校验存在后写回配置），返回校验警告列表 */
+export async function setActiveModel(name: string): Promise<string[]> {
+  return invoke<string[]>('set_active_model', { name });
+}
+
 /** 校验当前配置，返回警告列表 */
 export async function validateConfig(): Promise<string[]> {
   return invoke<string[]>('validate_config');

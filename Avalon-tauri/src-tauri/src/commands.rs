@@ -24,6 +24,12 @@ pub fn get_config(store: State<'_, ConfigStore>) -> Result<AppConfig, String> {
     Ok(store.get())
 }
 
+/// 切换活跃模型（校验存在后写回配置），返回校验警告列表
+#[tauri::command]
+pub fn set_active_model(name: String, store: State<'_, ConfigStore>) -> Result<Vec<String>, String> {
+    store.set_active_model(&name).map_err(|e| e.to_string())
+}
+
 /// 保存配置（写回 Avalon-config.toml），返回校验警告列表
 #[tauri::command]
 pub fn save_config(
@@ -90,12 +96,20 @@ pub async fn chat(
     engine: State<'_, Arc<Engine>>,
     on_event: Channel<EngineEvent>,
 ) -> Result<(), String> {
+    let cancel = engine.begin_chat(&channel_name);
     engine
-        .run(&user_input, &channel_name, move |ev| {
+        .run(&user_input, &channel_name, cancel, move |ev| {
             let _ = on_event.send(ev);
         })
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 停止当前 channel 正在进行的流式生成（置位取消标志，chat 提前收尾返回部分结果）
+#[tauri::command]
+pub fn stop_chat(channel_name: String, engine: State<'_, Arc<Engine>>) -> Result<(), String> {
+    engine.stop_chat(&channel_name);
+    Ok(())
 }
 
 /// 初始化会话（channel 维度）：active 复用 / 否则新建

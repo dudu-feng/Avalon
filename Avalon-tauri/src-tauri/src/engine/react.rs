@@ -7,6 +7,8 @@
 
 #![allow(dead_code)]
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use anyhow::Result;
 use serde_json::{json, Value};
 
@@ -30,6 +32,7 @@ pub(crate) async fn run_loop<F>(
     tools: &dyn ToolRegistry,
     session: &dyn SessionStore,
     usage: &UsageStore,
+    cancel: &AtomicBool,
     on_event: &mut F,
 ) -> Result<()>
 where
@@ -59,10 +62,20 @@ where
     let mut accumulated_usage = TokenUsage::default();
 
     let last_result = loop {
+        // 取消检查：新一轮发起前已停止，则直接收尾（不再发请求）
+        if cancel.load(Ordering::Relaxed) {
+            break ChatResult {
+                message: accumulated_message.clone(),
+                thought: accumulated_thought.clone(),
+                tool_calls: Vec::new(),
+                usage: accumulated_usage.clone(),
+                model: model_name.clone(),
+            };
+        }
         // 轮次边界：每轮大模型调用开始前发标记，前端据此封口上一轮气泡、开新气泡
         on_event(EngineEvent::RoundStart);
         let result = client
-            .chat_stream(&messages, &tools_schema, |ev| match ev {
+            .chat_stream(&messages, &tools_schema, cancel, |ev| match ev {
                 StreamEvent::ThoughtDelta { delta } => on_event(EngineEvent::ThoughtDelta { delta }),
                 StreamEvent::MessageDelta { delta } => on_event(EngineEvent::MessageDelta { delta }),
                 StreamEvent::Done { .. } => {}
@@ -77,6 +90,17 @@ where
 
         // 持久化本轮 assistant 消息（中间 tool_calls 轮 / 最终正文轮都存）
         persisted.push(history::assistant_entry(&result));
+
+        // 取消检查：本轮流式被中断，不再执行工具、不进入下一轮
+        if cancel.load(Ordering::Relaxed) {
+            break ChatResult {
+                message: accumulated_message.clone(),
+                thought: accumulated_thought.clone(),
+                tool_calls: Vec::new(),
+                usage: accumulated_usage.clone(),
+                model: model_name.clone(),
+            };
+        }
 
         if result.tool_calls.is_empty() {
             break ChatResult {

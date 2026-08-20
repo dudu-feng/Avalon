@@ -30,6 +30,11 @@ export async function saveSession(channelName: string): Promise<void> {
   await invoke('save_session', { channelName });
 }
 
+/** 停止当前会话正在进行的流式生成 */
+export async function stopChat(channelName: string): Promise<void> {
+  await invoke('stop_chat', { channelName });
+}
+
 /** 主对话：跑完整 ReAct，中间态经 onEvent 逐事件回调 */
 export async function chat(
   userInput: string,

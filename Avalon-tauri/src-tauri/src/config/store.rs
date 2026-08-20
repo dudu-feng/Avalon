@@ -45,6 +45,16 @@ impl ConfigStore {
         Ok(warnings)
     }
 
+    /// 切换活跃模型：校验 name 存在，改 active_model 后复用 save 写回
+    pub fn set_active_model(&self, name: &str) -> Result<Vec<String>> {
+        let mut next = self.get();
+        if !next.models.iter().any(|m| m.name == name) {
+            return Err(anyhow::anyhow!("模型 '{name}' 不存在"));
+        }
+        next.active_model = name.to_string();
+        self.save(next)
+    }
+
     /// 校验当前配置
     pub fn validate(&self) -> Vec<String> {
         loader::validate(&self.get())

@@ -3,6 +3,7 @@
 // 只依赖 config::{ModelConfig, LlmParams}（依赖反转），不 import 工具/会话/提示词模块。
 // 提供两个调用入口：chat_stream（带 tools 的流式，单模型 ReAct）/ compress（非流式 JSON）。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -56,6 +57,7 @@ impl LlmClient {
         &self,
         messages: &[Value],
         tools: &[Value],
+        cancel: &AtomicBool,
         mut on_event: impl FnMut(StreamEvent),
     ) -> Result<ChatResult> {
         let mut body = json!({
@@ -78,8 +80,13 @@ impl LlmClient {
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut sse_buf = String::new();
         let mut stream = resp.bytes_stream();
+        let mut cancelled = false;
 
         while let Some(chunk) = stream.next().await {
+            if cancel.load(Ordering::Relaxed) {
+                cancelled = true;
+                break;
+            }
             let chunk = chunk.context("读取流失败")?;
             sse_buf.push_str(&String::from_utf8_lossy(&chunk));
 
@@ -94,8 +101,9 @@ impl LlmClient {
             }
         }
 
-        // 流结束后处理无尾随空行的残余事件（通常是最后一个 usage / [DONE]）
-        if !sse_buf.trim().is_empty() {
+        // 流结束后处理无尾随空行的残余事件（通常是最后一个 usage / [DONE]）；
+        // 取消时跳过，避免把取消前的缓冲继续推给前端。
+        if !cancelled && !sse_buf.trim().is_empty() {
             if let Some(delta) = sse_delta(&sse_buf) {
                 apply_delta(&delta, &mut thought, &mut message, &mut tool_calls, &mut on_event);
             }

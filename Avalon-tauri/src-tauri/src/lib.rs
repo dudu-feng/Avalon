@@ -79,11 +79,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
+            commands::set_active_model,
             commands::validate_config,
             commands::get_config_path,
             commands::init_app,
             commands::llm_compress,
             commands::chat,
+            commands::stop_chat,
             commands::init_session,
             commands::save_session,
             commands::get_current_session,
