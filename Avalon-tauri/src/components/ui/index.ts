@@ -39,3 +39,6 @@ export type { ConfirmDialogProps } from './ConfirmDialog';
 
 export { Tabs } from './Tabs';
 export type { TabsProps, TabsOption } from './Tabs';
+
+export { Skeleton } from './Skeleton';
+export type { SkeletonProps } from './Skeleton';

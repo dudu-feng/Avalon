@@ -28,3 +28,47 @@
   font: 400 14px/1.6 var(--font-serif);
   color: var(--muted-foreground);
 }
+
+/* 加载骨架：左右交替模拟对话气泡，防止内容跳动 */
+.skeletonList {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 2px;
+  overflow: hidden;
+}
+
+.skeletonRowRight {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.skeletonRowLeft {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.skeletonUser {
+  width: 42%;
+  height: 40px;
+  border-radius: var(--radius) var(--radius) 4px var(--radius);
+}
+
+.skeletonUserSm {
+  width: 30%;
+  height: 40px;
+  border-radius: var(--radius) var(--radius) 4px var(--radius);
+}
+
+.skeletonAssistantLg {
+  width: 65%;
+  height: 72px;
+  border-radius: var(--radius) var(--radius) var(--radius) 4px;
+}
+
+.skeletonAssistantMd {
+  width: 52%;
+  height: 56px;
+  border-radius: var(--radius) var(--radius) var(--radius) 4px;
+}

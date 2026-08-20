@@ -148,6 +148,8 @@ export function useChat(options: UseChatOptions = {}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isBusy, setIsBusy] = useState(false);
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [resetting, setResetting] = useState(false);
   const idRef = useRef(0);
 
   const nextId = useCallback(() => `msg-${(idRef.current += 1)}`, []);
@@ -169,7 +171,10 @@ export function useChat(options: UseChatOptions = {}) {
         if (cancelled) return;
         setMessages(mapHistoryMessages(s.messages));
       })
-      .catch((e) => console.error('get_current_session 失败:', e));
+      .catch((e) => console.error('get_current_session 失败:', e))
+      .finally(() => {
+        if (!cancelled) setInitialLoading(false);
+      });
     refreshUsage();
     return () => {
       cancelled = true;
@@ -177,16 +182,20 @@ export function useChat(options: UseChatOptions = {}) {
   }, [channelName, refreshUsage]);
 
   // 新会话：归档当前 + 新建 + 清空前端列表
+  // 点击后先置 resetting 并乐观清空（立即反馈，避免等后端导致的静止），后端收尾后复位
   const newSession = useCallback(async () => {
-    if (isBusy) return;
+    if (isBusy || resetting) return;
+    setResetting(true);
+    setMessages([]);
     try {
       await saveSession(channelName);
       await initSession(channelName);
-      setMessages([]);
     } catch (e) {
       console.error('new_session 失败:', e);
+    } finally {
+      setResetting(false);
     }
-  }, [channelName, isBusy]);
+  }, [channelName, isBusy, resetting]);
 
   // 停止当前流式生成：置位后端取消标志，chat 提前收尾返回部分结果
   const stop = useCallback(() => {
@@ -230,5 +239,14 @@ export function useChat(options: UseChatOptions = {}) {
     [isBusy, channelName, nextId, refreshUsage],
   );
 
-  return { messages, isBusy, send, newSession, stop, contextUsage };
+  return {
+    messages,
+    isBusy,
+    send,
+    newSession,
+    stop,
+    contextUsage,
+    loading: initialLoading || resetting,
+    resetting,
+  };
 }

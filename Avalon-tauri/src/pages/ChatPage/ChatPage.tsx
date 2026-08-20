@@ -6,7 +6,7 @@ import type { ModelConfig } from '../../types/config';
 import styles from './ChatPage.module.css';
 
 export function ChatPage() {
-  const { messages, isBusy, send, newSession, stop, contextUsage } = useChat();
+  const { messages, isBusy, send, newSession, stop, contextUsage, loading, resetting } = useChat();
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [activeModel, setActiveModelName] = useState('');
 
@@ -34,11 +34,11 @@ export function ChatPage() {
   return (
     <div className={styles.chat}>
       <div className={styles.toolbar}>
-        <Button variant="ghost" size="sm" onClick={newSession} disabled={isBusy}>
-          ⊕ 新会话
+        <Button variant="ghost" size="sm" onClick={newSession} disabled={isBusy || resetting}>
+          {resetting ? '创建中…' : '⊕ 新会话'}
         </Button>
       </div>
-      <MessageList messages={messages} />
+      <MessageList messages={messages} loading={loading} />
       <ChatInput
         onSubmit={send}
         onStop={stop}
