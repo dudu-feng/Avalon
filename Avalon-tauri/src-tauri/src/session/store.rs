@@ -520,17 +520,9 @@ impl SessionStore for FileSessionStore {
 
     fn list_sessions(&self, channel: &str) -> Result<Vec<SessionMeta>> {
         let mut out = Vec::new();
-
-        // ① 活跃会话置顶
-        let current = self.read_current(channel)?;
-        if current.status == SessionStatus::Active && !current.id.is_empty() {
-            out.push(meta_from(&current));
-        }
-
-        // ② 归档会话按 id 时间倒序（id 字典序 = 时间序）
-        let mut archived = Vec::new();
         let history = self.history_dir();
         if history.is_dir() {
+            let prefix = format!("{channel}_");
             for entry in
                 std::fs::read_dir(&history).with_context(|| "读取 history 目录失败")?
             {
@@ -541,16 +533,16 @@ impl SessionStore for FileSessionStore {
                 let index = dir.join("index.json");
                 if index.is_file() {
                     if let Ok(data) = self.read_session_file(&index) {
-                        // 跳过 active 占位 index（活跃会话从 current 读，避免重复列出）
-                        if data.status == SessionStatus::Archived {
-                            archived.push(meta_from(&data));
+                        // 统一遍历 history：active + archived 都在此存档，仅过滤当前 channel
+                        if data.id.starts_with(&prefix) {
+                            out.push(meta_from(&data));
                         }
                     }
                 }
             }
         }
-        archived.sort_by(|a, b| b.id.cmp(&a.id));
-        out.extend(archived);
+        // 按 id 倒序（id 字典序 = 时间序，最新在前；前端再自行置顶 active）
+        out.sort_by(|a, b| b.id.cmp(&a.id));
         Ok(out)
     }
 
@@ -574,11 +566,10 @@ impl SessionStore for FileSessionStore {
             self.save_current_session(channel).await?;
         }
 
-        // ③ 目标写回 current（status 改 active）；只移除 index 文件、保留 raw 目录（raw 为永久存档）
+        // ③ 目标 status 改 active：写回 history index（存档备份，可容错回档）+ 写 current（进行中）
         target.status = SessionStatus::Active;
+        self.write_session_index(&target)?;
         self.write_current(channel, &target)?;
-        std::fs::remove_file(&src)
-            .with_context(|| format!("移除归档 index 失败: {}", src.display()))?;
         Ok(target)
     }
 
@@ -647,23 +638,23 @@ impl SessionStore for FileSessionStore {
             return Err(anyhow::anyhow!("标题不能为空"));
         }
 
-        // ① 活跃会话：改 current
-        let current = self.read_current(channel)?;
-        if current.id == id {
-            let mut data = current;
-            data.title = title;
-            return self.write_current(channel, &data);
-        }
-
-        // ② 归档会话：改 history/{id}/index.json
+        // ① 改 history 存档（所有会话 index 都在 history，是唯一权威）
         let path = self.history_dir().join(id).join("index.json");
         if !path.is_file() {
             return Err(anyhow::anyhow!("会话 '{id}' 不存在"));
         }
         let mut data = self.read_session_file(&path)?;
-        data.title = title;
-        let content = serde_json::to_string_pretty(&data).context("序列化会话数据失败")?;
-        std::fs::write(&path, content).with_context(|| "写入标题失败")
+        data.title = title.clone();
+        self.write_session_index(&data)?;
+
+        // ② active 会话：同步 current（进行中副本）
+        let current = self.read_current(channel)?;
+        if current.id == id {
+            let mut c = current;
+            c.title = title;
+            self.write_current(channel, &c)?;
+        }
+        Ok(())
     }
 }
 
@@ -730,7 +721,6 @@ fn meta_from(data: &SessionData) -> SessionMeta {
         id: data.id.clone(),
         title,
         status: data.status,
-        message_count: data.messages.len() + data.compressed.len(),
         created_at: id_epoch(&data.id),
     }
 }

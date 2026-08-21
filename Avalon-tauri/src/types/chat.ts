@@ -68,8 +68,6 @@ export interface SessionMeta {
   id: string;
   title: string;
   status: 'active' | 'inactive' | 'archived';
-  /** 消息数量（未压缩消息 + 压缩块，粗略表示内容量） */
-  message_count: number;
   /** 创建时间（epoch 秒，由 id 时间戳解析，供前端时间分组） */
   created_at: number;
 }

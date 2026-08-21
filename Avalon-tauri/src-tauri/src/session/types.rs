@@ -123,8 +123,6 @@ pub struct SessionMeta {
     pub id: String,
     pub title: String,
     pub status: SessionStatus,
-    /// 消息数量（未压缩消息 + 压缩块，粗略表示内容量）
-    pub message_count: usize,
     /// 创建时间（epoch 秒，由 id 时间戳解析，供前端时间分组）
     pub created_at: i64,
 }

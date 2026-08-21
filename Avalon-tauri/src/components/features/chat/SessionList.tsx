@@ -33,26 +33,19 @@ function timeGroupLabel(epochSec: number): string {
   return '更早';
 }
 
-/** 条目副标题：相对时间（今天显示 HH:MM）+ 消息量 */
-function formatMeta(epochSec: number, messageCount: number): string {
-  const parts: string[] = [];
-  if (epochSec) {
-    const d = new Date(epochSec * 1000);
-    const now = new Date();
-    const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-    const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
-    if (dayDiff <= 0) {
-      parts.push(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
-    } else if (dayDiff === 1) {
-      parts.push('昨天');
-    } else if (dayDiff <= 7) {
-      parts.push(`${dayDiff} 天前`);
-    } else {
-      parts.push(`${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`);
-    }
+/** 条目副标题：相对时间（今天显示 HH:MM，否则昨天 / N 天前 / 日期） */
+function formatMeta(epochSec: number): string {
+  if (!epochSec) return '';
+  const d = new Date(epochSec * 1000);
+  const now = new Date();
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+  if (dayDiff <= 0) {
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
-  parts.push(`${messageCount} 条消息`);
-  return parts.join(' · ');
+  if (dayDiff === 1) return '昨天';
+  if (dayDiff <= 7) return `${dayDiff} 天前`;
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
 }
 
 /** 空标题回退：active 用「新会话」，归档回退时间戳 */
@@ -167,7 +160,7 @@ export function SessionList({
             <span className={styles.itemTitle} title={s.title || fallbackTitle(s)}>
               {fallbackTitle(s)}
             </span>
-            <span className={styles.itemMeta}>{formatMeta(s.created_at, s.message_count)}</span>
+            <span className={styles.itemMeta}>{formatMeta(s.created_at)}</span>
           </div>
         )}
         {!isRenaming && (
