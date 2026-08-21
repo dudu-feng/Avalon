@@ -45,19 +45,6 @@
   word-break: break-word;
 }
 
-.cursor {
-  display: inline-block;
-  margin-left: 2px;
-  color: var(--primary);
-  animation: blink 1s step-end infinite;
-}
-
-@keyframes blink {
-  50% {
-    opacity: 0;
-  }
-}
-
 .tool {
   min-width: 30%;
   max-width: 78%;

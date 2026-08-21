@@ -1,0 +1,365 @@
+/* 助手正文 Markdown 渲染样式。
+   ReactMarkdown 生成的是裸 HTML（无 class），故所有选择器都挂在 .root 后代上，
+   避免污染全局；正文颜色走 design tokens（html.dark 自动适配）。
+   代码块例外：右上角按钮可在 经典白 / 深色 / 奶油 三套配色间切换（见 .codeBlock）。 */
+
+.root {
+  font: 400 14px/1.6 var(--font-sans);
+  color: var(--foreground);
+  word-break: break-word;
+}
+
+/* 流式光标 */
+.cursor {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--primary);
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* 首尾块级元素收紧，避免气泡内多出空白 */
+.root > :first-child {
+  margin-top: 0;
+}
+
+.root > :last-child {
+  margin-bottom: 0;
+}
+
+/* 段落（覆盖 global.css 的 p { margin: 0 }） */
+.root p {
+  margin: 0.5em 0;
+  white-space: normal;
+}
+
+/* 标题 */
+.root h1,
+.root h2,
+.root h3,
+.root h4,
+.root h5,
+.root h6 {
+  margin: 1em 0 0.5em;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--foreground);
+}
+
+.root h1 {
+  font-size: 1.5em;
+}
+
+.root h2 {
+  font-size: 1.3em;
+}
+
+.root h3 {
+  font-size: 1.15em;
+}
+
+.root h4 {
+  font-size: 1em;
+}
+
+.root h5 {
+  font-size: 0.95em;
+}
+
+.root h6 {
+  font-size: 0.9em;
+  color: var(--muted-foreground);
+}
+
+/* 列表 */
+.root ul,
+.root ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+
+.root li {
+  margin: 0.25em 0;
+}
+
+.root li > p {
+  margin: 0;
+}
+
+/* 任务列表（GFM）：去掉圆点，checkbox 用主题色 */
+.root li:has(> input[type='checkbox']) {
+  list-style: none;
+  margin-left: -1.25em;
+}
+
+.root input[type='checkbox'] {
+  margin-right: 0.4em;
+  accent-color: var(--primary);
+}
+
+/* 行内代码 */
+.root code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+/* 代码块容器：右上角三态配色切换按钮 */
+.codeBlock {
+  position: relative;
+  margin: 0.75em 0;
+}
+
+.codeBlock pre {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  overflow-x: auto;
+}
+
+.codeBlock pre code {
+  padding: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  line-height: 1.6;
+  color: var(--code-fg);
+}
+
+.themeBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--code-fg);
+  opacity: 0.4;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.codeBlock:hover .themeBtn {
+  opacity: 1;
+}
+
+.themeBtn:hover {
+  background: color-mix(in srgb, var(--code-fg) 12%, transparent);
+}
+
+/* 引用块 */
+.root blockquote {
+  margin: 0.75em 0;
+  padding: 0.25em 1em;
+  border-left: 3px solid var(--primary);
+  background: var(--muted);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--muted-foreground);
+}
+
+.root blockquote p {
+  margin: 0.25em 0;
+}
+
+/* 表格（GFM） */
+.root table {
+  margin: 0.75em 0;
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.95em;
+}
+
+.root th,
+.root td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.root th {
+  background: var(--muted);
+  font-weight: 600;
+}
+
+/* 链接（覆盖 global.css 的 a { text-decoration: inherit }） */
+.root a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.root a:hover {
+  color: var(--ring);
+}
+
+/* 分隔线 */
+.root hr {
+  margin: 1em 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+/* 强调 */
+.root strong {
+  font-weight: 600;
+}
+
+/* 图片 */
+.root img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   代码块三套配色（--code-* 变量，挂在 data-code-theme 容器上）
+   经典白 / 深色 固定不随主题；奶油 引用 design tokens 随 html.dark 切换。
+   rehype-highlight 生成的是字面 .hljs-* 类，故用 :global() 挂到 .root 下。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 经典白（GitHub Light） */
+.codeBlock[data-code-theme='light'] {
+  --code-bg: #ffffff;
+  --code-fg: #24292e;
+  --code-keyword: #d73a49;
+  --code-string: #032f62;
+  --code-comment: #6a737d;
+  --code-number: #005cc5;
+  --code-function: #6f42c1;
+  --code-builtin: #005cc5;
+  --code-attr: #e36209;
+  --code-addition: #22863a;
+  --code-deletion: #b31d28;
+}
+
+/* 深色（VS Code Dark+） */
+.codeBlock[data-code-theme='dark'] {
+  --code-bg: #1e1e1e;
+  --code-fg: #d4d4d4;
+  --code-keyword: #569cd6;
+  --code-string: #ce9178;
+  --code-comment: #6a9955;
+  --code-number: #b5cea8;
+  --code-function: #dcdcaa;
+  --code-builtin: #4ec9b0;
+  --code-attr: #9cdcfe;
+  --code-addition: #b5cea8;
+  --code-deletion: #f44747;
+}
+
+/* 奶油（跟随应用主题）：bg/fg 用语义 token 自动适配，token 色用暖色阶 */
+.codeBlock[data-code-theme='system'] {
+  --code-bg: var(--muted);
+  --code-fg: var(--foreground);
+  --code-keyword: var(--brand-600);
+  --code-string: var(--success-600);
+  --code-comment: var(--text-400);
+  --code-number: var(--brand-500);
+  --code-function: var(--text-600);
+  --code-builtin: var(--brand-700);
+  --code-attr: var(--text-600);
+  --code-addition: var(--success-600);
+  --code-deletion: var(--error-500);
+}
+
+/* 应用暗色主题下，奶油态 token 色换更浅的阶，保证对比度 */
+:global(.dark) .codeBlock[data-code-theme='system'] {
+  --code-keyword: var(--brand-600);
+  --code-string: var(--success-500);
+  --code-comment: var(--text-500);
+  --code-number: var(--brand-400);
+  --code-function: var(--text-700);
+  --code-builtin: var(--brand-500);
+  --code-attr: var(--text-600);
+  --code-addition: var(--success-500);
+  --code-deletion: var(--error-500);
+}
+
+/* 关键字 / 控制流 / 文档标签 */
+.root :global(.hljs-keyword),
+.root :global(.hljs-selector-tag),
+.root :global(.hljs-literal),
+.root :global(.hljs-doctag) {
+  color: var(--code-keyword);
+}
+
+/* 字符串 / 正则 */
+.root :global(.hljs-string),
+.root :global(.hljs-regexp) {
+  color: var(--code-string);
+}
+
+/* 注释 / 引用 */
+.root :global(.hljs-comment),
+.root :global(.hljs-quote) {
+  color: var(--code-comment);
+  font-style: italic;
+}
+
+/* 数字 / 符号 / 列表项标记 */
+.root :global(.hljs-number),
+.root :global(.hljs-symbol),
+.root :global(.hljs-bullet) {
+  color: var(--code-number);
+}
+
+/* 新增行（diff） */
+.root :global(.hljs-addition) {
+  color: var(--code-addition);
+}
+
+/* 函数名 / 类型 / 类名 / 标题 */
+.root :global(.hljs-function),
+.root :global(.hljs-title),
+.root :global(.hljs-title.function_),
+.root :global(.hljs-section),
+.root :global(.hljs-type),
+.root :global(.hljs-built_in),
+.root :global(.hljs-selector-id),
+.root :global(.hljs-selector-class) {
+  color: var(--code-function);
+}
+
+/* 属性 / 变量 / 参数 */
+.root :global(.hljs-attr),
+.root :global(.hljs-attribute),
+.root :global(.hljs-variable),
+.root :global(.hljs-params),
+.root :global(.hljs-property),
+.root :global(.hljs-template-variable) {
+  color: var(--code-attr);
+}
+
+/* 标签名 */
+.root :global(.hljs-tag),
+.root :global(.hljs-name) {
+  color: var(--code-builtin);
+}
+
+/* 强调 / 加粗 */
+.root :global(.hljs-emphasis) {
+  font-style: italic;
+}
+
+.root :global(.hljs-strong) {
+  font-weight: 600;
+}
+
+/* 删除行（diff） */
+.root :global(.hljs-deletion) {
+  color: var(--code-deletion);
+}

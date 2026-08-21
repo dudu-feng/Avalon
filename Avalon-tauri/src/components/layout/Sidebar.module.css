@@ -51,6 +51,14 @@
   gap: 8px;
 }
 
+.footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--sidebar-border);
+  display: grid;
+  gap: 8px;
+}
+
 @media (max-width: 640px) {
   .sidebar {
     width: 100%;

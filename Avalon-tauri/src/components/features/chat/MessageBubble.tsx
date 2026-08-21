@@ -1,6 +1,7 @@
 import type { ChatMessage } from '../../../types/chat';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ActionStepItem } from './ActionStepItem';
+import { MarkdownContent } from './MarkdownContent';
 import styles from './MessageBubble.module.css';
 
 export interface MessageBubbleProps {
@@ -45,10 +46,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           <p className={styles.text}>{message.error}</p>
         ) : (
           (message.content || isStreaming) && (
-            <p className={styles.text}>
-              {message.content}
-              {isStreaming && <span className={styles.cursor}>▌</span>}
-            </p>
+            <MarkdownContent streaming={isStreaming}>{message.content}</MarkdownContent>
           )
         )}
       </div>
