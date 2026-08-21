@@ -61,6 +61,17 @@ export interface CurrentSession {
   id: string;
   status: 'active' | 'inactive' | 'archived';
   messages: HistoryMessage[];
+  /** 已压缩轮数 = 已写入的最大普通块号（0 表示从未压缩，无历史块） */
+  compress_round: number;
+}
+
+/** load_session_history 命令返回（渐进式加载历史块） */
+export interface LoadHistoryResult {
+  /** 本次返回的块号；null 表示无更早历史可加载 */
+  chunk: number | null;
+  messages: HistoryMessage[];
+  /** 是否还有比本块更早的块（前端据此决定是否继续显示加载入口） */
+  has_earlier: boolean;
 }
 
 /** 会话列表元信息（list_sessions 返回，对齐后端 SessionMeta） */

@@ -127,6 +127,16 @@ pub struct SessionMeta {
     pub created_at: i64,
 }
 
+/// 渐进式加载历史块的结果（load_session_history 命令返回）
+#[derive(Debug, Clone, Serialize)]
+pub struct LoadHistoryResult {
+    /// 本次返回的块号；None 表示无更早历史可加载
+    pub chunk: Option<u64>,
+    pub messages: Vec<Message>,
+    /// 是否还有比本块更早的块（前端据此决定是否继续显示加载入口）
+    pub has_earlier: bool,
+}
+
 /// 一条会话消息（判别联合：user/assistant/tool 结构各异，对齐 OpenAI 消息模型）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "lowercase")]

@@ -93,7 +93,7 @@ pub fn run() {
             commands::get_context_usage,
             commands::list_sessions,
             commands::switch_session,
-            commands::load_session_raw,
+            commands::load_session_history,
             commands::delete_session,
             commands::rename_session,
             commands::rebuild_memory_index,

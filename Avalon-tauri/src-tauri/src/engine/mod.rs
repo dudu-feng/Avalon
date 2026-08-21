@@ -20,7 +20,7 @@ use anyhow::Result;
 use crate::config::ConfigStore;
 use crate::llm::LlmState;
 use crate::prompt::PromptAssembler;
-use crate::session::{ContextUsage, Message, SessionData, SessionMeta, SessionStore};
+use crate::session::{ContextUsage, LoadHistoryResult, SessionData, SessionMeta, SessionStore};
 use crate::tool::ToolRegistry;
 use crate::usage::UsageStore;
 use crate::vector::{RebuildProgress, RebuildStats};
@@ -145,9 +145,13 @@ impl Engine {
         self.session.switch_session(channel, id).await
     }
 
-    /// 读取某会话最新压缩块的原始消息（供前端渲染归档历史）
-    pub fn load_session_raw(&self, id: &str) -> Result<Vec<Message>> {
-        self.session.load_session_raw(id)
+    /// 渐进式加载历史块：before_chunk=None 读最新块，否则读更早一块（供前端渐进式回溯）
+    pub fn load_session_history(
+        &self,
+        id: &str,
+        before_chunk: Option<u64>,
+    ) -> Result<LoadHistoryResult> {
+        self.session.load_session_history(id, before_chunk)
     }
 
     /// 删除归档会话（目录 + 向量库 chunk）

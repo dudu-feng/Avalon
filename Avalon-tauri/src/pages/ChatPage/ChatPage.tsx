@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useChat, MessageList, ChatInput, SessionList } from '../../components/features/chat';
+import { Button, Drawer } from '../../components/ui';
 import { getConfig, setActiveModel } from '../../lib/settingsApi';
 import type { ModelConfig } from '../../types/config';
 import styles from './ChatPage.module.css';
@@ -19,9 +20,13 @@ export function ChatPage() {
     switchSession,
     deleteSession,
     renameSession,
+    hasEarlier,
+    loadingEarlier,
+    loadEarlier,
   } = useChat();
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [activeModel, setActiveModelName] = useState('');
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // 挂载时加载模型列表 + 当前活跃模型
   useEffect(() => {
@@ -44,19 +49,34 @@ export function ChatPage() {
     });
   };
 
+  // 切换会话：切过去后收起抽屉（会话历史非模态，选中即隐）
+  const onSelectSession = (id: string) => {
+    switchSession(id);
+    setDrawerOpen(false);
+  };
+
   return (
     <div className={styles.chat}>
-      <SessionList
-        sessions={sessions}
-        activeId={activeId}
-        loading={sessionsLoading}
-        onSelect={switchSession}
-        onNew={newSession}
-        onRename={renameSession}
-        onDelete={deleteSession}
-      />
       <div className={styles.conversation}>
-        <MessageList messages={messages} loading={loading} resetKey={activeId} />
+        <div className={styles.toolbar}>
+          <button
+            type="button"
+            className={styles.menuToggle}
+            onClick={() => setDrawerOpen(true)}
+            aria-label="打开会话历史"
+            title="会话历史"
+          >
+            ☰ 会话
+          </button>
+        </div>
+        <MessageList
+          messages={messages}
+          loading={loading}
+          resetKey={activeId}
+          hasEarlier={hasEarlier}
+          loadingEarlier={loadingEarlier}
+          onLoadEarlier={loadEarlier}
+        />
         <ChatInput
           onSubmit={send}
           onStop={stop}
@@ -67,6 +87,26 @@ export function ChatPage() {
           contextUsage={contextUsage}
         />
       </div>
+
+      <Drawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        title="会话"
+        actions={
+          <Button variant="ghost" size="sm" onClick={newSession} title="新建会话">
+            ＋ 新建
+          </Button>
+        }
+      >
+        <SessionList
+          sessions={sessions}
+          activeId={activeId}
+          loading={sessionsLoading}
+          onSelect={onSelectSession}
+          onRename={renameSession}
+          onDelete={deleteSession}
+        />
+      </Drawer>
     </div>
   );
 }

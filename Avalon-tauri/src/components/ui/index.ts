@@ -45,3 +45,6 @@ export type { SkeletonProps } from './Skeleton';
 
 export { Menu } from './Menu';
 export type { MenuProps, MenuItem } from './Menu';
+
+export { Drawer } from './Drawer';
+export type { DrawerProps } from './Drawer';

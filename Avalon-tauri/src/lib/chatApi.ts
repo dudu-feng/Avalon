@@ -9,7 +9,7 @@ import type {
   ContextUsage,
   CurrentSession,
   EngineEvent,
-  HistoryMessage,
+  LoadHistoryResult,
   SessionMeta,
 } from '../types/chat';
 
@@ -56,9 +56,12 @@ export async function switchSession(channelName: string, id: string): Promise<Cu
   return invoke<CurrentSession>('switch_session', { channelName, id });
 }
 
-/** 读取某会话最新压缩块的原始消息（供渲染归档历史，后续复用做渐进式加载） */
-export async function loadSessionRaw(id: string): Promise<HistoryMessage[]> {
-  return invoke<HistoryMessage[]>('load_session_raw', { id });
+/** 渐进式加载历史块：beforeChunk 为 null 读最新块，否则读更早一块；返回块号 + 消息 + 是否还有更早 */
+export async function loadSessionHistory(
+  id: string,
+  beforeChunk: number | null,
+): Promise<LoadHistoryResult> {
+  return invoke<LoadHistoryResult>('load_session_history', { id, beforeChunk });
 }
 
 /** 删除归档会话（目录 + 向量库该会话 chunk 一并清理） */

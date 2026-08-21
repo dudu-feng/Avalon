@@ -48,8 +48,12 @@ pub trait SessionStore: Send + Sync {
     fn list_sessions(&self, channel: &str) -> Result<Vec<SessionMeta>>;
     /// 切换会话：归档当前（若非空），将目标历史会话设为 active 并返回其完整数据
     async fn switch_session(&self, channel: &str, id: &str) -> Result<SessionData>;
-    /// 读取某会话最新压缩块的原始消息（history/{id}/raw 下最大普通块），供前端渲染归档历史
-    fn load_session_raw(&self, id: &str) -> Result<Vec<Message>>;
+    /// 渐进式加载历史块：before_chunk=None 读最新块，否则读更早一块；返回块号 + 消息 + 是否还有更早
+    fn load_session_history(
+        &self,
+        id: &str,
+        before_chunk: Option<u64>,
+    ) -> Result<LoadHistoryResult>;
     /// 删除归档会话（目录 + 向量库该会话 chunk 一并清理）
     fn delete_session(&self, id: &str) -> Result<()>;
     /// 重命名会话标题（活跃或归档均可）

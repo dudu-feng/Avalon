@@ -1,12 +1,12 @@
 // 会话历史列表（Chat 页左侧面板）
 //
-// 职责：展示会话历史（统一按时间分组、不置顶）、滑动指示器高亮当前会话、切换 / 重命名 / 删除 / 新建。
+// 职责：展示会话历史（统一按时间分组、不置顶）、滑动指示器高亮当前会话、切换 / 重命名 / 删除。
 // 时间分组：今天 / 昨天 / 过去 7 天 / 更早（由 created_at epoch 秒推导）。
 // 交互：点击条目切换；hover 显示「…」按钮，点击展开操作菜单（重命名 / 删除）；重命名走内联输入，删除走确认框。
 // 当前会话用滑动指示器 + 加粗标题标识（不置顶），切换时指示器平滑滑到目标条目。
 
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
-import { Button, ConfirmDialog, Menu, Skeleton } from '../../ui';
+import { ConfirmDialog, Menu, Skeleton } from '../../ui';
 import type { MenuItem } from '../../ui';
 import type { SessionMeta } from '../../../types/chat';
 import styles from './SessionList.module.css';
@@ -17,7 +17,6 @@ export interface SessionListProps {
   /** 列表加载骨架（首次加载） */
   loading?: boolean;
   onSelect: (id: string) => void;
-  onNew: () => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
 }
@@ -84,7 +83,6 @@ export function SessionList({
   activeId,
   loading = false,
   onSelect,
-  onNew,
   onRename,
   onDelete,
 }: SessionListProps) {
@@ -215,13 +213,6 @@ export function SessionList({
 
   return (
     <aside className={styles.panel}>
-      <header className={styles.header}>
-        <span className={styles.heading}>会话</span>
-        <Button variant="ghost" size="sm" onClick={onNew} title="新建会话">
-          ＋ 新建
-        </Button>
-      </header>
-
       <div className={styles.list} ref={listRef}>
         <div
           className={[styles.indicator, ready ? styles.ready : ''].filter(Boolean).join(' ')}

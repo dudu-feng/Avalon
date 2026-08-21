@@ -9,7 +9,9 @@ import {
   useRef,
   useState,
   type HTMLAttributes,
+  type MutableRefObject,
   type ReactNode,
+  type Ref,
 } from 'react';
 import styles from './ScrollArea.module.css';
 
@@ -18,6 +20,8 @@ export interface ScrollAreaProps extends HTMLAttributes<HTMLElement> {
   as?: 'div' | 'main' | 'aside';
   /** viewport 内容区样式（padding / gap / flex 列布局等） */
   viewportClassName?: string;
+  /** 透传内部滚动 viewport 的 DOM ref（供外部读取 scrollTop/scrollHeight、监听滚轮） */
+  viewportRef?: Ref<HTMLDivElement>;
   children: ReactNode;
 }
 
@@ -25,18 +29,30 @@ export function ScrollArea({
   as: Component = 'div',
   viewportClassName = '',
   className = '',
+  viewportRef,
   children,
   ...rest
 }: ScrollAreaProps) {
-  const viewportRef = useRef<HTMLDivElement>(null);
+  const innerViewportRef = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState({ height: 0, top: 0 });
   const [scrollable, setScrollable] = useState(false);
   const [visible, setVisible] = useState(false);
   const hideTimer = useRef<number | undefined>(undefined);
 
+  // 同时写入内部 ref（thumb 几何）与外部透传 ref（渐进式加载等）
+  const setViewport = useCallback(
+    (el: HTMLDivElement | null) => {
+      innerViewportRef.current = el;
+      if (!viewportRef) return;
+      if (typeof viewportRef === 'function') viewportRef(el);
+      else (viewportRef as MutableRefObject<HTMLDivElement | null>).current = el;
+    },
+    [viewportRef],
+  );
+
   // 依据 viewport 的 scrollHeight / clientHeight / scrollTop 重算 thumb 高度与位置
   const updateThumb = useCallback(() => {
-    const vp = viewportRef.current;
+    const vp = innerViewportRef.current;
     if (!vp) return;
     const scrollableH = vp.scrollHeight - vp.clientHeight;
     if (scrollableH <= 0) {
@@ -58,7 +74,7 @@ export function ScrollArea({
   }, []);
 
   useEffect(() => {
-    const vp = viewportRef.current;
+    const vp = innerViewportRef.current;
     if (!vp) return;
 
     let raf = 0;
@@ -96,7 +112,7 @@ export function ScrollArea({
   return (
     <Component className={[styles.root, className].filter(Boolean).join(' ')} {...rest}>
       <div
-        ref={viewportRef}
+        ref={setViewport}
         className={[styles.viewport, viewportClassName].filter(Boolean).join(' ')}
       >
         {children}

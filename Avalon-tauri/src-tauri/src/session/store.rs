@@ -305,6 +305,52 @@ impl FileSessionStore {
         Ok(())
     }
 
+    // ============ 原始块读取 ============
+
+    /// 按块号回溯读取压缩块原始消息：before_chunk=None 读最新块，否则读「小于 before 的最大块」。
+    /// 返回 (块号, 消息, 是否还有更早块)。忽略 merged_ 摘要文件（其 file_stem 非纯数字，parse 失败即跳过）。
+    fn load_history_chunk(
+        &self,
+        id: &str,
+        before_chunk: Option<u64>,
+    ) -> Result<(Option<u64>, Vec<Message>, bool)> {
+        let raw_dir = self.history_dir().join(id).join("raw");
+        if !raw_dir.is_dir() {
+            return Ok((None, Vec::new(), false));
+        }
+        // 收集所有纯数字块号（普通压缩块），merged_ 摘要文件自然被忽略
+        let mut nums: Vec<u64> = Vec::new();
+        for entry in std::fs::read_dir(&raw_dir).with_context(|| "读取 raw 目录失败")? {
+            let path = entry.context("读取 raw 条目失败")?.path();
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if let Ok(n) = stem.parse::<u64>() {
+                nums.push(n);
+            }
+        }
+        if nums.is_empty() {
+            return Ok((None, Vec::new(), false));
+        }
+        nums.sort_unstable();
+
+        let target = match before_chunk {
+            Some(b) => nums.iter().rev().find(|&&n| n < b).copied(),
+            None => nums.last().copied(),
+        };
+        let Some(n) = target else {
+            return Ok((None, Vec::new(), false));
+        };
+
+        let file = raw_dir.join(format!("{n}.json"));
+        let content = std::fs::read_to_string(&file)
+            .with_context(|| format!("读取 raw 文件失败: {}", file.display()))?;
+        let messages: Vec<Message> = serde_json::from_str(&content)
+            .with_context(|| format!("解析 raw 文件失败: {}", file.display()))?;
+        let has_earlier = nums.first().copied().map(|min| min < n).unwrap_or(false);
+        Ok((Some(n), messages, has_earlier))
+    }
+
     // ============ 重建索引 ============
 
     /// 重建向量索引：清空 + 先收集候选文件 → 逐个处理并上报进度
@@ -573,28 +619,13 @@ impl SessionStore for FileSessionStore {
         Ok(target)
     }
 
-    fn load_session_raw(&self, id: &str) -> Result<Vec<Message>> {
-        let raw_dir = self.history_dir().join(id).join("raw");
-        if !raw_dir.is_dir() {
-            return Ok(Vec::new());
-        }
-        // 找最大纯数字文件名（普通压缩块），忽略 merged_ 摘要文件
-        let mut latest: Option<u64> = None;
-        for entry in std::fs::read_dir(&raw_dir).with_context(|| "读取 raw 目录失败")? {
-            let path = entry.context("读取 raw 条目失败")?.path();
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            if let Ok(n) = stem.parse::<u64>() {
-                latest = Some(latest.map_or(n, |m| m.max(n)));
-            }
-        }
-        let Some(n) = latest else { return Ok(Vec::new()) };
-        let file = raw_dir.join(format!("{n}.json"));
-        let content = std::fs::read_to_string(&file)
-            .with_context(|| format!("读取 raw 文件失败: {}", file.display()))?;
-        serde_json::from_str(&content)
-            .with_context(|| format!("解析 raw 文件失败: {}", file.display()))
+    fn load_session_history(
+        &self,
+        id: &str,
+        before_chunk: Option<u64>,
+    ) -> Result<LoadHistoryResult> {
+        let (chunk, messages, has_earlier) = self.load_history_chunk(id, before_chunk)?;
+        Ok(LoadHistoryResult { chunk, messages, has_earlier })
     }
 
     fn delete_session(&self, id: &str) -> Result<()> {

@@ -12,7 +12,7 @@ use crate::config::{AppConfig, ConfigStore};
 use crate::engine::{Engine, EngineEvent};
 use crate::llm::{CompressResult, LlmState};
 use crate::prompt::build_compress_prompt;
-use crate::session::{ContextUsage, Message, SessionData, SessionMeta};
+use crate::session::{ContextUsage, LoadHistoryResult, SessionData, SessionMeta};
 use crate::usage::{DailyUsageRow, UsageStore};
 use crate::vector::{RebuildProgress, RebuildStats};
 
@@ -182,13 +182,16 @@ pub async fn switch_session(
         .map_err(|e| e.to_string())
 }
 
-/// 读取某会话最新压缩块的原始消息（供前端渲染归档历史）
+/// 渐进式加载历史块：before_chunk=None 读最新块，否则读更早一块（供前端渐进式回溯会话历史）
 #[tauri::command]
-pub fn load_session_raw(
+pub fn load_session_history(
     id: String,
+    before_chunk: Option<u64>,
     engine: State<'_, Arc<Engine>>,
-) -> Result<Vec<Message>, String> {
-    engine.load_session_raw(&id).map_err(|e| e.to_string())
+) -> Result<LoadHistoryResult, String> {
+    engine
+        .load_session_history(&id, before_chunk)
+        .map_err(|e| e.to_string())
 }
 
 /// 删除归档会话（目录 + 向量库该会话 chunk 一并清理）

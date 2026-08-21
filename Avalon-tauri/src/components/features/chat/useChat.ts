@@ -19,7 +19,7 @@ import {
   getContextUsage,
   getCurrentSession,
   listSessions,
-  loadSessionRaw,
+  loadSessionHistory,
   renameSession as renameSessionApi,
   stopChat,
   switchSession as switchSessionApi,
@@ -32,17 +32,18 @@ export interface UseChatOptions {
 type AssistantMessage = Extract<ChatMessage, { role: 'assistant' }>;
 type ToolMessage = Extract<ChatMessage, { role: 'tool' }>;
 
-/** 后端历史消息（user/assistant/tool 平铺）→ 前端展示消息（逐条直映，无归并） */
-function mapHistoryMessages(msgs: HistoryMessage[]): ChatMessage[] {
+/** 后端历史消息（user/assistant/tool 平铺）→ 前端展示消息（逐条直映，无归并）。
+ *  key 区分来源（块号 / 'cur'），保证拼接更早块时消息 id 全局唯一。 */
+function mapHistoryMessages(msgs: HistoryMessage[], key: string): ChatMessage[] {
   const out: ChatMessage[] = [];
   let idx = 0;
 
   for (const m of msgs) {
     if (m.role === 'user') {
-      out.push({ id: `hist-${idx++}`, role: 'user', status: 'done', content: m.content });
+      out.push({ id: `hist-${key}-${idx++}`, role: 'user', status: 'done', content: m.content });
     } else if (m.role === 'assistant') {
       out.push({
-        id: `hist-${idx++}`,
+        id: `hist-${key}-${idx++}`,
         role: 'assistant',
         status: 'done',
         thought: m.reasoning_content ?? '',
@@ -52,7 +53,7 @@ function mapHistoryMessages(msgs: HistoryMessage[]): ChatMessage[] {
     } else {
       // role === 'tool'：独立折叠卡片，参数/状态/结果自包含，不依附 assistant
       out.push({
-        id: `hist-${idx++}`,
+        id: `hist-${key}-${idx++}`,
         role: 'tool',
         tool: {
           id: m.tool_call_id,
@@ -163,6 +164,10 @@ export function useChat(options: UseChatOptions = {}) {
   const [switching, setSwitching] = useState(false);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
+  // 渐进式加载历史游标：当前已加载的最早块号 / 是否还有更早块 / 是否正在加载更早
+  const [earliestChunk, setEarliestChunk] = useState<number | null>(null);
+  const [hasEarlier, setHasEarlier] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const idRef = useRef(0);
 
   const nextId = useCallback(() => `msg-${(idRef.current += 1)}`, []);
@@ -194,18 +199,36 @@ export function useChat(options: UseChatOptions = {}) {
     }
   }, [channelName]);
 
-  // 挂载时加载当前会话历史：active 复用 → 有历史消息；新建 → 空
+  // 挂载时加载当前会话历史：未压缩消息（底部）+ 最新压缩块（顶部），按「旧→新」拼接。
+  // 修复空会话 bug：压缩后 messages 被清空，历史全在 raw 块，需额外读最新块。
   useEffect(() => {
     let cancelled = false;
-    getCurrentSession(channelName)
-      .then((s) => {
+    (async () => {
+      try {
+        const s = await getCurrentSession(channelName);
         if (cancelled) return;
-        setMessages(mapHistoryMessages(s.messages));
-      })
-      .catch((e) => console.error('get_current_session 失败:', e))
-      .finally(() => {
+        const base = mapHistoryMessages(s.messages, 'cur'); // 未压缩的最新消息（底部）
+        if (s.compress_round > 0) {
+          const hist = await loadSessionHistory(s.id, null); // 最新压缩块
+          if (cancelled) return;
+          setEarliestChunk(hist.chunk);
+          setHasEarlier(hist.has_earlier);
+          // 时间线（旧→新）：[块 N 消息] + [current 未压缩消息]
+          setMessages([
+            ...mapHistoryMessages(hist.messages, String(hist.chunk ?? 'cur')),
+            ...base,
+          ]);
+        } else {
+          setEarliestChunk(null);
+          setHasEarlier(false);
+          setMessages(base);
+        }
+      } catch (e) {
+        console.error('get_current_session 失败:', e);
+      } finally {
         if (!cancelled) setInitialLoading(false);
-      });
+      }
+    })();
     refreshUsage();
     return () => {
       cancelled = true;
@@ -218,6 +241,8 @@ export function useChat(options: UseChatOptions = {}) {
     if (isBusy || resetting || switching) return;
     setResetting(true);
     setMessages([]);
+    setEarliestChunk(null);
+    setHasEarlier(false);
     try {
       await createSession(channelName);
       await refreshSessions();
@@ -236,8 +261,10 @@ export function useChat(options: UseChatOptions = {}) {
       setSwitching(true);
       try {
         await switchSessionApi(channelName, id);
-        const raw = await loadSessionRaw(id);
-        setMessages(mapHistoryMessages(raw));
+        const hist = await loadSessionHistory(id, null); // 目标会话最新块
+        setEarliestChunk(hist.chunk);
+        setHasEarlier(hist.has_earlier);
+        setMessages(mapHistoryMessages(hist.messages, String(hist.chunk ?? 'cur')));
         await refreshSessions();
         refreshUsage();
       } catch (e) {
@@ -248,6 +275,27 @@ export function useChat(options: UseChatOptions = {}) {
     },
     [channelName, isBusy, resetting, switching, activeId, refreshSessions, refreshUsage],
   );
+
+  // 加载更早一块历史：以最早块号为 before_chunk 请求上一块，拼接到消息区头部
+  const loadEarlier = useCallback(async () => {
+    if (loadingEarlier || !hasEarlier || !activeId) return;
+    setLoadingEarlier(true);
+    try {
+      const hist = await loadSessionHistory(activeId, earliestChunk);
+      setEarliestChunk(hist.chunk);
+      setHasEarlier(hist.has_earlier);
+      if (hist.messages.length > 0) {
+        setMessages((prev) => [
+          ...mapHistoryMessages(hist.messages, String(hist.chunk ?? 'cur')),
+          ...prev,
+        ]);
+      }
+    } catch (e) {
+      console.error('load_session_history 失败:', e);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }, [loadingEarlier, hasEarlier, activeId, earliestChunk]);
 
   // 删除归档会话：后端清目录 + 向量 chunk，随后刷新列表
   const deleteSession = useCallback(
@@ -337,5 +385,9 @@ export function useChat(options: UseChatOptions = {}) {
     switchSession,
     deleteSession,
     renameSession,
+    earliestChunk,
+    hasEarlier,
+    loadingEarlier,
+    loadEarlier,
   };
 }

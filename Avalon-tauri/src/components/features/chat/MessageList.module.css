@@ -1,3 +1,12 @@
+/* 外层包裹：relative 定位，供顶部「加载更早」提示条绝对定位 */
+.wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
 .listRoot {
   flex: 1;
   min-height: 0;
@@ -71,4 +80,41 @@
   width: 52%;
   height: 56px;
   border-radius: var(--radius) var(--radius) var(--radius) 4px;
+}
+
+/* 「加载更早」提示条：浮在消息区顶部，armed/pulling 显示文字、loading 显示转圈 */
+.pullIndicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  overflow: hidden;
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
+  opacity: 0.95;
+  transition: height 0.18s ease;
+}
+
+.pullLabel {
+  font: 500 12px/1.4 var(--font-sans);
+  color: var(--muted-foreground);
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--muted);
+  border-top-color: var(--foreground);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

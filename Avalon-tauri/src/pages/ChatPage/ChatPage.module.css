@@ -2,10 +2,9 @@
   height: 100%;
   width: 100%;
   display: flex;
-  gap: 16px;
 }
 
-/* 右侧对话区：消息列表（flex:1）+ 输入卡片 */
+/* 对话区：工具条 + 消息列表（flex:1）+ 输入卡片 */
 .conversation {
   flex: 1;
   min-width: 0;
@@ -14,8 +13,35 @@
   gap: 16px;
 }
 
-@media (max-width: 640px) {
-  .chat {
-    flex-direction: column;
-  }
+.toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 会话历史入口（打开抽屉） */
+.menuToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: 500 13px/1.4 var(--font-sans);
+  cursor: pointer;
+  transition: color 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.menuToggle:hover {
+  color: var(--foreground);
+  border-color: var(--ring);
+  background: var(--muted);
+}
+
+.menuToggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
