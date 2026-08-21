@@ -42,3 +42,6 @@ export type { TabsProps, TabsOption } from './Tabs';
 
 export { Skeleton } from './Skeleton';
 export type { SkeletonProps } from './Skeleton';
+
+export { Menu } from './Menu';
+export type { MenuProps, MenuItem } from './Menu';
