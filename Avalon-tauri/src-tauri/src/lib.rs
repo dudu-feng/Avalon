@@ -8,6 +8,7 @@ mod embedding;
 mod engine;
 mod llm;
 mod prompt;
+mod scheduler;
 mod session;
 mod tool;
 mod usage;
@@ -57,9 +58,15 @@ pub fn run() {
         vector_store,
     ));
     let prompt_asm = prompt::PromptAssembler::new(&cfg);
-    let tool_registry: Arc<dyn tool::ToolRegistry> =
-        Arc::new(tool::ToolSet::new().with_memory(memory_index).with_config(store.clone()));
     let usage_store: Arc<usage::UsageStore> = Arc::new(usage::UsageStore::new(cfg.usage_path()));
+    let task_store: Arc<scheduler::TaskStore> =
+        Arc::new(scheduler::TaskStore::new(cfg.scheduler_path()));
+    let tool_registry: Arc<dyn tool::ToolRegistry> = Arc::new(
+        tool::ToolSet::new()
+            .with_memory(memory_index)
+            .with_config(store.clone())
+            .with_scheduler(task_store.clone()),
+    );
     let engine = Arc::new(engine::Engine::new(
         store.clone(),
         llm.clone(),
@@ -69,6 +76,10 @@ pub fn run() {
         usage_store.clone(),
     ));
 
+    // 供 setup 里启动心跳循环（manage 会 move 原句柄，这里提前 clone）
+    let scheduler_engine = engine.clone();
+    let scheduler_store = task_store.clone();
+
     // 4. 构建 Tauri 应用
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -76,6 +87,7 @@ pub fn run() {
         .manage(llm)
         .manage(engine)
         .manage(usage_store)
+        .manage(task_store)
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
@@ -98,8 +110,14 @@ pub fn run() {
             commands::rename_session,
             commands::rebuild_memory_index,
             commands::query_daily_usage,
+            commands::create_scheduled_task,
+            commands::list_scheduled_tasks,
+            commands::delete_scheduled_task,
+            commands::toggle_scheduled_task,
+            commands::mark_task_read,
+            commands::get_unread_task_count,
         ])
-        .setup(move |_app| {
+        .setup(move |app| {
             // eager 预热：启动时后台加载，不阻塞主线程；失败降级（首次使用时 get_sync 再试）
             if cfg.embedding.load_mode == config::EmbeddingLoadMode::Eager {
                 let handle = handle.clone();
@@ -109,6 +127,15 @@ pub fn run() {
                     }
                 });
             }
+            // 启动定时任务心跳循环（30s tick，静默执行 + 全局事件通知）
+            let scheduler = scheduler::Scheduler::new(
+                scheduler_engine,
+                scheduler_store,
+                app.handle().clone(),
+            );
+            tauri::async_runtime::spawn(async move {
+                scheduler.run_loop(std::time::Duration::from_secs(30)).await;
+            });
             println!("[App] Avalon Tauri 应用启动成功");
             Ok(())
         })

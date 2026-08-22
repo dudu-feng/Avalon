@@ -57,3 +57,10 @@ export const InfoIcon = createIcon(
     <line x1="12" y1="8" x2="12.01" y2="8" />
   </>,
 );
+
+export const ClockIcon = createIcon(
+  <>
+    <circle cx="12" cy="12" r="10" />
+    <polyline points="12 6 12 12 16 14" />
+  </>,
+);

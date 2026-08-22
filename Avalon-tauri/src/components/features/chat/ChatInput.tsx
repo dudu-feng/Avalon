@@ -13,9 +13,9 @@ export interface ChatInputProps {
   onSubmit: (text: string) => void;
   onStop: () => void;
   isBusy?: boolean;
-  models: ModelOption[];
-  activeModel: string;
-  onModelChange: (name: string) => void;
+  models?: ModelOption[];
+  activeModel?: string;
+  onModelChange?: (name: string) => void;
   contextUsage?: ContextUsage | null;
 }
 
@@ -26,9 +26,9 @@ export function ChatInput({
   onSubmit,
   onStop,
   isBusy = false,
-  models,
-  activeModel,
-  onModelChange,
+  models = [],
+  activeModel = '',
+  onModelChange = () => {},
   contextUsage,
 }: ChatInputProps) {
   const [value, setValue] = useState('');
@@ -91,12 +91,14 @@ export function ChatInput({
           <span className={styles.hint}>Enter 发送 · Shift+Enter 换行</span>
         </div>
         <div className={styles.right}>
-          <Dropdown
-            options={models.map((m) => ({ value: m.name, label: m.name }))}
-            value={activeModel}
-            onChange={onModelChange}
-            align="end"
-          />
+          {models.length > 0 && (
+            <Dropdown
+              options={models.map((m) => ({ value: m.name, label: m.name }))}
+              value={activeModel}
+              onChange={onModelChange}
+              align="end"
+            />
+          )}
           <Button
             size="sm"
             variant={isBusy ? 'secondary' : 'primary'}

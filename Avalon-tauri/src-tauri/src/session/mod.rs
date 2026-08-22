@@ -58,6 +58,8 @@ pub trait SessionStore: Send + Sync {
     fn delete_session(&self, id: &str) -> Result<()>;
     /// 重命名会话标题（活跃或归档均可）
     fn rename_session(&self, channel: &str, id: &str, title: &str) -> Result<()>;
+    /// 设置当前活跃会话标题（ensure_active 后写入；幂等，标题不变则不落盘）
+    fn set_current_title(&self, channel: &str, title: &str) -> Result<()>;
 }
 
 /// 会话 ID 时间戳：YYYY-MM-DD-HH_MM_SS（下划线，文件名安全，字典序 = 时间序）

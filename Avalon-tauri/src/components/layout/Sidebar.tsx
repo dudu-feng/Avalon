@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
 import { MenuItem } from './MenuItem';
 import { ScrollArea } from '../ui';
+import { useScheduler } from '../../hooks/useSchedulerStore';
 import styles from './Sidebar.module.css';
 import type { MenuItemData } from '../../types';
 import blackLogo from '../../assets/avalon-logo/Avalon-black.png';
@@ -9,6 +10,8 @@ import creamLogo from '../../assets/avalon-logo/Avalon-cream.png';
 
 /** 关于入口在底部区用版本号替代 label 显示 */
 const ABOUT_ID = 'about';
+/** 定时任务入口：显示未读执行角标 */
+const SCHEDULE_ID = 'schedule';
 
 export interface SidebarProps {
   title: string;
@@ -20,6 +23,8 @@ export interface SidebarProps {
 export function Sidebar({ title, items, activeId, onSelect }: SidebarProps) {
   // 版本号从 tauri.conf.json 动态读取，format 成 major.minor（v0.1）
   const [version, setVersion] = useState('v0.1');
+  // 定时任务未读角标（模块级 store，任务完成经全局事件自动刷新）
+  const { unread } = useScheduler();
 
   useEffect(() => {
     getVersion()
@@ -49,6 +54,7 @@ export function Sidebar({ title, items, activeId, onSelect }: SidebarProps) {
             label={item.label}
             icon={item.icon}
             active={activeId === item.id}
+            badge={item.id === SCHEDULE_ID ? unread : undefined}
             onClick={() => onSelect(item.id)}
           />
         ))}

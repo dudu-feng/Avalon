@@ -11,7 +11,7 @@ pub mod events;
 pub mod history;
 pub mod react;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -37,6 +37,8 @@ pub struct Engine {
     usage: Arc<UsageStore>,
     /// 按 channel 维度的取消标志（chat 运行时注册，stop_chat 置位中断流式循环）
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// 正在运行的 channel 集合（心跳调度前判忙，避免并发执行同一任务）
+    busy: Mutex<HashSet<String>>,
 }
 
 impl Engine {
@@ -56,6 +58,7 @@ impl Engine {
             session,
             usage,
             cancels: Mutex::new(HashMap::new()),
+            busy: Mutex::new(HashSet::new()),
         }
     }
 
@@ -68,8 +71,9 @@ impl Engine {
         cancel: Arc<AtomicBool>,
         on_event: impl FnMut(EngineEvent) + Send,
     ) -> Result<()> {
+        self.busy.lock().unwrap().insert(channel.to_string());
         let mut on_event = on_event;
-        react::run_loop(
+        let result = react::run_loop(
             user_input,
             channel,
             &self.config,
@@ -81,7 +85,9 @@ impl Engine {
             &cancel,
             &mut on_event,
         )
-        .await
+        .await;
+        self.busy.lock().unwrap().remove(channel);
+        result
     }
 
     /// 注册一次 chat 运行的取消标志（返回 Arc 供 run 传入），channel 维度的最新一次覆盖旧值
@@ -101,9 +107,19 @@ impl Engine {
         }
     }
 
+    /// 判断某 channel 是否有正在进行的 ReAct 循环（心跳调度前判忙，避免并发执行同一任务）
+    pub fn is_channel_busy(&self, channel: &str) -> bool {
+        self.busy.lock().unwrap().contains(channel)
+    }
+
     /// 初始化会话（channel 维度：active 复用 / 否则新建）—— 调用方在 run 前触发（决策 D3）
     pub fn init_session(&self, channel: &str) -> Result<()> {
         self.session.init_session(channel)
+    }
+
+    /// 设置当前活跃会话标题（定时任务执行前调用，让会话文件可读：title = 定时任务-任务名称）
+    pub fn set_current_title(&self, channel: &str, title: &str) -> Result<()> {
+        self.session.set_current_title(channel, title)
     }
 
     /// 新建会话：归档当前（若非空）+ 创建新 active 会话（写 current + history 初始存档）

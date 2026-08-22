@@ -11,10 +11,12 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::config::{ConfigStore, SearchMode};
+use crate::scheduler::TaskStore;
 use crate::vector::MemoryIndex;
 
 use super::fs_tools;
 use super::memory_tools;
+use super::scheduler_tools;
 use super::ToolRegistry;
 
 /// 工具元数据（名字 + 描述 + 参数 JSON Schema，供 get_tools_schema 使用）
@@ -112,12 +114,50 @@ fn memory_tool_def() -> ToolDef {
     }
 }
 
+/// 定时任务工具定义（仅注入 TaskStore 时暴露，3 个）
+fn scheduler_tool_defs() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "create_scheduled_task",
+            description: "创建一个定时任务（在指定时间自动执行一次对话）。schedule_type 为 once/daily/weekly；once 的 schedule_value 形如 'YYYY-MM-DD HH:MM'，daily 为 'HH:MM'，weekly 为 'N HH:MM'（N=1 周一 .. 7 周日）",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "任务名称（简短标题）"},
+                    "prompt": {"type": "string", "description": "任务内容（每次触发时喂给 agent 的输入）"},
+                    "schedule_type": {"type": "string", "enum": ["once", "daily", "weekly"], "description": "触发方式"},
+                    "schedule_value": {"type": "string", "description": "触发时间：once=YYYY-MM-DD HH:MM；daily=HH:MM；weekly=N HH:MM"}
+                },
+                "required": ["name", "prompt", "schedule_type", "schedule_value"]
+            }),
+        },
+        ToolDef {
+            name: "list_scheduled_tasks",
+            description: "列出全部定时任务（id、来源、触发时间、内容、是否启用），供创建前查重",
+            parameters: json!({ "type": "object", "properties": {} }),
+        },
+        ToolDef {
+            name: "delete_scheduled_task",
+            description: "删除指定 id 的定时任务",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "任务 id"}
+                },
+                "required": ["task_id"]
+            }),
+        },
+    ]
+}
+
 /// 工具注册表实现：基础文件/终端工具 + 可选记忆检索（注入 MemoryIndex 后启用）
 pub struct ToolSet {
     /// 记忆检索后端（None 则不暴露 search_session_memory 工具）
     memory: Option<Arc<dyn MemoryIndex>>,
     /// 配置句柄（提供检索默认模式；None 时缺省 mode 兜底 hybrid）
     config: Option<ConfigStore>,
+    /// 定时任务存储（None 则不暴露定时任务工具）
+    scheduler: Option<Arc<TaskStore>>,
 }
 
 impl ToolSet {
@@ -125,6 +165,7 @@ impl ToolSet {
         Self {
             memory: None,
             config: None,
+            scheduler: None,
         }
     }
 
@@ -137,6 +178,12 @@ impl ToolSet {
     /// 注入配置句柄，缺省检索模式跟随 config.session_memory.search_mode（支持热更新）
     pub fn with_config(mut self, config: ConfigStore) -> Self {
         self.config = Some(config);
+        self
+    }
+
+    /// 注入定时任务存储，启用 create/list/delete_scheduled_task 工具
+    pub fn with_scheduler(mut self, scheduler: Arc<TaskStore>) -> Self {
+        self.scheduler = Some(scheduler);
         self
     }
 
@@ -153,6 +200,9 @@ impl ToolSet {
         let mut defs = tool_defs();
         if self.memory.is_some() {
             defs.push(memory_tool_def());
+        }
+        if self.scheduler.is_some() {
+            defs.extend(scheduler_tool_defs());
         }
         defs
     }
@@ -186,6 +236,18 @@ impl ToolRegistry for ToolSet {
             "search_session_memory" => match &self.memory {
                 Some(m) => memory_tools::search_session_memory(args, m.as_ref(), self.default_search_mode()),
                 None => "记忆检索未配置".to_string(),
+            },
+            "create_scheduled_task" => match &self.scheduler {
+                Some(s) => scheduler_tools::create_scheduled_task(args, s),
+                None => "定时任务未配置".to_string(),
+            },
+            "list_scheduled_tasks" => match &self.scheduler {
+                Some(s) => scheduler_tools::list_scheduled_tasks(args, s),
+                None => "定时任务未配置".to_string(),
+            },
+            "delete_scheduled_task" => match &self.scheduler {
+                Some(s) => scheduler_tools::delete_scheduled_task(args, s),
+                None => "定时任务未配置".to_string(),
             },
             _ => format!("未找到工具: {name}"),
         }

@@ -1,0 +1,226 @@
+/* 顶部工具条：摘要 + 新建按钮 */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font: 500 13px/1.2 var(--font-sans);
+  color: var(--muted-foreground);
+}
+
+/* 空状态 */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 56px 24px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.emptyTitle {
+  font: 500 20px/1.2 var(--font-display);
+  color: var(--foreground);
+}
+
+.emptyHint {
+  font: 400 14px/1.6 var(--font-serif);
+  color: var(--muted-foreground);
+}
+
+/* 任务卡片网格 */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.taskCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--popover);
+  box-shadow: var(--shadow-sm);
+}
+
+.cardHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cardName {
+  font: 600 16px/1.3 var(--font-sans);
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.cardSchedule {
+  margin: 0;
+  font: 600 12px/1.4 var(--font-mono);
+  color: var(--primary);
+}
+
+.cardPrompt {
+  margin: 0;
+  font: 400 13px/1.6 var(--font-sans);
+  color: var(--secondary-foreground);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cardMeta {
+  margin: 0;
+  font: 400 12px/1.4 var(--font-sans);
+  color: var(--muted-foreground);
+}
+
+.cardActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* 创建表单 */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.fieldLabel {
+  font: 600 11px/1.2 var(--font-sans);
+  color: var(--muted-foreground);
+}
+
+.scheduleTypeRow {
+  display: flex;
+  gap: 8px;
+}
+
+.typeChip {
+  flex: 1;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--muted-foreground);
+  font: 600 13px/1.2 var(--font-sans);
+  cursor: pointer;
+  transition: border-color 0.16s ease, color 0.16s ease, background-color 0.16s ease;
+}
+
+.typeChip:hover {
+  border-color: var(--ring);
+  color: var(--foreground);
+}
+
+.typeChipActive {
+  border-color: var(--ring);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.scheduleValueRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 原生时间/日期控件：对齐 Input.field 视觉 */
+.field {
+  flex: 1;
+  height: 40px;
+  padding: 0 calc(var(--spacing) * 3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  box-shadow: var(--shadow-sm);
+  outline: none;
+  transition: border-color 0.16s ease;
+}
+
+.field:focus {
+  border-color: var(--ring);
+}
+
+/* 任务内容多行输入：自动换行 + 可纵向拉伸，替代单行 Input */
+.textarea {
+  width: 100%;
+  min-height: 88px;
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  line-height: 1.6;
+  resize: vertical;
+  box-shadow: var(--shadow-sm);
+  outline: none;
+  transition: border-color 0.16s ease;
+}
+
+.textarea:focus {
+  border-color: var(--ring);
+}
+
+.select {
+  height: 40px;
+  padding: 0 calc(var(--spacing) * 3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  box-shadow: var(--shadow-sm);
+  outline: none;
+  cursor: pointer;
+}
+
+.select:focus {
+  border-color: var(--ring);
+}
+
+.error {
+  margin: 0;
+  font: 400 12px/1.5 var(--font-sans);
+  color: var(--error);
+}
+
+/* 执行历史容器：给 MessageList 一个受约束的高度（flex:1 占满，输入框固定底部） */
+.historyView {
+  height: 62vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}

@@ -55,3 +55,17 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--sidebar-primary);
+  color: var(--sidebar-primary-foreground);
+  font: 600 11px/1 var(--font-sans);
+  flex-shrink: 0;
+}

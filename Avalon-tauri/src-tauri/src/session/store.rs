@@ -518,6 +518,15 @@ impl SessionStore for FileSessionStore {
         self.write_current(channel, &data)
     }
 
+    fn set_current_title(&self, channel: &str, title: &str) -> Result<()> {
+        let mut data = self.ensure_active(channel)?;
+        if data.title == title {
+            return Ok(());
+        }
+        data.title = title.to_string();
+        self.write_current(channel, &data)
+    }
+
     async fn auto_compress_check(&self, channel: &str, chat_history: &[Message]) -> Result<bool> {
         let max_input = max_input_tokens(chat_history);
         let threshold = self.config.get().session_memory.compress_threshold;

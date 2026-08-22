@@ -118,6 +118,11 @@ impl AppConfig {
         self.log_path().join("usage/usage.json")
     }
 
+    /// 定时任务存储文件：data_root/log/scheduler/tasks.json
+    pub fn scheduler_path(&self) -> PathBuf {
+        self.log_path().join("scheduler/tasks.json")
+    }
+
     // —— 二级派生 ——
 
     /// 本地 embedding 模型完整路径 = model_cache_dir + local_model
