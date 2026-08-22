@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "avalon-tauri",
-  "version": "0.1.0",
+  "productName": "Avalon",
+  "version": "0.2.0",
   "identifier": "com.duedudu.avalon-tauri",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "avalon-tauri",
+        "title": "Avalon",
         "width": 800,
         "height": 600
       }
