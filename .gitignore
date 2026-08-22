@@ -55,3 +55,8 @@ doc/
 
 # config
 Avalon-config.toml
+
+# env / secrets（禁止提交任何环境变量与密钥）
+.env
+.env.*
+!.env.example
