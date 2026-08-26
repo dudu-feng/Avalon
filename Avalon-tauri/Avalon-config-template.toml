@@ -44,3 +44,14 @@ device = "cpu"
 
 [vector]
 backend = "memory"
+
+[feishu]
+enabled = false
+app_id = ""
+app_secret = ""
+domain = "https://open.feishu.cn"
+group_require_mention = true
+allow_users = []
+session_mode = "unified"
+processing_reaction = "OnIt"
+done_reaction = "DONE"
