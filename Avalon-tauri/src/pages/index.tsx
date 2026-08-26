@@ -1,16 +1,14 @@
 import type { ComponentType } from 'react';
 import type { MenuItemData } from '../types';
 import {
-  HomeIcon,
+  DashboardIcon,
   ChatIcon,
-  LibraryIcon,
   ClockIcon,
   SettingsIcon,
   InfoIcon,
 } from '../components/icons';
-import { HomePage } from './HomePage';
+import { DashboardPage } from './DashboardPage';
 import { ChatPage } from './ChatPage';
-import { LibraryPage } from './LibraryPage';
 import { SchedulePage } from './SchedulePage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
@@ -20,10 +18,9 @@ export interface PageConfig extends MenuItemData {
 }
 
 export const pages: PageConfig[] = [
-  { id: 'home', label: 'Home', icon: <HomeIcon />, component: HomePage },
-  { id: 'chat', label: 'Chat', icon: <ChatIcon />, component: ChatPage },
-  { id: 'library', label: 'Library', icon: <LibraryIcon />, component: LibraryPage },
-  { id: 'schedule', label: 'Schedule', icon: <ClockIcon />, component: SchedulePage },
-  { id: 'settings', label: 'Settings', icon: <SettingsIcon />, component: SettingsPage, position: 'bottom' },
-  { id: 'about', label: 'About', icon: <InfoIcon />, component: AboutPage, position: 'bottom' },
+  { id: 'dashboard', label: '仪表盘', icon: <DashboardIcon />, component: DashboardPage },
+  { id: 'chat', label: '对话', icon: <ChatIcon />, component: ChatPage },
+  { id: 'schedule', label: '定时任务', icon: <ClockIcon />, component: SchedulePage },
+  { id: 'settings', label: '设置', icon: <SettingsIcon />, component: SettingsPage, position: 'bottom' },
+  { id: 'about', label: '关于', icon: <InfoIcon />, component: AboutPage, position: 'bottom' },
 ];

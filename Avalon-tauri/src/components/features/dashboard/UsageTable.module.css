@@ -1,0 +1,66 @@
+.wrap {
+  margin-top: 14px;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 12px/1.5 var(--font-sans);
+}
+
+.caption {
+  padding: 8px 12px;
+  text-align: left;
+  font: 500 12px/1.4 var(--font-sans);
+  color: var(--muted-foreground);
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: var(--popover);
+  border-bottom: 1px solid var(--border);
+}
+
+.table tbody th,
+.table tbody td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--secondary-foreground);
+  font-weight: 400;
+}
+
+.table tbody tr:last-child th,
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table tbody tr:hover th,
+.table tbody tr:hover td {
+  background: var(--card);
+}
+
+.date {
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 数字列需要纵向对齐，这里才用等宽数字 */
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.total {
+  color: var(--foreground);
+}

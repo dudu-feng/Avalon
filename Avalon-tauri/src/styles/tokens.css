@@ -109,6 +109,11 @@
   --error: var(--error-500);
   --error-foreground: #ffffff;
 
+  /* 图表：去强调系列（承载「上下文/背景」语义的中性灰）。
+     强调系列直接用 --primary。此处不能复用 --text-500 —— 它在暗色下会解析成
+     更亮的 #b7b5a9，对比度反而盖过主色，破坏主次关系，故亮暗分别取值。 */
+  --chart-muted: #6e6d68; /* 对 --card #f5f4ef 对比度 4.71 */
+
   --sidebar: #f5f4ee;
   --sidebar-foreground: #3d3d3a;
   --sidebar-primary: var(--brand-500);
@@ -246,6 +251,9 @@
   --success-foreground: #141413;
   --error: var(--error-500);
   --error-foreground: #ffffff;
+
+  /* 图表去强调系列：暗色下取更深一档，确保不盖过 --primary 的视觉权重 */
+  --chart-muted: #908e84; /* 对 --card #2c2c2b 对比度 4.25 */
 
   --sidebar: #1f1e1d;
   --sidebar-foreground: #c3c0b6;

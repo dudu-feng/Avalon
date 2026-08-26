@@ -48,3 +48,9 @@ export type { MenuProps, MenuItem } from './Menu';
 
 export { Drawer } from './Drawer';
 export type { DrawerProps } from './Drawer';
+
+export { StatTile } from './StatTile';
+export type { StatTileProps, DeltaDirection } from './StatTile';
+
+export { StackedBarChart } from './StackedBarChart';
+export type { StackedBarChartProps, StackedBarDatum } from './StackedBarChart';

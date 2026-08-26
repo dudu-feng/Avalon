@@ -1,0 +1,87 @@
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.title {
+  margin: 0;
+  font: 600 16px/1.3 var(--font-sans);
+  color: var(--foreground);
+}
+
+.sub {
+  margin: 4px 0 0;
+  font: 400 12px/1.4 var(--font-sans);
+  color: var(--muted-foreground);
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 图例文字保持文字色，身份由旁边的色块承担 */
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 400 12px/1 var(--font-sans);
+  color: var(--secondary-foreground);
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.swatchEmphasis {
+  background: var(--primary);
+}
+
+.swatchBase {
+  background: var(--chart-muted);
+}
+
+.toggle {
+  align-self: flex-start;
+  margin-top: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: 400 12px/1.4 var(--font-sans);
+  color: var(--muted-foreground);
+  transition: color 0.16s ease;
+}
+
+.toggle:hover {
+  color: var(--foreground);
+}
+
+.caret {
+  display: inline-block;
+  transition: transform 0.16s ease;
+}
+
+.caretOpen {
+  transform: rotate(90deg);
+}
+
+@media (max-width: 640px) {
+  .head {
+    flex-direction: column;
+    gap: 10px;
+  }
+}

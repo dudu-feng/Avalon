@@ -1,0 +1,117 @@
+.wrap {
+  position: relative;
+  width: 100%;
+}
+
+.svg {
+  display: block;
+  overflow: visible;
+}
+
+/* 网格与坐标轴：1px 实线（不用虚线，虚线会读成「阈值/预测」），刻意退到背景里 */
+.grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+/* 轴上文字用文字色，绝不用数据色；刻度需要纵向对齐，所以这里用等宽数字 */
+.axisText {
+  fill: var(--muted-foreground);
+  font: 400 11px/1 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 强调系列：真正的产出，也是计费更贵的部分 */
+.emphasis {
+  fill: var(--primary);
+}
+
+/* 去强调系列：上下文成本，退后但仍清晰可辨 */
+.base {
+  fill: var(--chart-muted);
+}
+
+.hit {
+  fill: transparent;
+  cursor: default;
+  outline: none;
+}
+
+.hit:focus-visible {
+  fill: var(--muted);
+  fill-opacity: 0.35;
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 400 13px/1.5 var(--font-sans);
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+.tooltip {
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+  min-width: 148px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--popover);
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.tooltipTitle {
+  margin: 0 0 6px;
+  font: 600 12px/1.2 var(--font-sans);
+  color: var(--foreground);
+}
+
+.tooltipRow {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 400 12px/1.7 var(--font-sans);
+  color: var(--secondary-foreground);
+}
+
+.tooltipValue {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+}
+
+.tooltipTotal {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+/* 色块是身份的载体 —— 文字本身保持文字色 */
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.swatchEmphasis {
+  background: var(--primary);
+}
+
+.swatchBase {
+  background: var(--chart-muted);
+}

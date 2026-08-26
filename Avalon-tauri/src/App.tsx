@@ -7,7 +7,7 @@ import { DEFAULT_CHANNEL, initSession } from './lib/chatApi';
 
 function App() {
   const { mode, setMode } = useTheme();
-  const [activeId, setActiveId] = useState('home');
+  const [activeId, setActiveId] = useState('dashboard');
 
   const active = pages.find((page) => page.id === activeId) ?? pages[0];
   const ActivePage = active.component;
