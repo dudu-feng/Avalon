@@ -2,6 +2,7 @@
 //
 // 模块注册、配置加载、依赖链组装、Tauri Builder 配置。
 
+mod channel;
 mod commands;
 mod config;
 mod embedding;
@@ -80,6 +81,12 @@ pub fn run() {
     let scheduler_engine = engine.clone();
     let scheduler_store = task_store.clone();
 
+    // 渠道对接层：与 scheduler 一样，拿 engine 句柄在后台驱动 ReAct
+    let channels = Arc::new(channel::ChannelManager::new());
+    let channel_engine = engine.clone();
+    let channel_manager = channels.clone();
+    let feishu_cfg = cfg.feishu.clone();
+
     // 4. 构建 Tauri 应用
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -88,6 +95,7 @@ pub fn run() {
         .manage(engine)
         .manage(usage_store)
         .manage(task_store)
+        .manage(channels)
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
@@ -116,6 +124,10 @@ pub fn run() {
             commands::toggle_scheduled_task,
             commands::mark_task_read,
             commands::get_unread_task_count,
+            commands::feishu_start,
+            commands::feishu_stop,
+            commands::feishu_status,
+            commands::feishu_test_connection,
         ])
         .setup(move |app| {
             // eager 预热：启动时后台加载，不阻塞主线程；失败降级（首次使用时 get_sync 再试）
@@ -136,6 +148,15 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 scheduler.run_loop(std::time::Duration::from_secs(30)).await;
             });
+
+            // 飞书渠道：配置开启且凭证齐全才自启，否则静默跳过
+            if feishu_cfg.is_ready() {
+                match channel_manager.start(feishu_cfg, channel_engine) {
+                    Ok(()) => println!("[飞书] 渠道已启动"),
+                    Err(e) => eprintln!("[飞书] 渠道启动失败: {e}"),
+                }
+            }
+
             println!("[App] Avalon Tauri 应用启动成功");
             Ok(())
         })

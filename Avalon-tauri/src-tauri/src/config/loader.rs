@@ -81,6 +81,24 @@ device = "cpu"
 # ============================================================
 [vector]
 backend = "memory"                        # memory（自研轻量）| sqlite（预留扩展）
+
+# ============================================================
+#  飞书渠道（仅支持企业自建应用，商店应用无法使用长连接）
+# ============================================================
+[feishu]
+enabled = false                           # 开关，关闭时启动不建立任何连接
+app_id = ""                               # cli_ 开头
+app_secret = ""                           # 敏感（支持环境变量 AVALON_FEISHU_APP_SECRET 覆盖）
+domain = "https://open.feishu.cn"         # Lark 国际版填 https://open.larksuite.com
+group_require_mention = true              # 群聊需 @ 机器人才响应
+allow_users = []                          # open_id 白名单，留空 = 不限制
+# 会话隔离粒度：
+#   isolated = 每个聊天独立上下文（私聊按人、群聊按群）
+#   unified  = 所有飞书消息汇入同一个永恒会话，跨群跨私聊记忆连贯
+session_mode = "isolated"
+# 状态表情：收到消息时打「处理中」，跑完换成「完成」。留空则不打
+processing_reaction = "OnIt"
+done_reaction = "DONE"
 "#;
 
 /// 加载配置：定位 → 不存在则生成默认模板 → 反序列化 → 回填 config_path → 环境变量覆盖
@@ -125,6 +143,19 @@ pub fn save(config: &AppConfig) -> Result<()> {
 /// 校验配置完整性，返回警告列表
 pub fn validate(config: &AppConfig) -> Vec<String> {
     let mut warnings = Vec::new();
+
+    // 0. 飞书渠道：只在开关打开时才校验，关闭状态下留空是正常的
+    if config.feishu.enabled {
+        if config.feishu.app_id.is_empty() {
+            warnings.push("飞书渠道已启用但 app_id 为空".to_string());
+        }
+        if config.feishu.app_secret.is_empty() {
+            warnings.push("飞书渠道已启用但 app_secret 为空".to_string());
+        }
+        if config.feishu.domain.is_empty() {
+            warnings.push("飞书渠道已启用但 domain 为空".to_string());
+        }
+    }
 
     // 1. models 非空
     if config.models.is_empty() {
@@ -231,6 +262,12 @@ fn apply_env_overrides(config: &mut AppConfig) {
             } else if let Some(first) = config.models.first_mut() {
                 first.key = v;
             }
+        }
+    }
+
+    if let Ok(v) = std::env::var("AVALON_FEISHU_APP_SECRET") {
+        if !v.is_empty() {
+            config.feishu.app_secret = v;
         }
     }
 }

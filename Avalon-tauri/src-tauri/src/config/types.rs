@@ -28,6 +28,9 @@ pub struct AppConfig {
     pub whisper: WhisperConfig,
     /// 向量数据库配置
     pub vector: VectorConfig,
+    /// 飞书渠道配置（新增段，老配置文件缺失时取默认值）
+    #[serde(default)]
+    pub feishu: FeishuConfig,
 
     // —— 运行时派生，不落盘 ——
     /// Avalon-config.toml 完整路径（保存时写回原位置）
@@ -144,4 +147,70 @@ pub enum VectorBackend {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorConfig {
     pub backend: VectorBackend,
+}
+
+/// 飞书会话隔离粒度
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FeishuSessionMode {
+    /// 每个聊天独立：私聊按人、群聊按群，上下文互不污染
+    Isolated,
+    /// 所有飞书消息汇入同一个永恒会话（对齐 Python 版），跨群跨私聊记忆连贯
+    Unified,
+}
+
+/// 飞书渠道配置
+///
+/// 仅支持「企业自建应用」——长连接（WebSocket）不对商店应用开放。
+/// 每个字段都带 `#[serde(default)]`：老配置文件没有 `[feishu]` 段时整段取默认，
+/// 用户手写时也允许只写关心的那几项。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FeishuConfig {
+    /// 是否启用。关闭时应用启动不建立任何连接
+    pub enabled: bool,
+    /// 应用 App ID（cli_ 开头）
+    pub app_id: String,
+    /// 应用 App Secret（敏感，支持环境变量 AVALON_FEISHU_APP_SECRET 覆盖）
+    pub app_secret: String,
+    /// 开放平台域名。飞书 open.feishu.cn / Lark open.larksuite.com
+    pub domain: String,
+    /// 群聊是否必须 @ 机器人才响应。关掉会让群里每句话都触发一次 ReAct
+    pub group_require_mention: bool,
+    /// 允许对话的用户 open_id 白名单，空列表 = 不限制
+    pub allow_users: Vec<String>,
+    /// 会话隔离粒度
+    pub session_mode: FeishuSessionMode,
+    /// 开始处理时给用户消息打的表情（飞书 emoji_type，如 OnIt）。空 = 不打
+    pub processing_reaction: String,
+    /// 处理完成后打的表情（如 DONE）。空 = 不打
+    pub done_reaction: String,
+}
+
+impl Default for FeishuConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            app_id: String::new(),
+            app_secret: String::new(),
+            domain: "https://open.feishu.cn".to_string(),
+            group_require_mention: true,
+            allow_users: Vec::new(),
+            session_mode: FeishuSessionMode::Isolated,
+            processing_reaction: "OnIt".to_string(),
+            done_reaction: "DONE".to_string(),
+        }
+    }
+}
+
+impl FeishuConfig {
+    /// 是否具备启动条件：开关打开且凭证齐全
+    pub fn is_ready(&self) -> bool {
+        self.enabled && !self.app_id.is_empty() && !self.app_secret.is_empty()
+    }
+
+    /// 域名去掉尾部斜杠，避免拼出 `https://x//open-apis/...`
+    pub fn base_url(&self) -> &str {
+        self.domain.trim_end_matches('/')
+    }
 }

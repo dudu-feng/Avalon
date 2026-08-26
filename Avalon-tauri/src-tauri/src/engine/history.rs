@@ -16,11 +16,12 @@ pub fn now_str() -> String {
     chrono::Local::now().format("%Y-%m-%d-%H:%M:%S").to_string()
 }
 
-/// 用户消息（本轮输入）
-pub fn user_entry(content: &str) -> Message {
+/// 用户消息（本轮输入）。meta 承载渠道来源，桌面端传 None
+pub fn user_entry(content: &str, meta: Option<serde_json::Value>) -> Message {
     Message::User {
         time: now_str(),
         content: content.to_string(),
+        meta,
     }
 }
 

@@ -21,10 +21,11 @@ use crate::usage::UsageStore;
 
 use super::events::EngineEvent;
 use super::history;
+use super::UserInput;
 
 /// ReAct 循环核心（依赖 trait object，可注入 mock 单测循环逻辑）
 pub(crate) async fn run_loop<F>(
-    user_input: &str,
+    input: UserInput<'_>,
     channel: &str,
     config: &ConfigStore,
     llm: &LlmState,
@@ -49,14 +50,17 @@ where
     let model_name = model.modelname.clone();
     let client = llm.client(model, cfg.llm.clone());
 
-    // 本轮 messages：system + user + 循环内累加的 assistant(tool_calls)/tool 消息
+    // 本轮 messages：system + user + 循环内累加的 assistant(tool_calls)/tool 消息。
+    // 用 for_model —— 渠道消息在这里带着来源提示，让模型当场知道是谁在哪儿说的。
     let mut messages: Vec<Value> = vec![
         json!({"role": "system", "content": system_prompt}),
-        json!({"role": "user", "content": user_input}),
+        json!({"role": "user", "content": input.for_model}),
     ];
 
-    // 持久化轨迹（user + 每轮 assistant + tool 消息）+ 跨轮累积的正文/思考/用量
-    let mut persisted: Vec<Message> = vec![history::user_entry(user_input)];
+    // 持久化轨迹（user + 每轮 assistant + tool 消息）+ 跨轮累积的正文/思考/用量。
+    // 用 for_history —— 落盘只存原文，来源信息由 meta 结构化承载，不重复写进正文。
+    let mut persisted: Vec<Message> =
+        vec![history::user_entry(input.for_history, input.meta)];
     let mut accumulated_message = String::new();
     let mut accumulated_thought = String::new();
     let mut accumulated_usage = TokenUsage::default();

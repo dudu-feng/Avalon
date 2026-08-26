@@ -1,0 +1,50 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.statusActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 致命错误：凭证错误、连接数超限等，不会自动恢复，需要醒目 */
+.error {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--error-700);
+  word-break: break-all;
+}
+
+/* 操作结果回执（启动成功、测试通过、或失败原因） */
+.notice {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--secondary-foreground);
+  word-break: break-all;
+}
+
+/* 约束与前置条件说明 */
+.hint {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
+
+@media (max-width: 640px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

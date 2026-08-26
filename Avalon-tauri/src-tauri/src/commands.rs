@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tauri::ipc::Channel;
 use tauri::State;
 
+use crate::channel::{ChannelManager, ChannelStatus};
 use crate::config::{AppConfig, ConfigStore};
 use crate::engine::{Engine, EngineEvent};
 use crate::llm::{CompressResult, LlmState};
@@ -296,4 +297,50 @@ pub fn mark_task_read(task_id: String, store: State<'_, Arc<TaskStore>>) -> Resu
 #[tauri::command]
 pub fn get_unread_task_count(store: State<'_, Arc<TaskStore>>) -> Result<usize, String> {
     Ok(store.unread_count())
+}
+
+// ============ 渠道对接（飞书） ============
+
+/// 启动飞书渠道。读取最新配置，已在运行则先停后启（改完配置直接调它即可生效）
+#[tauri::command]
+pub fn feishu_start(
+    channels: State<'_, Arc<ChannelManager>>,
+    config: State<'_, ConfigStore>,
+    engine: State<'_, Arc<Engine>>,
+) -> Result<(), String> {
+    channels.start(config.get().feishu, engine.inner().clone())
+}
+
+/// 停止飞书渠道
+#[tauri::command]
+pub fn feishu_stop(channels: State<'_, Arc<ChannelManager>>) -> Result<(), String> {
+    channels.stop();
+    Ok(())
+}
+
+/// 查询飞书渠道当前状态
+#[tauri::command]
+pub fn feishu_status(channels: State<'_, Arc<ChannelManager>>) -> Result<ChannelStatus, String> {
+    Ok(channels.status())
+}
+
+/// 测试凭证：只做一次端点协商，不建立长连接，也不影响正在运行的渠道
+#[tauri::command]
+pub async fn feishu_test_connection(
+    channels: State<'_, Arc<ChannelManager>>,
+    config: State<'_, ConfigStore>,
+) -> Result<(), String> {
+    let cfg = config.get().feishu;
+    if cfg.app_id.is_empty() || cfg.app_secret.is_empty() {
+        return Err("请先填写 app_id 与 app_secret".to_string());
+    }
+
+    crate::channel::feishu::test_credentials(
+        channels.http(),
+        cfg.base_url(),
+        &cfg.app_id,
+        &cfg.app_secret,
+    )
+    .await
+    .map_err(|e| format!("{e:#}"))
 }

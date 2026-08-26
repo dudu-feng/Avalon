@@ -10,7 +10,7 @@ import {
   ConfirmDialog,
   Tabs,
 } from '../../components/ui';
-import { ModelCard } from '../../components/features/settings';
+import { ModelCard, FeishuSettings } from '../../components/features/settings';
 import { getConfig, saveConfig, rebuildMemoryIndex } from '../../lib/settingsApi';
 import type {
   AppConfig,
@@ -45,6 +45,7 @@ const TABS = [
   { value: 'model', label: '模型' },
   { value: 'embedding', label: '向量化' },
   { value: 'session', label: '会话' },
+  { value: 'channel', label: '渠道' },
   { value: 'storage', label: '存储' },
 ];
 
@@ -388,6 +389,15 @@ export function SettingsPage() {
             />
           </div>
         </Card>
+      )}
+
+      {/* 渠道：飞书对接配置与连接控制 */}
+      {tab === 'channel' && (
+        <FeishuSettings
+          config={config.feishu}
+          onChange={(next) => update('feishu', next)}
+          dirty={dirty}
+        />
       )}
 
       {/* 存储：向量库 + 路径 + 维护 */}

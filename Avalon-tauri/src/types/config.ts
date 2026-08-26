@@ -7,6 +7,20 @@ export type EmbeddingMode = 'local' | 'api';
 export type EmbeddingLoadMode = 'lazy' | 'eager';
 export type SearchMode = 'semantic' | 'keyword' | 'hybrid';
 export type VectorBackend = 'memory' | 'sqlite';
+export type FeishuSessionMode = 'isolated' | 'unified';
+
+/** 飞书渠道配置。app_secret 敏感，可被环境变量 AVALON_FEISHU_APP_SECRET 覆盖 */
+export interface FeishuConfig {
+  enabled: boolean;
+  app_id: string;
+  app_secret: string;
+  domain: string;
+  group_require_mention: boolean;
+  allow_users: string[];
+  session_mode: FeishuSessionMode;
+  processing_reaction: string;
+  done_reaction: string;
+}
 
 /** 模型列表项：连接 + 鉴权 + 模型名，逐模型独立 */
 export interface ModelConfig {
@@ -52,7 +66,20 @@ export interface AppConfig {
   vector: {
     backend: VectorBackend;
   };
+  feishu: FeishuConfig;
 }
+
+/**
+ * 渠道运行状态。对应后端 ChannelStatus 的 #[serde(tag = "state")]，
+ * 只有 error 变体带 message
+ */
+export type ChannelStatus =
+  | { state: 'disabled' }
+  | { state: 'stopped' }
+  | { state: 'connecting' }
+  | { state: 'running' }
+  | { state: 'reconnecting' }
+  | { state: 'error'; message: string };
 
 /** 重建向量库统计（rebuild_memory_index 命令返回） */
 export interface RebuildStats {

@@ -27,6 +27,32 @@ use crate::vector::{RebuildProgress, RebuildStats};
 
 pub use events::EngineEvent;
 
+/// 一次用户输入。
+///
+/// 「发给模型的」与「落盘保存的」刻意分开：渠道消息需要让模型当场知道来源
+/// （谁、在哪儿说的），但这些信息已经结构化存在 meta 里，随会话序列化进
+/// system prompt 供后续轮次读取。若把来源同时写进落盘正文，同一份信息会在
+/// 历史里存两遍，且每轮重复计费。故来源提示只出现在 for_model，用完即弃。
+pub struct UserInput<'a> {
+    /// 发给模型的正文，可含仅本轮有效的来源提示
+    pub for_model: &'a str,
+    /// 落盘保存的原文
+    pub for_history: &'a str,
+    /// 渠道来源元信息，随落盘的 user 消息保存；桌面端为 None
+    pub meta: Option<serde_json::Value>,
+}
+
+impl<'a> UserInput<'a> {
+    /// 桌面端等无渠道来源的输入：模型看到的与落盘的一致
+    pub fn plain(text: &'a str) -> Self {
+        Self {
+            for_model: text,
+            for_history: text,
+            meta: None,
+        }
+    }
+}
+
 /// ReAct 编排引擎（字段全为共享/clone 类型，engine 本身无状态，天然支持多路并发）
 pub struct Engine {
     config: ConfigStore,
@@ -71,10 +97,22 @@ impl Engine {
         cancel: Arc<AtomicBool>,
         on_event: impl FnMut(EngineEvent) + Send,
     ) -> Result<()> {
+        self.run_with_input(UserInput::plain(user_input), channel, cancel, on_event)
+            .await
+    }
+
+    /// 同 run，但可分别指定「发给模型的」与「落盘保存的」输入，并携带渠道来源元信息。
+    pub async fn run_with_input(
+        &self,
+        input: UserInput<'_>,
+        channel: &str,
+        cancel: Arc<AtomicBool>,
+        on_event: impl FnMut(EngineEvent) + Send,
+    ) -> Result<()> {
         self.busy.lock().unwrap().insert(channel.to_string());
         let mut on_event = on_event;
         let result = react::run_loop(
-            user_input,
+            input,
             channel,
             &self.config,
             &self.llm,

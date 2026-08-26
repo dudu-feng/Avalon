@@ -145,6 +145,11 @@ pub enum Message {
     User {
         time: String,
         content: String,
+        /// 渠道来源元信息：飞书消息带 message_id / chat_id / chat_type / sender，
+        /// 桌面端为 None 不落盘。会话整体会被序列化进 system prompt（见
+        /// SessionStore::get_context_for_prompt），所以历史消息的来源模型自动可见。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        meta: Option<serde_json::Value>,
     },
     /// 智能体回复（对齐 OpenAI assistant 消息：正文 + 思考 + 工具调用 + 用量）
     Assistant {
