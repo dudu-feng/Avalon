@@ -104,6 +104,19 @@ processing_reaction = "OnIt"              # 正在处理
 done_reaction = "DONE"                    # 处理成功
 failed_reaction = "ERROR"                 # 处理失败
 rejected_reaction = "Sigh"                # 积压超限，本条不处理
+
+# ============================================================
+#  联网搜索（AnySearch）
+#  开启后模型可主动搜索网页、读取网页正文。注意查询词会发往第三方服务。
+# ============================================================
+[search]
+enabled = false                           # 开关，关闭时不向模型暴露搜索工具
+api_key = ""                              # 敏感（支持环境变量 ANYSEARCH_API_KEY 覆盖）；留空 = 匿名，速率受限
+base_url = "https://api.anysearch.com"
+max_results = 5                           # 默认返回条数，接口上限 10
+zone = ""                                 # cn / intl，留空由服务端判断
+timeout_secs = 30
+extract_limit = 8000                      # 网页正文截断字符数（接口最多返回 5 万，全塞进上下文会挤爆预算）
 "#;
 
 /// 加载配置：定位 → 不存在则生成默认模板 → 反序列化 → 回填 config_path → 环境变量覆盖
@@ -273,6 +286,13 @@ fn apply_env_overrides(config: &mut AppConfig) {
     if let Ok(v) = std::env::var("AVALON_FEISHU_APP_SECRET") {
         if !v.is_empty() {
             config.feishu.app_secret = v;
+        }
+    }
+
+    // 用 AnySearch 官方约定的变量名，方便和已有的 CLI / MCP 配置共用一个 key
+    if let Ok(v) = std::env::var("ANYSEARCH_API_KEY") {
+        if !v.is_empty() {
+            config.search.api_key = v;
         }
     }
 }

@@ -56,6 +56,14 @@
   gap: 14px;
 }
 
+/* 表单下方的补充说明。p 自带 margin，这里显式归零后只留上间距 */
+.hint {
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--secondary-foreground);
+}
+
 .maintain {
   display: flex;
   align-items: center;

@@ -26,6 +26,21 @@ export interface FeishuConfig {
   rejected_reaction: string;
 }
 
+/**
+ * 联网搜索（AnySearch）配置，对应后端 [search] 段。
+ * 注意与 SearchMode 区分：那个是会话记忆的检索模式，这个是搜互联网。
+ * api_key 敏感，可被环境变量 ANYSEARCH_API_KEY 覆盖；留空则匿名调用
+ */
+export interface SearchConfig {
+  enabled: boolean;
+  api_key: string;
+  base_url: string;
+  max_results: number;
+  zone: string;
+  timeout_secs: number;
+  extract_limit: number;
+}
+
 /** 模型列表项：连接 + 鉴权 + 模型名，逐模型独立 */
 export interface ModelConfig {
   name: string;
@@ -71,6 +86,7 @@ export interface AppConfig {
     backend: VectorBackend;
   };
   feishu: FeishuConfig;
+  search: SearchConfig;
 }
 
 /**

@@ -31,6 +31,9 @@ pub struct AppConfig {
     /// 飞书渠道配置（新增段，老配置文件缺失时取默认值）
     #[serde(default)]
     pub feishu: FeishuConfig,
+    /// 联网搜索配置（新增段，老配置文件缺失时取默认值）
+    #[serde(default)]
+    pub search: SearchConfig,
 
     // —— 运行时派生，不落盘 ——
     /// Avalon-config.toml 完整路径（保存时写回原位置）
@@ -223,5 +226,49 @@ impl FeishuConfig {
     /// 域名去掉尾部斜杠，避免拼出 `https://x//open-apis/...`
     pub fn base_url(&self) -> &str {
         self.domain.trim_end_matches('/')
+    }
+}
+
+/// 联网搜索（AnySearch）配置。
+///
+/// 默认关闭：开启意味着模型的查询词会发往第三方服务，这个决定该由用户显式做出，
+/// 与飞书渠道同理。api_key 留空也能匿名调用，只是速率受限。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchConfig {
+    /// 是否向模型暴露搜索工具。关闭时 web_search / read_web_page 不出现在工具列表里
+    pub enabled: bool,
+    /// API Key（敏感，支持环境变量 ANYSEARCH_API_KEY 覆盖）。留空 = 匿名，速率受限
+    pub api_key: String,
+    /// 服务地址
+    pub base_url: String,
+    /// 模型未指定条数时的默认值。接口上限为 10
+    pub max_results: u32,
+    /// 区域偏好 cn / intl，留空交给服务端判断
+    pub zone: String,
+    /// 单次请求超时
+    pub timeout_secs: u64,
+    /// 网页正文截断上限（字符）。接口最多返回 5 万字符，整段塞进上下文会挤爆预算
+    pub extract_limit: usize,
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: String::new(),
+            base_url: "https://api.anysearch.com".to_string(),
+            // 默认 5 而不是接口上限 10：多出来的条目通常只是重复信息，却要多花一倍 token
+            max_results: 5,
+            zone: String::new(),
+            timeout_secs: 30,
+            extract_limit: 8000,
+        }
+    }
+}
+
+impl SearchConfig {
+    /// 去掉尾部斜杠，避免拼出 `https://x//v1/search`
+    pub fn base_url(&self) -> &str {
+        self.base_url.trim_end_matches('/')
     }
 }

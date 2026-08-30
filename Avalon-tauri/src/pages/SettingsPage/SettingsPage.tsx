@@ -41,10 +41,21 @@ const VECTOR_BACKENDS = [
   { value: 'sqlite', label: 'sqlite（预留扩展）' },
 ];
 
+const ENABLED_OPTIONS = [
+  { value: 'true', label: '启用' },
+  { value: 'false', label: '停用' },
+];
+const ZONES = [
+  { value: '', label: '自动（由服务端判断）' },
+  { value: 'cn', label: 'cn（国内优先）' },
+  { value: 'intl', label: 'intl（海外优先）' },
+];
+
 const TABS = [
   { value: 'model', label: '模型' },
   { value: 'embedding', label: '向量化' },
   { value: 'session', label: '会话' },
+  { value: 'tools', label: '工具' },
   { value: 'channel', label: '渠道' },
   { value: 'storage', label: '存储' },
 ];
@@ -388,6 +399,71 @@ export function SettingsPage() {
               }
             />
           </div>
+        </Card>
+      )}
+
+      {/* 工具：开放给模型的能力 */}
+      {tab === 'tools' && (
+        <Card
+          eyebrow="联网搜索"
+          title="AnySearch"
+          description="开启后模型可以搜索网页（web_search）与读取网页正文（read_web_page）。"
+        >
+          <div className={styles.grid}>
+            <Dropdown
+              label="启用状态 enabled"
+              options={ENABLED_OPTIONS}
+              value={String(config.search.enabled)}
+              onChange={(v) => update('search', { ...config.search, enabled: v === 'true' })}
+            />
+            <Input
+              label="API Key api_key"
+              type="password"
+              value={config.search.api_key}
+              placeholder="留空 = 匿名调用，速率受限"
+              onChange={(e) => update('search', { ...config.search, api_key: e.currentTarget.value })}
+            />
+            <Input
+              label="服务地址 base_url"
+              value={config.search.base_url}
+              onChange={(e) => update('search', { ...config.search, base_url: e.currentTarget.value })}
+            />
+            <Dropdown
+              label="区域偏好 zone"
+              options={ZONES}
+              value={config.search.zone}
+              onChange={(v) => update('search', { ...config.search, zone: v })}
+            />
+            <Input
+              label="默认返回条数 max_results（上限 10）"
+              type="number"
+              step="1"
+              value={config.search.max_results}
+              onChange={onNumber((n) => update('search', { ...config.search, max_results: n }))}
+            />
+            <Input
+              label="超时秒数 timeout_secs"
+              type="number"
+              step="1"
+              value={config.search.timeout_secs}
+              onChange={onNumber((n) => update('search', { ...config.search, timeout_secs: n }))}
+            />
+            <Input
+              label="正文截断字符数 extract_limit"
+              type="number"
+              step="500"
+              value={config.search.extract_limit}
+              onChange={onNumber((n) => update('search', { ...config.search, extract_limit: n }))}
+            />
+          </div>
+          <p className={styles.hint}>
+            开关改动需重启应用才生效 —— 工具列表在启动时组装。查询词与目标网址会发送到
+            AnySearch 服务，请勿用于包含密码、密钥等敏感内容的检索。
+          </p>
+          <p className={styles.hint}>
+            extract_limit 控制单次读取网页塞进上下文的字符上限。接口最多返回 5 万字符，
+            全部放进去会挤占会话预算，超出部分会被截断并注明。
+          </p>
         </Card>
       )}
 

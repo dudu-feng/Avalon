@@ -11,6 +11,7 @@ pub mod fs_tools;
 pub mod memory_tools;
 pub mod registry;
 pub mod scheduler_tools;
+pub mod web_tools;
 
 use async_trait::async_trait;
 use serde_json::Value;

@@ -17,6 +17,7 @@ use crate::vector::MemoryIndex;
 use super::fs_tools;
 use super::memory_tools;
 use super::scheduler_tools;
+use super::web_tools::SearchClient;
 use super::ToolRegistry;
 
 /// 工具元数据（名字 + 描述 + 参数 JSON Schema，供 get_tools_schema 使用）
@@ -150,6 +151,39 @@ fn scheduler_tool_defs() -> Vec<ToolDef> {
     ]
 }
 
+/// 联网搜索工具定义（仅注入 SearchClient 时暴露，2 个）
+fn web_tool_defs() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "web_search",
+            // 明确分工：这里只给摘要，要正文得再调 read_web_page。
+            // 不写清楚的话模型容易拿着一句摘要就下结论
+            description: "搜索互联网获取实时信息。返回若干条结果的标题、链接与摘要；\
+                          需要某条结果的完整内容时，再用 read_web_page 打开它的链接",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索关键词"},
+                    "max_results": {"type": "integer", "description": "返回条数（可选，1-10，缺省取配置值）"}
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolDef {
+            name: "read_web_page",
+            description: "读取指定网页的正文并转为 Markdown。只支持 http/https 网页，\
+                          PDF、图片、音视频等二进制格式无法读取。正文过长会被截断",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "网页链接，必须是 http 或 https"}
+                },
+                "required": ["url"]
+            }),
+        },
+    ]
+}
+
 /// 工具注册表实现：基础文件/终端工具 + 可选记忆检索（注入 MemoryIndex 后启用）
 pub struct ToolSet {
     /// 记忆检索后端（None 则不暴露 search_session_memory 工具）
@@ -158,6 +192,8 @@ pub struct ToolSet {
     config: Option<ConfigStore>,
     /// 定时任务存储（None 则不暴露定时任务工具）
     scheduler: Option<Arc<TaskStore>>,
+    /// 联网搜索客户端（None 则不暴露搜索工具）
+    search: Option<SearchClient>,
 }
 
 impl ToolSet {
@@ -166,6 +202,7 @@ impl ToolSet {
             memory: None,
             config: None,
             scheduler: None,
+            search: None,
         }
     }
 
@@ -187,6 +224,13 @@ impl ToolSet {
         self
     }
 
+    /// 注入搜索客户端，启用 web_search / read_web_page 工具。
+    /// 调用方负责判断配置是否开启 —— 不注入就等于对模型完全隐藏这两个工具
+    pub fn with_search(mut self, search: SearchClient) -> Self {
+        self.search = Some(search);
+        self
+    }
+
     /// 记忆检索的缺省模式：优先配置值，无配置兜底 hybrid
     fn default_search_mode(&self) -> SearchMode {
         self.config
@@ -203,6 +247,9 @@ impl ToolSet {
         }
         if self.scheduler.is_some() {
             defs.extend(scheduler_tool_defs());
+        }
+        if self.search.is_some() {
+            defs.extend(web_tool_defs());
         }
         defs
     }
@@ -248,6 +295,14 @@ impl ToolRegistry for ToolSet {
             "delete_scheduled_task" => match &self.scheduler {
                 Some(s) => scheduler_tools::delete_scheduled_task(args, s),
                 None => "定时任务未配置".to_string(),
+            },
+            "web_search" => match &self.search {
+                Some(s) => s.search(args).await,
+                None => "联网搜索未启用（配置 [search] enabled = true 后重启）".to_string(),
+            },
+            "read_web_page" => match &self.search {
+                Some(s) => s.extract(args).await,
+                None => "联网搜索未启用（配置 [search] enabled = true 后重启）".to_string(),
             },
             _ => format!("未找到工具: {name}"),
         }
