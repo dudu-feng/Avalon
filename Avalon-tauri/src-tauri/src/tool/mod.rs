@@ -7,6 +7,7 @@
 
 #![allow(dead_code)] // tool 模块部分工具供未来 engine 引用，接入后逐步移除
 
+pub mod feishu_tools;
 pub mod fs_tools;
 pub mod memory_tools;
 pub mod registry;

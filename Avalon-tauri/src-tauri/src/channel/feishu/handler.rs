@@ -20,7 +20,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use super::api::FeishuApi;
 use super::reaction::{ReactionGate, ReactionTracker};
 use super::stream;
-use crate::config::{FeishuConfig, FeishuSessionMode};
+use crate::config::{ConfigStore, FeishuConfig, FeishuSessionMode};
 use crate::engine::{Engine, EngineEvent, UserInput};
 
 /// 已处理 event_id 的保留时长
@@ -161,6 +161,8 @@ pub struct MessageHandler {
     config: FeishuConfig,
     /// 机器人自身 open_id，用于判断群聊里是否 @ 了自己
     bot_open_id: String,
+    /// 配置句柄。只用于 owner 自动填充 —— 其余读配置一律走上面的 config 快照
+    store: ConfigStore,
     dedup: Mutex<Dedup>,
     /// 每会话一把串行锁
     slots: Mutex<HashMap<String, Arc<ChannelSlot>>>,
@@ -174,15 +176,44 @@ impl MessageHandler {
         api: FeishuApi,
         config: FeishuConfig,
         bot_open_id: String,
+        store: ConfigStore,
     ) -> Self {
         Self {
             engine,
             api,
             config,
             bot_open_id,
+            store,
             dedup: Mutex::new(Dedup::new()),
             slots: Mutex::new(HashMap::new()),
             reactions: ReactionGate::new(),
+        }
+    }
+
+    /// 首次私聊时把发信人记为主人，供 feishu_notify_owner 使用。
+    ///
+    /// 必须在准入判定之后调用 —— 放在白名单过滤之前的话，
+    /// 组织里任意一个未授权的人私聊一句就能把自己封为主人。
+    ///
+    /// 判空刻意走 store.get() 而不是 self.config：后者是渠道启动时的快照，
+    /// 永不更新，落盘之后它里面依然是空，会导致每条私聊都重复写一次配置。
+    fn record_owner(&self, msg: &IncomingMessage) {
+        // 群里 @ 一下不代表这人是主人，只认私聊
+        if msg.chat_type != "p2p" || msg.sender_open_id.is_empty() {
+            return;
+        }
+        let mut next = self.store.get();
+        if !next.feishu.owner_open_id.is_empty() {
+            return;
+        }
+        next.feishu.owner_open_id = msg.sender_open_id.clone();
+        match self.store.save(next) {
+            Ok(_) => log::info!(
+                target: "feishu",
+                "已将 {} 记为主人，feishu_notify_owner 将发给该用户",
+                msg.sender_open_id
+            ),
+            Err(e) => log::warn!(target: "feishu", "写入主人 open_id 失败: {e:#}"),
         }
     }
 
@@ -257,6 +288,9 @@ impl MessageHandler {
         if msg.text.trim().is_empty() {
             return Ok(());
         }
+
+        // 准入全部通过，这才是一个「有资格成为主人」的人
+        self.record_owner(&msg);
 
         self.run_engine(msg).await
     }

@@ -248,7 +248,17 @@ export function FeishuSettings({ config, onChange, dirty }: FeishuSettingsProps)
             onChange={(e) => setAllowText(e.currentTarget.value)}
             onBlur={() => patch('allow_users', parseList(allowText))}
           />
+          <Input
+            label="主人 owner_open_id"
+            value={config.owner_open_id}
+            placeholder="留空则由第一个私聊的用户自动填充"
+            onChange={(e) => patch('owner_open_id', e.currentTarget.value)}
+          />
         </div>
+        <p className={styles.hint}>
+          owner_open_id 是 feishu_notify_owner 工具的收件人 —— 定时任务靠它把结果推到你的
+          手机上。留空时，第一个私聊机器人并通过白名单校验的用户会被自动记录到这里。
+        </p>
       </Card>
 
       <Card

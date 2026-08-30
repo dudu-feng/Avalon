@@ -92,6 +92,7 @@ app_secret = ""                           # 敏感（支持环境变量 AVALON_F
 domain = "https://open.feishu.cn"         # Lark 国际版填 https://open.larksuite.com
 group_require_mention = true              # 群聊需 @ 机器人才响应
 allow_users = []                          # open_id 白名单，留空 = 不限制
+owner_open_id = ""                        # 主人 open_id，feishu_notify_owner 的收件人；留空则由第一个私聊的用户自动填充
 # 会话隔离粒度：
 #   isolated = 每个聊天独立上下文（私聊按人、群聊按群）
 #   unified  = 所有飞书消息汇入同一个永恒会话，跨群跨私聊记忆连贯
@@ -143,7 +144,11 @@ pub fn load() -> Result<AppConfig> {
     Ok(config)
 }
 
-/// 保存配置：序列化（跳过 config_path）并写回原文件
+/// 保存配置：序列化（跳过 config_path）并原子写回原文件。
+///
+/// 先写临时文件再 rename，与 scheduler/store.rs 的写法一致。裸 `fs::write` 的
+/// truncate + write 不是原子的：设置页保存与后台线程（owner 自动填充）撞在一起时
+/// 可能产出半截 TOML，下次启动解析失败就会兜底成默认配置，用户整份配置全丢。
 pub fn save(config: &AppConfig) -> Result<()> {
     let content = toml::to_string_pretty(config).context("序列化配置失败")?;
 
@@ -152,8 +157,11 @@ pub fn save(config: &AppConfig) -> Result<()> {
             .with_context(|| format!("创建配置目录失败: {}", parent.display()))?;
     }
 
-    fs::write(&config.config_path, content)
-        .with_context(|| format!("写入配置文件失败: {}", config.config_path.display()))?;
+    let tmp = config.config_path.with_extension("toml.tmp");
+    fs::write(&tmp, &content)
+        .with_context(|| format!("写入配置临时文件失败: {}", tmp.display()))?;
+    fs::rename(&tmp, &config.config_path)
+        .with_context(|| format!("原子替换配置文件失败: {}", config.config_path.display()))?;
 
     Ok(())
 }

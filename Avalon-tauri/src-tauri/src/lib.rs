@@ -71,10 +71,14 @@ pub fn run() {
     let usage_store: Arc<usage::UsageStore> = Arc::new(usage::UsageStore::new(cfg.usage_path()));
     let task_store: Arc<scheduler::TaskStore> =
         Arc::new(scheduler::TaskStore::new(cfg.scheduler_path()));
+    // 飞书发送句柄。必须先于 ToolSet 创建 —— 工具层拿的是这个 Arc，
+    // 渠道启动时才往里填 api。空句柄下工具会如实回答「渠道未运行」
+    let feishu_handle = Arc::new(channel::FeishuHandle::new());
     let mut tool_set = tool::ToolSet::new()
         .with_memory(memory_index)
         .with_config(store.clone())
-        .with_scheduler(task_store.clone());
+        .with_scheduler(task_store.clone())
+        .with_feishu(feishu_handle.clone());
     // 搜索工具按配置开关注入：不注入就等于对模型完全隐藏，
     // 比注入之后再在调用时拒绝要干净 —— 模型不会反复尝试一个用不了的工具
     if cfg.search.enabled {
@@ -96,7 +100,7 @@ pub fn run() {
     let scheduler_store = task_store.clone();
 
     // 渠道对接层：与 scheduler 一样，拿 engine 句柄在后台驱动 ReAct
-    let channels = Arc::new(channel::ChannelManager::new());
+    let channels = Arc::new(channel::ChannelManager::new(feishu_handle, store.clone()));
     let channel_engine = engine.clone();
     let channel_manager = channels.clone();
     let feishu_cfg = cfg.feishu.clone();

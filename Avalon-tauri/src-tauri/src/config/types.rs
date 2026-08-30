@@ -182,6 +182,9 @@ pub struct FeishuConfig {
     pub group_require_mention: bool,
     /// 允许对话的用户 open_id 白名单，空列表 = 不限制
     pub allow_users: Vec<String>,
+    /// 主人的 open_id，feishu_notify_owner 的收件人。
+    /// 留空时由「第一个私聊机器人且通过准入的用户」自动填充并落盘
+    pub owner_open_id: String,
     /// 会话隔离粒度
     pub session_mode: FeishuSessionMode,
     // —— 进度表情。值必须是飞书的 emoji_type 枚举（如 OnIt），不能填 Unicode
@@ -207,6 +210,7 @@ impl Default for FeishuConfig {
             domain: "https://open.feishu.cn".to_string(),
             group_require_mention: true,
             allow_users: Vec::new(),
+            owner_open_id: String::new(),
             session_mode: FeishuSessionMode::Isolated,
             queued_reaction: "OneSecond".to_string(),
             processing_reaction: "OnIt".to_string(),

@@ -17,6 +17,8 @@ export interface FeishuConfig {
   domain: string;
   group_require_mention: boolean;
   allow_users: string[];
+  /** 主人 open_id，feishu_notify_owner 的收件人；留空则由第一个私聊的用户自动填充 */
+  owner_open_id: string;
   session_mode: FeishuSessionMode;
   /** 以下为进度表情，值须是飞书 emoji_type 枚举（OnIt / DONE / ERROR…），留空 = 关闭 */
   queued_reaction: string;

@@ -29,6 +29,31 @@ fn summarize(text: &str) -> String {
     }
 }
 
+/// 发送目标。飞书用 receive_id_type 决定 receive_id 怎么解释，
+/// 用枚举代替裸字符串，避免把 chat_id 配上 open_id 类型这种静默错发
+#[derive(Debug, Clone)]
+pub enum Target {
+    /// 某个会话：群聊，或与某人的私聊会话（oc_ 开头）
+    Chat(String),
+    /// 某个人：飞书会自动落到与他的私聊会话（ou_ 开头）
+    User(String),
+}
+
+impl Target {
+    fn id_type(&self) -> &'static str {
+        match self {
+            Target::Chat(_) => "chat_id",
+            Target::User(_) => "open_id",
+        }
+    }
+
+    fn id(&self) -> &str {
+        match self {
+            Target::Chat(id) | Target::User(id) => id,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct FeishuApi {
     http: reqwest::Client,
@@ -45,18 +70,21 @@ impl FeishuApi {
         }
     }
 
-    /// 发送纯文本到会话，返回 message_id
-    pub async fn send_text(&self, chat_id: &str, text: &str) -> Result<String> {
-        // 飞书要求 content 本身是「JSON 的字符串形式」，不是嵌套对象 —— 双重编码
-        let content = serde_json::to_string(&json!({ "text": text }))
-            .context("序列化文本消息内容失败")?;
-
+    /// 发一条消息，返回 message_id。
+    ///
+    /// receive_id_type 在 query string 里而不是 body，所以目标类型必须拼进 URL。
+    /// content 的形状由调用方按 msg_type 决定 —— 飞书要求它是「JSON 的字符串形式」，
+    /// 不是嵌套对象，双重编码。
+    async fn send_message(&self, target: &Target, msg_type: &str, content: &str) -> Result<String> {
         let data = self
             .post(
-                "/open-apis/im/v1/messages?receive_id_type=chat_id",
+                &format!(
+                    "/open-apis/im/v1/messages?receive_id_type={}",
+                    target.id_type()
+                ),
                 &json!({
-                    "receive_id": chat_id,
-                    "msg_type": "text",
+                    "receive_id": target.id(),
+                    "msg_type": msg_type,
                     "content": content,
                 }),
             )
@@ -69,36 +97,34 @@ impl FeishuApi {
             .to_string())
     }
 
-    /// 以内联卡片发一段 markdown 正文，返回 message_id。
+    /// 发送纯文本到会话，返回 message_id
+    pub async fn send_text(&self, chat_id: &str, text: &str) -> Result<String> {
+        let content = serde_json::to_string(&json!({ "text": text }))
+            .context("序列化文本消息内容失败")?;
+        self.send_message(&Target::Chat(chat_id.to_string()), "text", &content)
+            .await
+    }
+
+    /// 以内联卡片发一段 markdown 正文到会话，返回 message_id
+    pub async fn send_markdown(&self, chat_id: &str, text: &str) -> Result<String> {
+        self.send_markdown_to(&Target::Chat(chat_id.to_string()), text)
+            .await
+    }
+
+    /// 以内联卡片发一段 markdown 正文到任意目标，返回 message_id。
     ///
     /// 不走 CardKit（不需要 cardkit 权限），卡片 JSON 直接塞进消息 content。
     /// 之所以不用纯文本消息：模型输出必然带 markdown，而飞书 text 消息不渲染，
     /// `**粗体**`、列表、代码块都会原样露出来。
     /// summary 决定会话列表里的预览文案，不设的话那里只会显示「[卡片]」。
-    pub async fn send_markdown(&self, chat_id: &str, text: &str) -> Result<String> {
+    pub async fn send_markdown_to(&self, target: &Target, text: &str) -> Result<String> {
         let card = json!({
             "schema": "2.0",
             "config": { "summary": { "content": summarize(text) } },
             "body": { "elements": [{ "tag": "markdown", "content": text }] },
         });
         let content = serde_json::to_string(&card).context("序列化正文卡片失败")?;
-
-        let data = self
-            .post(
-                "/open-apis/im/v1/messages?receive_id_type=chat_id",
-                &json!({
-                    "receive_id": chat_id,
-                    "msg_type": "interactive",
-                    "content": content,
-                }),
-            )
-            .await?;
-
-        Ok(data
-            .get("message_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string())
+        self.send_message(target, "interactive", &content).await
     }
 
     /// 给消息加一个表情回应，返回 reaction_id（取消时要用）
@@ -189,22 +215,8 @@ impl FeishuApi {
         }))
         .context("序列化卡片消息内容失败")?;
 
-        let data = self
-            .post(
-                "/open-apis/im/v1/messages?receive_id_type=chat_id",
-                &json!({
-                    "receive_id": chat_id,
-                    "msg_type": "interactive",
-                    "content": content,
-                }),
-            )
-            .await?;
-
-        Ok(data
-            .get("message_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string())
+        self.send_message(&Target::Chat(chat_id.to_string()), "interactive", &content)
+            .await
     }
 
     /// 流式更新卡片中某个元素的内容（覆盖语义，传的是累积全文而非增量）。

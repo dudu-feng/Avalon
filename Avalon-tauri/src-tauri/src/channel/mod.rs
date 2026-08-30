@@ -8,14 +8,18 @@
 // 暂不抽 ChannelAdapter trait：只有一个实现的 trait 是负债，等接第二个渠道时共性才看得清。
 
 pub mod feishu;
+pub mod handle;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
-use crate::config::FeishuConfig;
+use crate::config::{ConfigStore, FeishuConfig};
 use crate::engine::Engine;
+
+pub use feishu::api::Target;
+pub use handle::FeishuHandle;
 
 /// 渠道运行状态，直接序列化给前端
 #[derive(Debug, Clone, Serialize)]
@@ -55,10 +59,14 @@ pub struct ChannelManager {
     running: Mutex<Option<Running>>,
     status: Arc<Mutex<ChannelStatus>>,
     http: reqwest::Client,
+    /// 工具层共享的发送句柄。渠道跑起来时填入 api，停止时清空
+    handle: Arc<FeishuHandle>,
+    /// 配置句柄，只为把 ConfigStore 传给 handler 做 owner 自动填充
+    store: ConfigStore,
 }
 
 impl ChannelManager {
-    pub fn new() -> Self {
+    pub fn new(handle: Arc<FeishuHandle>, store: ConfigStore) -> Self {
         // 长连接自己走 tokio-tungstenite，这个 client 只用于 REST 调用
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -69,6 +77,8 @@ impl ChannelManager {
             running: Mutex::new(None),
             status: Arc::new(Mutex::new(ChannelStatus::Disabled)),
             http,
+            handle,
+            store,
         }
     }
 
@@ -99,8 +109,10 @@ impl ChannelManager {
 
         let http = self.http.clone();
         let task_stop = stop.clone();
+        let handle = self.handle.clone();
+        let store = self.store.clone();
         let task = tauri::async_runtime::spawn(async move {
-            feishu::run(http, config, engine, task_stop, status).await;
+            feishu::run(http, config, engine, task_stop, status, handle, store).await;
         });
 
         *self.running.lock().unwrap() = Some(Running { stop, task });
@@ -114,12 +126,9 @@ impl ChannelManager {
         };
         running.stop.store(true, Ordering::Relaxed);
         running.task.abort();
+        // 显式清空而不是只靠 run() 里的 drop guard：abort 后 guard 何时跑取决于
+        // 运行时调度，而这里返回后紧接着就可能有工具调用来问「在线吗」
+        self.handle.clear();
         *self.status.lock().unwrap() = ChannelStatus::Stopped;
-    }
-}
-
-impl Default for ChannelManager {
-    fn default() -> Self {
-        Self::new()
     }
 }

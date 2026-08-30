@@ -10,10 +10,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use crate::channel::FeishuHandle;
 use crate::config::{ConfigStore, SearchMode};
 use crate::scheduler::TaskStore;
 use crate::vector::MemoryIndex;
 
+use super::feishu_tools;
 use super::fs_tools;
 use super::memory_tools;
 use super::scheduler_tools;
@@ -184,6 +186,41 @@ fn web_tool_defs() -> Vec<ToolDef> {
     ]
 }
 
+/// 飞书发送工具定义（仅注入 FeishuHandle 时暴露，2 个）
+fn feishu_tool_defs() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "feishu_notify_owner",
+            // 「主动」两个字是重点：这是定时任务唯一能触达用户的出口
+            description: "通过飞书主动给主人发一条消息。用于定时任务的结果推送、\
+                          需要提醒用户的重要发现。收件人由配置决定，无需也无法指定。\
+                          注意：正在进行的飞书对话，回复由系统自动发送，不要用本工具重发",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "消息正文，支持 markdown"}
+                },
+                "required": ["text"]
+            }),
+        },
+        ToolDef {
+            name: "feishu_send_to",
+            description: "向指定的飞书会话发送一条消息。chat_id 从上下文里的会话信息中获取，\
+                          只能是会话 id（oc_ 开头），不能是用户 id。\
+                          注意：正在进行的飞书对话，回复由系统自动发送，\
+                          本工具只用于发往其它会话或额外追加一条",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "chat_id": {"type": "string", "description": "目标会话 id，oc_ 开头"},
+                    "text": {"type": "string", "description": "消息正文，支持 markdown"}
+                },
+                "required": ["chat_id", "text"]
+            }),
+        },
+    ]
+}
+
 /// 工具注册表实现：基础文件/终端工具 + 可选记忆检索（注入 MemoryIndex 后启用）
 pub struct ToolSet {
     /// 记忆检索后端（None 则不暴露 search_session_memory 工具）
@@ -194,6 +231,8 @@ pub struct ToolSet {
     scheduler: Option<Arc<TaskStore>>,
     /// 联网搜索客户端（None 则不暴露搜索工具）
     search: Option<SearchClient>,
+    /// 飞书发送句柄（None 则不暴露飞书工具）
+    feishu: Option<Arc<FeishuHandle>>,
 }
 
 impl ToolSet {
@@ -203,6 +242,7 @@ impl ToolSet {
             config: None,
             scheduler: None,
             search: None,
+            feishu: None,
         }
     }
 
@@ -231,6 +271,15 @@ impl ToolSet {
         self
     }
 
+    /// 注入飞书发送句柄，启用 feishu_notify_owner / feishu_send_to 工具。
+    ///
+    /// 与搜索工具不同，这里不按配置开关判断：渠道能在运行期随时启停，
+    /// 启动那一刻的 enabled 说明不了运行期的状态。在线与否由句柄在调用时回答。
+    pub fn with_feishu(mut self, feishu: Arc<FeishuHandle>) -> Self {
+        self.feishu = Some(feishu);
+        self
+    }
+
     /// 记忆检索的缺省模式：优先配置值，无配置兜底 hybrid
     fn default_search_mode(&self) -> SearchMode {
         self.config
@@ -250,6 +299,9 @@ impl ToolSet {
         }
         if self.search.is_some() {
             defs.extend(web_tool_defs());
+        }
+        if self.feishu.is_some() {
+            defs.extend(feishu_tool_defs());
         }
         defs
     }
@@ -303,6 +355,14 @@ impl ToolRegistry for ToolSet {
             "read_web_page" => match &self.search {
                 Some(s) => s.extract(args).await,
                 None => "联网搜索未启用（配置 [search] enabled = true 后重启）".to_string(),
+            },
+            "feishu_notify_owner" => match &self.feishu {
+                Some(h) => feishu_tools::notify_owner(args, h, self.config.as_ref()).await,
+                None => "飞书工具未配置".to_string(),
+            },
+            "feishu_send_to" => match &self.feishu {
+                Some(h) => feishu_tools::send_to(args, h).await,
+                None => "飞书工具未配置".to_string(),
             },
             _ => format!("未找到工具: {name}"),
         }

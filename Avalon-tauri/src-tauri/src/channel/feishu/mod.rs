@@ -17,8 +17,9 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
+use crate::channel::handle::{FeishuHandle, HandleGuard};
 use crate::channel::ChannelStatus;
-use crate::config::FeishuConfig;
+use crate::config::{ConfigStore, FeishuConfig};
 use crate::engine::Engine;
 
 pub use ws::test_credentials;
@@ -30,6 +31,8 @@ pub async fn run(
     engine: Arc<Engine>,
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<ChannelStatus>>,
+    handle: Arc<FeishuHandle>,
+    store: ConfigStore,
 ) {
     let base_url = config.base_url().to_string();
 
@@ -40,6 +43,12 @@ pub async fn run(
         &config.app_secret,
     ));
     let api = api::FeishuApi::new(http.clone(), &base_url, token);
+
+    // 把 api 交给工具层，并挂一个 guard 保证本函数无论怎么结束都会清空 ——
+    // 致命错误自然 return 的路上 ChannelManager::stop() 不会被调用，
+    // 只靠那边的显式 clear 会漏
+    handle.set(api.clone());
+    let _guard = HandleGuard(handle);
 
     // 拿不到 open_id 不是致命问题：私聊照常工作，只是群聊的 @ 判定会失效。
     // 此时 mentioned_bot 恒为 false，群聊在默认配置下不会响应 —— 宁可不理，也好过乱理。
@@ -56,6 +65,7 @@ pub async fn run(
         api,
         config.clone(),
         bot_open_id,
+        store,
     ));
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
