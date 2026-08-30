@@ -62,7 +62,7 @@ pub fn get_config_path(store: State<'_, ConfigStore>) -> Result<String, String> 
 pub fn init_app(store: State<'_, ConfigStore>) -> Result<Vec<String>, String> {
     let warnings = store.validate();
     for w in &warnings {
-        println!("  ⚠️ {w}");
+        log::warn!(target: "config", "配置校验: {w}");
     }
     Ok(warnings)
 }

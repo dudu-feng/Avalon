@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::api::FeishuApi;
+use super::reaction::{ReactionGate, ReactionTracker};
 use super::stream;
 use crate::config::{FeishuConfig, FeishuSessionMode};
 use crate::engine::{Engine, EngineEvent, UserInput};
@@ -163,6 +164,8 @@ pub struct MessageHandler {
     dedup: Mutex<Dedup>,
     /// 每会话一把串行锁
     slots: Mutex<HashMap<String, Arc<ChannelSlot>>>,
+    /// 表情能力的熔断开关，跨消息共享
+    reactions: ReactionGate,
 }
 
 impl MessageHandler {
@@ -179,6 +182,7 @@ impl MessageHandler {
             bot_open_id,
             dedup: Mutex::new(Dedup::new()),
             slots: Mutex::new(HashMap::new()),
+            reactions: ReactionGate::new(),
         }
     }
 
@@ -200,7 +204,7 @@ impl MessageHandler {
     /// 处理一条原始事件。内部吞掉所有错误，只打日志 —— 单条消息失败不该影响长连接
     pub async fn handle(&self, payload: Vec<u8>) {
         if let Err(e) = self.try_handle(payload).await {
-            eprintln!("[飞书] 处理消息失败: {e:#}");
+            log::error!(target: "feishu", "处理消息失败: {e:#}");
         }
     }
 
@@ -221,7 +225,7 @@ impl MessageHandler {
             .and_then(Value::as_str)
             .unwrap_or_default();
         if !event_id.is_empty() && !self.dedup.lock().unwrap().accept(event_id) {
-            println!("[飞书] 重复事件已忽略: {event_id}");
+            log::debug!(target: "feishu", "重复事件已忽略: {event_id}");
             return Ok(());
         }
 
@@ -239,7 +243,7 @@ impl MessageHandler {
         if !self.config.allow_users.is_empty()
             && !self.config.allow_users.contains(&msg.sender_open_id)
         {
-            println!("[飞书] 用户 {} 不在白名单，已忽略", msg.sender_open_id);
+            log::info!(target: "feishu", "用户 {} 不在白名单，已忽略", msg.sender_open_id);
             return Ok(());
         }
 
@@ -260,32 +264,54 @@ impl MessageHandler {
     /// 驱动 ReAct 循环。输出分两路：正文走独立消息，思考与工具调用走流式卡片。
     ///
     /// 整个过程用表情标记包住 —— 用户在自己发的那条消息上就能看到状态，
-    /// 不必盯着机器人有没有回话。
+    /// 不必盯着机器人有没有回话，在消息列表里也一眼可见。
     async fn run_engine(&self, msg: IncomingMessage) -> Result<()> {
         let channel = msg.channel_key(self.config.session_mode);
+        let cfg = &self.config;
+        let mut mark = ReactionTracker::new(&self.api, &self.reactions, &msg.message_id);
 
         // 同一会话内串行：拿不到锁就排队等，而不是直接拒绝 ——
         // 统一模式下所有人共用一个会话，拒绝会让群里其他人莫名收不到回应。
-        // 但也不能无限积压，超过阈值就明确告知。
+        // 但也不能无限积压，超过阈值就不接了。
         let slot = self.slot(&channel);
         if slot.waiting.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING {
             slot.waiting.fetch_sub(1, Ordering::SeqCst);
-            self.api
-                .send_text(&msg.chat_id, "我这边排队的消息有点多，等我忙完这几条再来吧。")
-                .await?;
+            // 优先只打表情：群里连发时逐条回「排队太多」会把会话刷爆。
+            // 表情打不上（没权限）才退回发文本，否则用户就完全没有反馈了
+            if !mark.set(&cfg.rejected_reaction).await {
+                self.api
+                    .send_text(&msg.chat_id, "我这边排队的消息有点多，等我忙完这几条再来吧。")
+                    .await?;
+            }
             return Ok(());
         }
 
-        // 抢锁前就打上「处理中」：排队等待时用户也能看到已被接收，
-        // 而不是几十秒的杳无音信
-        let processing = self.mark_processing(&msg.message_id).await;
-
-        let _guard = slot.lock.lock().await;
+        // 抢得到锁说明前面没人，直接进「处理中」；抢不到才先标「排队」，
+        // 让用户能区分「轮到我了」和「还在等前面的」
+        let _guard = match slot.lock.try_lock() {
+            Ok(guard) => {
+                mark.set(&cfg.processing_reaction).await;
+                guard
+            }
+            Err(_) => {
+                mark.set(&cfg.queued_reaction).await;
+                let guard = slot.lock.lock().await;
+                mark.set(&cfg.processing_reaction).await;
+                guard
+            }
+        };
         slot.waiting.fetch_sub(1, Ordering::SeqCst);
 
         let result = self.drive(&msg, &channel).await;
 
-        self.mark_done(&msg.message_id, processing).await;
+        // 成败要分开标：之前无论如何都打「完成」，ReAct 崩了也显示 ✅
+        let final_emoji = if result.is_ok() {
+            &cfg.done_reaction
+        } else {
+            &cfg.failed_reaction
+        };
+        mark.set(final_emoji).await;
+
         result
     }
 
@@ -329,7 +355,7 @@ impl MessageHandler {
         } = pump.await.context("卡片推送任务异常退出")?;
 
         if let Err(e) = &run_result {
-            eprintln!("[飞书] ReAct 执行失败 channel={channel}: {e:#}");
+            log::error!(target: "feishu", "ReAct 执行失败 channel={channel}: {e:#}");
             renderer.push_error(&format!("处理出错：{e}"));
             // 正文一条都没发出去的话，错误就只躺在折叠面板里没人看得见
             if !sent_any {
@@ -346,43 +372,11 @@ impl MessageHandler {
         // 过程卡片收尾：推最终内容 → 关流式 → 折叠。
         // 纯聊天时卡片压根没建，finish 内部直接返回
         if let Err(e) = card.finish(&renderer.render()).await {
-            eprintln!("[飞书] 过程卡片收尾失败: {e:#}");
+            log::warn!(target: "feishu", "过程卡片收尾失败: {e:#}");
         }
         Ok(())
     }
 
-    /// 打「处理中」表情，返回 reaction_id 供之后撤销。
-    /// 失败只记日志 —— 表情是锦上添花，不该让整条消息处理不下去
-    async fn mark_processing(&self, message_id: &str) -> Option<String> {
-        let emoji = self.config.processing_reaction.trim();
-        if emoji.is_empty() || message_id.is_empty() {
-            return None;
-        }
-        match self.api.add_reaction(message_id, emoji).await {
-            Ok(id) if !id.is_empty() => Some(id),
-            Ok(_) => None,
-            Err(e) => {
-                eprintln!("[飞书] 添加处理中表情失败: {e:#}");
-                None
-            }
-        }
-    }
-
-    /// 撤掉「处理中」，换上「完成」
-    async fn mark_done(&self, message_id: &str, processing: Option<String>) {
-        if let Some(id) = processing {
-            if let Err(e) = self.api.remove_reaction(message_id, &id).await {
-                eprintln!("[飞书] 取消处理中表情失败: {e:#}");
-            }
-        }
-        let emoji = self.config.done_reaction.trim();
-        if emoji.is_empty() || message_id.is_empty() {
-            return;
-        }
-        if let Err(e) = self.api.add_reaction(message_id, emoji).await {
-            eprintln!("[飞书] 添加完成表情失败: {e:#}");
-        }
-    }
 
     /// 从事件 JSON 中提取消息要素
     fn parse_message(&self, event: &Value) -> Option<IncomingMessage> {

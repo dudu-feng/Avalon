@@ -134,7 +134,7 @@ impl Fragments {
 
         // 服务端给的 seq 越界时直接丢弃这一片，避免 panic
         if seq >= bucket.parts.len() {
-            eprintln!("[飞书] 分片序号越界: seq={seq} sum={sum} message_id={msg_id}");
+            log::warn!(target: "feishu", "分片序号越界: seq={seq} sum={sum} message_id={msg_id}");
             return None;
         }
         bucket.parts[seq] = Some(data);
@@ -212,16 +212,16 @@ impl WsClient {
                     if self.stopped() {
                         break;
                     }
-                    println!("[飞书] 连接已关闭，准备重连");
+                    log::info!(target: "feishu", "连接已关闭，准备重连");
                     attempt = 0;
                 }
                 Err(ConnError::Fatal(message)) => {
-                    eprintln!("[飞书] 致命错误，停止渠道: {message}");
+                    log::error!(target: "feishu", "致命错误，停止渠道: {message}");
                     self.set_status(ChannelStatus::Error { message });
                     return;
                 }
                 Err(e @ ConnError::Retryable(_)) => {
-                    eprintln!("[飞书] 连接失败: {}", e.message());
+                    log::warn!(target: "feishu", "连接失败: {}", e.message());
                 }
             }
 
@@ -232,7 +232,7 @@ impl WsClient {
             // 重试次数用尽（reconnect_count 为 -1 时永不用尽）
             if cfg.reconnect_count >= 0 && attempt >= cfg.reconnect_count {
                 let message = format!("重连 {} 次仍无法连接飞书服务器", cfg.reconnect_count);
-                eprintln!("[飞书] {message}");
+                log::error!(target: "feishu", "{message}");
                 self.set_status(ChannelStatus::Error { message });
                 return;
             }
@@ -248,7 +248,7 @@ impl WsClient {
         }
 
         self.set_status(ChannelStatus::Stopped);
-        println!("[飞书] 长连接已停止");
+        log::info!(target: "feishu", "长连接已停止");
     }
 
     /// 建立一次连接并持续收发，直到断开
@@ -272,7 +272,7 @@ impl WsClient {
             .await
             .map_err(classify_handshake_error)?;
 
-        println!("[飞书] 长连接已建立 (device_id={device_id})");
+        log::info!(target: "feishu", "长连接已建立 (device_id={device_id})");
         self.set_status(ChannelStatus::Running);
 
         let (mut write, mut read) = stream.split();
@@ -305,7 +305,7 @@ impl WsClient {
                     let frame = match proto::decode_frame(&payload) {
                         Ok(f) => f,
                         Err(e) => {
-                            eprintln!("[飞书] 帧解码失败，已跳过: {e}");
+                            log::warn!(target: "feishu", "帧解码失败，已跳过: {e}");
                             continue;
                         }
                     };
@@ -340,7 +340,7 @@ impl WsClient {
                             }
                         }
                         other => {
-                            eprintln!("[飞书] 未知帧类型 method={other}，已忽略");
+                            log::debug!(target: "feishu", "未知帧类型 method={other}，已忽略");
                         }
                     }
                 }

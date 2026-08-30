@@ -18,6 +18,8 @@ pub const HEADER_TYPE: &str = "type";
 pub const HEADER_MESSAGE_ID: &str = "message_id";
 pub const HEADER_SUM: &str = "sum";
 pub const HEADER_SEQ: &str = "seq";
+/// 服务端排查用的链路 id。我们不读它，但列在这里协议才是完整的
+#[allow(dead_code)]
 pub const HEADER_TRACE_ID: &str = "trace_id";
 pub const HEADER_BIZ_RT: &str = "biz_rt";
 
@@ -28,6 +30,8 @@ pub const HEADER_HANDSHAKE_AUTH_ERRCODE: &str = "handshake-autherrcode";
 
 /// 消息类型，对应 DATA 帧 headers 里的 "type"
 pub const MSG_EVENT: &str = "event";
+/// 卡片回调（按钮点击等）。当前只订阅消息事件，留着标明这一路的存在
+#[allow(dead_code)]
 pub const MSG_CARD: &str = "card";
 pub const MSG_PING: &str = "ping";
 pub const MSG_PONG: &str = "pong";

@@ -53,5 +53,11 @@ domain = "https://open.feishu.cn"
 group_require_mention = true
 allow_users = []
 session_mode = "unified"
-processing_reaction = "OnIt"
-done_reaction = "DONE"
+# 进度表情：在用户那条消息上标注处理进度，同一时刻只挂一个。
+# 值必须是飞书的 emoji_type 枚举，不能填 Unicode 字符（否则接口报 231001）。
+# 留空 = 关闭该状态的标记。
+queued_reaction = "OneSecond"             # 排队等待中
+processing_reaction = "OnIt"              # 正在处理
+done_reaction = "DONE"                    # 处理成功
+failed_reaction = "ERROR"                 # 处理失败
+rejected_reaction = "Sigh"                # 积压超限，本条不处理

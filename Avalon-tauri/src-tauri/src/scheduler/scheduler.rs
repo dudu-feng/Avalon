@@ -33,8 +33,10 @@ impl Scheduler {
         loop {
             interval.tick().await;
             for task in self.store.due_tasks() {
-                // 同一任务上一次执行未结束则跳过，避免并发执行同一 channel
+                // 同一任务上一次执行未结束则跳过，避免并发执行同一 channel。
+                // 用 debug 不用 info —— 任务真卡住时这里 30 秒刷一条，会淹没其它日志
                 if self.engine.is_channel_busy(task.channel()) {
+                    log::debug!(target: "scheduler", "任务 {} 上一轮未结束，跳过本次", task.id);
                     continue;
                 }
                 let engine = self.engine.clone();
@@ -42,17 +44,36 @@ impl Scheduler {
                 let app = self.app.clone();
                 tokio::spawn(async move {
                     let channel = task.channel().to_string();
+                    log::info!(target: "scheduler", "触发任务 {} ({})", task.id, task.name);
+
                     // 执行前 ensure_active + 写入可读标题（id 不变，title = 定时任务-任务名称）
-                    let _ = engine.set_current_title(&channel, &task.session_title());
+                    if let Err(e) = engine.set_current_title(&channel, &task.session_title()) {
+                        log::warn!(target: "scheduler", "写入会话标题失败 {}: {e:#}", task.id);
+                    }
                     let cancel = Arc::new(AtomicBool::new(false));
                     // 静默：on_event 空闭包，执行过程落 session，不推前端
                     let result = engine.run(&task.prompt, &channel, cancel, |_ev| {}).await;
-                    let status = if result.is_ok() {
-                        RunStatus::Succeeded
-                    } else {
-                        RunStatus::Failed
+
+                    // 失败原因必须落日志 —— 之前只把 Failed 记进 store，
+                    // 用户看到红点却查不出为什么失败
+                    let status = match &result {
+                        Ok(()) => {
+                            log::info!(target: "scheduler", "任务 {} 执行完成", task.id);
+                            RunStatus::Succeeded
+                        }
+                        Err(e) => {
+                            log::error!(target: "scheduler", "任务 {} 执行失败: {e:#}", task.id);
+                            RunStatus::Failed
+                        }
                     };
-                    let _ = store.mark_ran(&task.id, status);
+
+                    // 这条落盘失败会让 last_run 停在旧值，下一个 tick 判定仍到期 → 重复执行
+                    if let Err(e) = store.mark_ran(&task.id, status) {
+                        log::error!(
+                            target: "scheduler",
+                            "记录执行结果失败 {}，任务可能被重复触发: {e:#}", task.id
+                        );
+                    }
                     let _ = app.emit("task-finished", task.id.clone());
                 });
             }

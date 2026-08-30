@@ -7,6 +7,7 @@
 pub mod api;
 pub mod handler;
 pub mod proto;
+pub mod reaction;
 pub mod stream;
 pub mod token;
 pub mod ws;
@@ -45,7 +46,7 @@ pub async fn run(
     let bot_open_id = match api.get_bot_open_id().await {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("[飞书] 获取机器人 open_id 失败，群聊 @ 判定将不可用: {e:#}");
+            log::warn!(target: "feishu", "获取机器人 open_id 失败，群聊 @ 判定将不可用: {e:#}");
             String::new()
         }
     };

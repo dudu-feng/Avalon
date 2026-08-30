@@ -254,9 +254,15 @@ export function FeishuSettings({ config, onChange, dirty }: FeishuSettingsProps)
       <Card
         eyebrow="状态表情"
         title="处理进度标记"
-        description="收到消息时给用户那条消息打表情，跑完换成完成态。留空则不打。需要 im:message.reaction:write 权限。"
+        description="在用户那条消息上标注进度，同一时刻只挂一个，切换即撤旧打新。需要 im:message.reaction:write 权限。"
       >
         <div className={styles.grid}>
+          <Input
+            label="排队中 queued_reaction"
+            value={config.queued_reaction}
+            placeholder="OneSecond"
+            onChange={(e) => patch('queued_reaction', e.currentTarget.value)}
+          />
           <Input
             label="处理中 processing_reaction"
             value={config.processing_reaction}
@@ -269,7 +275,23 @@ export function FeishuSettings({ config, onChange, dirty }: FeishuSettingsProps)
             placeholder="DONE"
             onChange={(e) => patch('done_reaction', e.currentTarget.value)}
           />
+          <Input
+            label="已失败 failed_reaction"
+            value={config.failed_reaction}
+            placeholder="ERROR"
+            onChange={(e) => patch('failed_reaction', e.currentTarget.value)}
+          />
+          <Input
+            label="积压不处理 rejected_reaction"
+            value={config.rejected_reaction}
+            placeholder="Sigh"
+            onChange={(e) => patch('rejected_reaction', e.currentTarget.value)}
+          />
         </div>
+        <p className={styles.hint}>
+          必须填飞书的 emoji_type 枚举（共 185 个，如 OnIt / DONE / ERROR / Typing / THINKING /
+          CheckMark / CrossMark），填 Unicode 表情字符会被接口拒绝（231001）。任意一项留空即关闭该状态的标记。
+        </p>
       </Card>
     </>
   );

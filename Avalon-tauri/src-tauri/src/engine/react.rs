@@ -150,7 +150,7 @@ where
 
     // 旁路统计：失败只记日志，绝不把 chat 主流程带崩（决策 D5）
     if let Err(e) = usage.record_usage(&last_result.model, &last_result.usage) {
-        eprintln!("[Usage] 记录 token 用量失败: {e}");
+        log::warn!(target: "usage", "记录 token 用量失败: {e}");
     }
 
     on_event(EngineEvent::Done { result: last_result });

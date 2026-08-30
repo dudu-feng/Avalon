@@ -181,10 +181,18 @@ pub struct FeishuConfig {
     pub allow_users: Vec<String>,
     /// 会话隔离粒度
     pub session_mode: FeishuSessionMode,
-    /// 开始处理时给用户消息打的表情（飞书 emoji_type，如 OnIt）。空 = 不打
+    // —— 进度表情。值必须是飞书的 emoji_type 枚举（如 OnIt），不能填 Unicode
+    //    字符，否则接口报 231001。任意一项留空即关闭该状态的标记。
+    /// 排队等待中（前面还有消息在处理）
+    pub queued_reaction: String,
+    /// 正在处理
     pub processing_reaction: String,
-    /// 处理完成后打的表情（如 DONE）。空 = 不打
+    /// 处理成功
     pub done_reaction: String,
+    /// 处理失败
+    pub failed_reaction: String,
+    /// 排队积压超限、本条不予处理
+    pub rejected_reaction: String,
 }
 
 impl Default for FeishuConfig {
@@ -197,8 +205,11 @@ impl Default for FeishuConfig {
             group_require_mention: true,
             allow_users: Vec::new(),
             session_mode: FeishuSessionMode::Isolated,
+            queued_reaction: "OneSecond".to_string(),
             processing_reaction: "OnIt".to_string(),
             done_reaction: "DONE".to_string(),
+            failed_reaction: "ERROR".to_string(),
+            rejected_reaction: "Sigh".to_string(),
         }
     }
 }

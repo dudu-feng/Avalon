@@ -48,7 +48,7 @@ impl PromptAssembler {
 
         let mut files = vec![BASIC_SETTING.to_string()];
         if !self.dir.exists() {
-            eprintln!("[Prompt] 提示词目录不存在: {}", self.dir.display());
+            log::warn!(target: "prompt", "提示词目录不存在: {}", self.dir.display());
         } else {
             let mut names: Vec<PathBuf> = std::fs::read_dir(&self.dir)
                 .with_context(|| format!("读取提示词目录失败: {}", self.dir.display()))?

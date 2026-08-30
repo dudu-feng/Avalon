@@ -60,7 +60,7 @@ impl FileSessionStore {
         match serde_json::from_str(&content) {
             Ok(data) => Ok(data),
             Err(e) => {
-                eprintln!("[Session] 旧格式会话已忽略（{}）: {e}", path.display());
+                log::warn!(target: "session", "旧格式会话已忽略（{}）: {e}", path.display());
                 Ok(SessionData::empty())
             }
         }
@@ -144,7 +144,7 @@ impl FileSessionStore {
     async fn compress(&self, channel: &str) -> Result<()> {
         let mut data = self.read_current(channel)?;
         if data.messages.is_empty() {
-            println!("当前会话为空，无需压缩。");
+            log::debug!(target: "session", "当前会话为空，无需压缩。");
             return Ok(());
         }
 
@@ -188,7 +188,7 @@ impl FileSessionStore {
         let summary_text = chunk.summary.join("\n");
         self.vector.insert(&doc_id, &summary_text, &chunk.keywords, &timestamp)?;
 
-        println!("当前会话已压缩。{} 个压缩记录", data.compressed.len());
+        log::info!(target: "session", "当前会话已压缩。{} 个压缩记录", data.compressed.len());
 
         // 7. 渐进式总结检查
         self.progressive_summarize(channel, &mut data).await?;
@@ -241,7 +241,7 @@ impl FileSessionStore {
         let merged_result: CompressResult = match client.compress(&system, &user).await {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[ProgressiveSummarize] 合并压缩调用失败: {e}");
+                log::warn!(target: "session", "合并压缩调用失败: {e}");
                 return Ok(());
             }
         };
@@ -297,7 +297,7 @@ impl FileSessionStore {
             }
         }
 
-        println!(
+        log::info!(target: "session", 
             "[ProgressiveSummarize] {} 个逻辑块 → 1 个超级摘要 {merged_num}（覆盖 {start}~{end}，compressed 剩余 {} 块）",
             old_chunks.len(),
             data.compressed.len()
@@ -468,7 +468,7 @@ impl SessionStore for FileSessionStore {
     fn init_session(&self, channel: &str) -> Result<()> {
         let data = self.read_current(channel)?;
         if data.status == SessionStatus::Active && !data.id.is_empty() {
-            println!("已识别到上次会话，继续上次对话。");
+            log::debug!(target: "session", "已识别到上次会话，继续上次对话。");
             return Ok(());
         }
         self.create_active_session(channel)?;
@@ -531,7 +531,7 @@ impl SessionStore for FileSessionStore {
         let max_input = max_input_tokens(chat_history);
         let threshold = self.config.get().session_memory.compress_threshold;
         if max_input >= threshold {
-            println!("[AutoCompress] 输入 token({max_input}) >= 阈值({threshold})，触发自动压缩...");
+            log::info!(target: "session", "输入 token({max_input}) >= 阈值({threshold})，触发自动压缩...");
             self.compress(channel).await?;
             Ok(true)
         } else {
@@ -542,7 +542,7 @@ impl SessionStore for FileSessionStore {
     async fn save_current_session(&self, channel: &str) -> Result<()> {
         let mut data = self.read_current(channel)?;
         if data.id.is_empty() {
-            println!("当前无会话可归档。");
+            log::debug!(target: "session", "当前无会话可归档。");
             return Ok(());
         }
 
@@ -554,7 +554,7 @@ impl SessionStore for FileSessionStore {
                     .with_context(|| format!("清理空会话目录失败: {}", dir.display()))?;
             }
             self.write_current(channel, &SessionData::empty())?;
-            println!("当前会话为空，跳过归档。");
+            log::debug!(target: "session", "当前会话为空，跳过归档。");
             return Ok(());
         }
 

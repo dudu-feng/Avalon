@@ -18,8 +18,12 @@ export interface FeishuConfig {
   group_require_mention: boolean;
   allow_users: string[];
   session_mode: FeishuSessionMode;
+  /** 以下为进度表情，值须是飞书 emoji_type 枚举（OnIt / DONE / ERROR…），留空 = 关闭 */
+  queued_reaction: string;
   processing_reaction: string;
   done_reaction: string;
+  failed_reaction: string;
+  rejected_reaction: string;
 }
 
 /** 模型列表项：连接 + 鉴权 + 模型名，逐模型独立 */

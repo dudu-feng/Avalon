@@ -18,8 +18,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# tray-icon：托盘常驻的前提。关窗口后进程靠托盘图标存活，它也是启停渠道与退出的唯一入口
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
+# 单实例：飞书长连接是集群模式且不广播，两个实例连同一个 app 会把消息随机分走
+tauri-plugin-single-instance = "2"
+# 通知：首次隐藏到托盘时告知用户「还活着」，否则会以为应用已退出
+tauri-plugin-notification = "2"
+# 日志：打包后是 GUI 程序，没有 stdout，托盘/定时任务/飞书三条无人值守路径全靠它留痕
+tauri-plugin-log = "2"
+log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

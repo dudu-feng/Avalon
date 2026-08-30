@@ -390,7 +390,7 @@ pub async fn pump(
             _ = ticker.tick(), if dirty => {
                 dirty = false;
                 if let Err(e) = card.push(&renderer.render()).await {
-                    eprintln!("[飞书] 过程卡片更新失败: {e:#}");
+                    log::warn!(target: "feishu", "过程卡片更新失败: {e:#}");
                 }
             }
         }
@@ -416,7 +416,7 @@ async fn flush(api: &FeishuApi, chat_id: &str, buf: &mut String) -> bool {
         return false;
     }
     if let Err(e) = api.send_markdown(chat_id, &text).await {
-        eprintln!("[飞书] 正文消息发送失败: {e:#}");
+        log::error!(target: "feishu", "正文消息发送失败: {e:#}");
         return false;
     }
     true

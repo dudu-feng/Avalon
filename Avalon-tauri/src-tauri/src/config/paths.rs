@@ -106,21 +106,28 @@ impl AppConfig {
         self.data_root().join("models/whisper")
     }
 
-    // —— log 相关（日志/统计数据，独立于 memory/session 生命周期）——
+    // —— logs 相关（日志/统计数据，独立于 memory/session 生命周期）——
 
-    /// 日志数据根：data_root/log（存放各类日志与统计，usage 是其中一类）
+    /// 日志数据根：data_root/logs（存放各类日志与统计，usage 是其中一类）
     pub fn log_path(&self) -> PathBuf {
-        self.data_root().join("log")
+        self.data_root().join("logs")
     }
 
-    /// 用量统计文件：data_root/log/usage/usage.json
+    /// 用量统计文件：data_root/logs/usage/usage.json
     pub fn usage_path(&self) -> PathBuf {
         self.log_path().join("usage/usage.json")
     }
 
-    /// 定时任务存储文件：data_root/log/scheduler/tasks.json
+    /// 定时任务存储文件：data_root/logs/scheduler/tasks.json
     pub fn scheduler_path(&self) -> PathBuf {
         self.log_path().join("scheduler/tasks.json")
+    }
+
+    /// 运行日志目录：data_root/logs/runtime。
+    /// 与 scheduler/usage 平级而不是直接放 logs 根下 —— 轮转会产生多个文件，
+    /// 散在根目录会跟那两个数据文件夹混在一起
+    pub fn runtime_log_dir(&self) -> PathBuf {
+        self.log_path().join("runtime")
     }
 
     // —— 二级派生 ——

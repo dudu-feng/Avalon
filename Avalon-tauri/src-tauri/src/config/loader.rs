@@ -96,9 +96,14 @@ allow_users = []                          # open_id 白名单，留空 = 不限�
 #   isolated = 每个聊天独立上下文（私聊按人、群聊按群）
 #   unified  = 所有飞书消息汇入同一个永恒会话，跨群跨私聊记忆连贯
 session_mode = "isolated"
-# 状态表情：收到消息时打「处理中」，跑完换成「完成」。留空则不打
-processing_reaction = "OnIt"
-done_reaction = "DONE"
+# 进度表情：在用户那条消息上标注处理进度，同一时刻只挂一个。
+# 值必须是飞书的 emoji_type 枚举（OnIt / DONE / ERROR / Typing / THINKING …），
+# 不能填 Unicode 字符，否则接口报 231001。任意一项留空 = 关闭该状态的标记。
+queued_reaction = "OneSecond"             # 排队等待中
+processing_reaction = "OnIt"              # 正在处理
+done_reaction = "DONE"                    # 处理成功
+failed_reaction = "ERROR"                 # 处理失败
+rejected_reaction = "Sigh"                # 积压超限，本条不处理
 "#;
 
 /// 加载配置：定位 → 不存在则生成默认模板 → 反序列化 → 回填 config_path → 环境变量覆盖
@@ -107,7 +112,7 @@ pub fn load() -> Result<AppConfig> {
 
     if !config_path.exists() {
         write_default(&config_path)?;
-        println!("[Config] 已生成默认配置文件: {}", config_path.display());
+        log::info!(target: "config", "已生成默认配置文件: {}", config_path.display());
     }
 
     let content = fs::read_to_string(&config_path)
@@ -246,7 +251,7 @@ pub(crate) fn migrate_legacy_llm(content: &str, config: &mut AppConfig) -> Resul
                 modelname: l.model,
             });
             config.active_model = "default".to_string();
-            println!("[Config] 检测到旧版单模型配置，已迁移为模型列表（name=default）");
+            log::info!(target: "config", "检测到旧版单模型配置，已迁移为模型列表（name=default）");
         }
     }
     Ok(())
