@@ -18,6 +18,7 @@ use crate::vector::MemoryIndex;
 use super::feishu_tools;
 use super::fs_tools;
 use super::memory_tools;
+use super::sandbox::Sandbox;
 use super::scheduler_tools;
 use super::web_tools::SearchClient;
 use super::ToolRegistry;
@@ -25,17 +26,21 @@ use super::ToolRegistry;
 /// 工具元数据（名字 + 描述 + 参数 JSON Schema，供 get_tools_schema 使用）
 struct ToolDef {
     name: &'static str,
-    description: &'static str,
+    /// 用 String 而非 &'static str：文件与终端工具的描述要把当前的工作区
+    /// 和可用命令写进去。让模型一开始就知道边界，比让它撞一次拒绝再重试省一轮
+    description: String,
     /// OpenAI function.parameters（JSON Schema），参数从 fs_tools/memory_tools 的 args.get(...) 反推
     parameters: Value,
 }
 
-/// 基础文件/终端工具定义（5 个，固定注册）
-fn tool_defs() -> Vec<ToolDef> {
+/// 基础文件/终端工具定义（5 个，固定注册）。
+/// 描述随沙箱配置变化 —— 用户改了工作区，模型下一轮看到的就是新边界
+fn tool_defs(sb: &Sandbox) -> Vec<ToolDef> {
+    let scope = format!("只能访问工作区内的路径，当前工作区：{}", sb.roots_hint());
     vec![
         ToolDef {
             name: "read_file",
-            description: "读取指定文件内容",
+            description: format!("读取指定文件内容。{scope}"),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -46,7 +51,7 @@ fn tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "write_file",
-            description: "创建或覆盖写入文件",
+            description: format!("创建或覆盖写入文件，父目录会自动创建。{scope}"),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -58,7 +63,7 @@ fn tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "delete_file",
-            description: "删除指定文件",
+            description: format!("删除指定文件。{scope}"),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -69,18 +74,30 @@ fn tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "run_shell_command",
-            description: "在终端执行命令并返回标准输出与错误",
+            // 「不经过 shell」必须写进描述里。否则模型会按惯例拼 `a && b`、
+            // 用 > 重定向，然后对着一个「参数被当成字面量」的怪结果反复试
+            description: format!(
+                "执行一条系统命令并返回输出。命令不经过 shell 解释：参数必须逐个放进 args 数组，\
+                 && || | > < ; 等符号不起作用，无法使用管道、重定向和命令拼接。\
+                 需要读写文件请用 read_file / write_file。当前允许的命令：{}",
+                sb.allowlist_hint()
+            ),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "命令字符串"}
+                    "command": {"type": "string", "description": "命令名本身，不带路径、不带参数，例如 ping"},
+                    "args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "参数列表，每个参数一项，例如 [\"-n\", \"1\", \"127.0.0.1\"]"
+                    }
                 },
                 "required": ["command"]
             }),
         },
         ToolDef {
             name: "get_directory_contents",
-            description: "获取目录下的文件和子目录",
+            description: format!("获取目录下的文件和子目录。{scope}"),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -96,7 +113,7 @@ fn tool_defs() -> Vec<ToolDef> {
 fn memory_tool_def() -> ToolDef {
     ToolDef {
         name: "search_session_memory",
-        description: "查询历史会话记忆",
+        description: "查询历史会话记忆".to_string(),
         parameters: json!({
             "type": "object",
             "properties": {
@@ -122,7 +139,7 @@ fn scheduler_tool_defs() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "create_scheduled_task",
-            description: "创建一个定时任务（在指定时间自动执行一次对话）。schedule_type 为 once/daily/weekly；once 的 schedule_value 形如 'YYYY-MM-DD HH:MM'，daily 为 'HH:MM'，weekly 为 'N HH:MM'（N=1 周一 .. 7 周日）",
+            description: "创建一个定时任务（在指定时间自动执行一次对话）。schedule_type 为 once/daily/weekly；once 的 schedule_value 形如 'YYYY-MM-DD HH:MM'，daily 为 'HH:MM'，weekly 为 'N HH:MM'（N=1 周一 .. 7 周日）".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -136,12 +153,12 @@ fn scheduler_tool_defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "list_scheduled_tasks",
-            description: "列出全部定时任务（id、来源、触发时间、内容、是否启用），供创建前查重",
+            description: "列出全部定时任务（id、来源、触发时间、内容、是否启用），供创建前查重".to_string(),
             parameters: json!({ "type": "object", "properties": {} }),
         },
         ToolDef {
             name: "delete_scheduled_task",
-            description: "删除指定 id 的定时任务",
+            description: "删除指定 id 的定时任务".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -161,7 +178,8 @@ fn web_tool_defs() -> Vec<ToolDef> {
             // 明确分工：这里只给摘要，要正文得再调 read_web_page。
             // 不写清楚的话模型容易拿着一句摘要就下结论
             description: "搜索互联网获取实时信息。返回若干条结果的标题、链接与摘要；\
-                          需要某条结果的完整内容时，再用 read_web_page 打开它的链接",
+                          需要某条结果的完整内容时，再用 read_web_page 打开它的链接"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -174,7 +192,8 @@ fn web_tool_defs() -> Vec<ToolDef> {
         ToolDef {
             name: "read_web_page",
             description: "读取指定网页的正文并转为 Markdown。只支持 http/https 网页，\
-                          PDF、图片、音视频等二进制格式无法读取。正文过长会被截断",
+                          PDF、图片、音视频等二进制格式无法读取。正文过长会被截断"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -194,7 +213,8 @@ fn feishu_tool_defs() -> Vec<ToolDef> {
             // 「主动」两个字是重点：这是定时任务唯一能触达用户的出口
             description: "通过飞书主动给主人发一条消息。用于定时任务的结果推送、\
                           需要提醒用户的重要发现。收件人由配置决定，无需也无法指定。\
-                          注意：正在进行的飞书对话，回复由系统自动发送，不要用本工具重发",
+                          注意：正在进行的飞书对话，回复由系统自动发送，不要用本工具重发"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -208,7 +228,8 @@ fn feishu_tool_defs() -> Vec<ToolDef> {
             description: "向指定的飞书会话发送一条消息。chat_id 从上下文里的会话信息中获取，\
                           只能是会话 id（oc_ 开头），不能是用户 id。\
                           注意：正在进行的飞书对话，回复由系统自动发送，\
-                          本工具只用于发往其它会话或额外追加一条",
+                          本工具只用于发往其它会话或额外追加一条"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -288,9 +309,24 @@ impl ToolSet {
             .unwrap_or(SearchMode::Hybrid)
     }
 
+    /// 现读配置建沙箱。
+    ///
+    /// 每次调用重建而不是在构造时定一次，换来配置热更新 —— 用户在设置页
+    /// 改了工作区，下一次工具调用立刻生效，不用重启。代价是几个 canonicalize
+    /// 系统调用，相对于一次 LLM 往返可以忽略。
+    ///
+    /// 没有配置句柄时返回空沙箱（拒绝一切）。这是刻意的失败方向：
+    /// 拿不到边界定义时应当什么都不许，而不是什么都放行
+    fn sandbox(&self) -> Sandbox {
+        match &self.config {
+            Some(c) => Sandbox::from_config(&c.get()),
+            None => Sandbox::deny_all(),
+        }
+    }
+
     /// 当前暴露的全部工具定义（基础工具 + 可选记忆检索）
     fn defs(&self) -> Vec<ToolDef> {
-        let mut defs = tool_defs();
+        let mut defs = tool_defs(&self.sandbox());
         if self.memory.is_some() {
             defs.push(memory_tool_def());
         }
@@ -327,11 +363,11 @@ impl ToolRegistry for ToolSet {
 
     async fn invoke_tool(&self, name: &str, args: &Value) -> String {
         match name {
-            "read_file" => fs_tools::read_file(args),
-            "write_file" => fs_tools::write_file(args),
-            "delete_file" => fs_tools::delete_file(args),
-            "run_shell_command" => fs_tools::run_shell_command(args).await,
-            "get_directory_contents" => fs_tools::get_directory_contents(args),
+            "read_file" => fs_tools::read_file(args, &self.sandbox()),
+            "write_file" => fs_tools::write_file(args, &self.sandbox()),
+            "delete_file" => fs_tools::delete_file(args, &self.sandbox()),
+            "run_shell_command" => fs_tools::run_shell_command(args, &self.sandbox()).await,
+            "get_directory_contents" => fs_tools::get_directory_contents(args, &self.sandbox()),
             "search_session_memory" => match &self.memory {
                 Some(m) => memory_tools::search_session_memory(args, m.as_ref(), self.default_search_mode()),
                 None => "记忆检索未配置".to_string(),

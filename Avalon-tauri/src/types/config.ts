@@ -43,6 +43,20 @@ export interface SearchConfig {
   extract_limit: number;
 }
 
+/**
+ * Agent 基础工具（文件 / 终端）的沙箱配置，对应后端 [tools] 段。
+ *
+ * workspace_roots 是三态的，不能简化成 string[]：
+ *   undefined / null → 后端用默认工作区 data_root/workspace
+ *   []               → 禁止全部文件操作
+ *   非空数组          → 只允许列出的目录
+ * 后端对 None 用了 skip_serializing_if，所以「没配过」时这个字段确实不存在
+ */
+export interface ToolsConfig {
+  workspace_roots?: string[] | null;
+  shell_allowlist: string[];
+}
+
 /** 模型列表项：连接 + 鉴权 + 模型名，逐模型独立 */
 export interface ModelConfig {
   name: string;
@@ -89,6 +103,7 @@ export interface AppConfig {
   };
   feishu: FeishuConfig;
   search: SearchConfig;
+  tools: ToolsConfig;
 }
 
 /**

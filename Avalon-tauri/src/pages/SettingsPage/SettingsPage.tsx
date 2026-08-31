@@ -10,7 +10,12 @@ import {
   ConfirmDialog,
   Tabs,
 } from '../../components/ui';
-import { ModelCard, FeishuSettings } from '../../components/features/settings';
+import {
+  ModelCard,
+  FeishuSettings,
+  SandboxSettings,
+  PathInput,
+} from '../../components/features/settings';
 import { getConfig, saveConfig, rebuildMemoryIndex } from '../../lib/settingsApi';
 import type {
   AppConfig,
@@ -402,7 +407,11 @@ export function SettingsPage() {
         </Card>
       )}
 
-      {/* 工具：开放给模型的能力 */}
+      {/* 工具：开放给模型的能力。沙箱在前 —— 它约束的是最基础也最危险的那几个 */}
+      {tab === 'tools' && (
+        <SandboxSettings config={config.tools} onChange={(next) => update('tools', next)} />
+      )}
+
       {tab === 'tools' && (
         <Card
           eyebrow="联网搜索"
@@ -496,17 +505,23 @@ export function SettingsPage() {
             description="共享数据根目录与文件目录，留空则按约定自动推导。"
           >
             <div className={styles.grid}>
-              <Input
+              <PathInput
                 label="数据根目录 data_root"
                 value={config.paths.data_root}
-                onChange={(e) => update('paths', { ...config.paths, data_root: e.currentTarget.value })}
+                placeholder="留空 = 项目根下的 data/"
+                onChange={(v) => update('paths', { ...config.paths, data_root: v })}
               />
-              <Input
+              <PathInput
                 label="文件目录 file_root"
                 value={config.paths.file_root}
-                onChange={(e) => update('paths', { ...config.paths, file_root: e.currentTarget.value })}
+                placeholder="留空 = 项目根下的 file/"
+                onChange={(v) => update('paths', { ...config.paths, file_root: v })}
               />
             </div>
+            <p className={styles.hint}>
+              改动需重启应用才生效 —— 会话记忆、向量库、日志的位置在启动时确定。
+              默认工作区是 data_root/workspace，换了数据根目录，模型的工作区也跟着搬。
+            </p>
           </Card>
 
           <Card

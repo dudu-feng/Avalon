@@ -11,6 +11,7 @@ pub mod feishu_tools;
 pub mod fs_tools;
 pub mod memory_tools;
 pub mod registry;
+pub mod sandbox;
 pub mod scheduler_tools;
 pub mod web_tools;
 
@@ -28,3 +29,5 @@ pub trait ToolRegistry: Send + Sync {
 
 #[allow(unused_imports)] // ToolSet 供未来 engine 显式引用
 pub use registry::ToolSet;
+/// 供 config::loader 校验白名单条目用（沙箱本身只在 tool 模块内部流转）
+pub use sandbox::resolve_allowed_command;

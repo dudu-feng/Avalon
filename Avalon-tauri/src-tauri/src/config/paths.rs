@@ -106,6 +106,22 @@ impl AppConfig {
         self.data_root().join("models/whisper")
     }
 
+    /// Agent 工作区默认根目录：data_root/workspace。
+    /// 文件工具的沙箱边界 —— 与 memory/session/logs 平级，
+    /// 刻意不放进它们内部：模型在工作区里的读写不该碰到会话与日志数据
+    pub fn workspace_path(&self) -> PathBuf {
+        self.data_root().join("workspace")
+    }
+
+    /// 生效的工作区根目录列表。
+    /// 配置里没写这一项 = 取默认；显式写成空数组 = 禁止全部文件操作
+    pub fn workspace_roots(&self) -> Vec<PathBuf> {
+        match &self.tools.workspace_roots {
+            Some(list) => list.iter().map(PathBuf::from).collect(),
+            None => vec![self.workspace_path()],
+        }
+    }
+
     // —— logs 相关（日志/统计数据，独立于 memory/session 生命周期）——
 
     /// 日志数据根：data_root/logs（存放各类日志与统计，usage 是其中一类）

@@ -42,7 +42,21 @@ pub fn run() {
         }
     };
 
-    // 2. 收集配置校验结果
+    // 2. 建默认工作区，再校验。
+    //    顺序不能反：validate 会检查工作区根是否存在，而首次启动时它还没被创建，
+    //    先校验的话每台新机器第一次开都会报一条假警告。
+    //    只建默认那个 —— 用户显式配的路径由用户自己保证存在，替他创建
+    //    等于把一个笔误的路径变成一个真目录，反而更难发现
+    if store.get().tools.workspace_roots.is_none() {
+        let ws = store.get().workspace_path();
+        if let Err(e) = std::fs::create_dir_all(&ws) {
+            boot_log.push((
+                log::Level::Warn,
+                format!("创建工作区目录失败（文件工具将不可用）: {} - {e}", ws.display()),
+            ));
+        }
+    }
+
     for w in store.validate() {
         boot_log.push((log::Level::Warn, format!("配置校验: {w}")));
     }
@@ -118,6 +132,9 @@ pub fn run() {
         // 日志尽量早注册，这样后续插件与 setup 的输出都能落盘
         .plugin(logging::plugin(cfg.runtime_log_dir()))
         .plugin(tauri_plugin_opener::init())
+        // 设置页的目录选择器。只用来挑路径 —— 读写文件仍然走沙箱约束的工具层，
+        // 这个插件不给模型任何能力，它面向的是坐在电脑前的人
+        .plugin(tauri_plugin_dialog::init())
         .manage(store)
         .manage(llm)
         .manage(engine)

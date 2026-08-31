@@ -1,63 +1,132 @@
-使用前请把文件名修改为Avalon-config.toml（即去掉template模板后缀）
+# 使用前请把文件名改为 Avalon-config.toml（去掉 -template 后缀）
+# ============================================================
+#  Avalon 应用配置
+# ============================================================
 
-active_model = "default"
+# 当前活跃模型（指向下方 [[models]] 中的 name）
+active_model = "deepseek"
 
+# ============================================================
+#  路径配置（配置驱动：留空 = 按约定自动推导）
+# ============================================================
 [paths]
-data_root = "f:/Avalon/data"
-file_root = "f:/Avalon/file"
+# 共享数据根目录（会话记忆/向量库/模型）。留空 = 项目根下的 data/
+# 提示：Windows 绝对路径请用正斜杠（f:/Avalon/data），反斜杠在 TOML 中是转义符
+data_root = ""
+# 文件存放目录（临时文件等）。留空 = 项目根下的 file/
+file_root = ""
 
+# ============================================================
+#  LLM 模型列表（连接/鉴权/模型名逐模型独立）
+# ============================================================
 [[models]]
-name = "default"
-url = "https://api.deepseek.com"
-key = "sk-17d3435ea890403f966657d3258bd500"
-modelname = "deepseek-v4-flash"
+name = "deepseek"                         # 唯一标识（切换锚点）
+url = "https://api.deepseek.com"          # OpenAI 兼容 API 基础 URL
+key = ""                                  # API Key（支持环境变量 AVALON_LLM_API_KEY 覆盖）
+modelname = "deepseek-v4-flash"           # 实际模型名
 
-[[models]]
-name = "mimo-tokenplan"
-url = "https://token-plan-cn.xiaomimimo.com/v1"
-key = "tp-c162nersrvds03vtihgosd9ni1dutwtjkfuvpj6ux2wmfqeo"
-modelname = "mimo-v2.5-pro"
-
+# ============================================================
+#  LLM 全局行为参数（所有模型共享）
+# ============================================================
 [llm]
-chat_temperature = 0.699999988079071
-json_temperature = 0.10000000149011612
-timeout_secs = 120
+chat_temperature = 0.7                    # 对话层温度
+json_temperature = 0.1                    # JSON/动作层温度
+timeout_secs = 120                        # 请求超时秒数
 
+# ============================================================
+#  Embedding 向量化配置
+# ============================================================
 [embedding]
-mode = "local"
+mode = "local"                            # local | api
 local_model = "bge-small-zh-v1.5"
 device = "cpu"
-load_mode = "lazy"
+load_mode = "lazy"                        # lazy | eager（懒加载 | 常驻热加载）
 api_key = ""
-api_model = ""
+api_model = "text-embedding-3-small"
 api_base_url = ""
 
+# ============================================================
+#  会话记忆配置
+# ============================================================
 [session_memory]
-compress_threshold = 10240
-max_chunks = 10
-context_chunks = 5
-search_mode = "hybrid"
+compress_threshold = 10000                # 输入 token 超此阈值触发自动压缩
+max_chunks = 10                           # 压缩块超此数量触发渐进式总结
+context_chunks = 5                        # 系统提示加载最近 N 个压缩块
+search_mode = "hybrid"                    # semantic | keyword | hybrid
 
+# ============================================================
+#  Whisper 语音转写配置
+# ============================================================
 [whisper]
 model_name = "medium"
 device = "cpu"
 
+# ============================================================
+#  向量数据库配置
+# ============================================================
 [vector]
-backend = "memory"
+backend = "memory"                        # memory（自研轻量）| sqlite（预留扩展）
 
+# ============================================================
+#  飞书渠道（仅支持企业自建应用，商店应用无法使用长连接）
+# ============================================================
 [feishu]
-enabled = false
-app_id = ""
-app_secret = ""
-domain = "https://open.feishu.cn"
-group_require_mention = true
-allow_users = []
-session_mode = "unified"
+enabled = false                           # 开关，关闭时启动不建立任何连接
+app_id = ""                               # cli_ 开头
+app_secret = ""                           # 敏感（支持环境变量 AVALON_FEISHU_APP_SECRET 覆盖）
+domain = "https://open.feishu.cn"         # Lark 国际版填 https://open.larksuite.com
+group_require_mention = true              # 群聊需 @ 机器人才响应
+allow_users = []                          # open_id 白名单，留空 = 不限制
+owner_open_id = ""                        # 主人 open_id，feishu_notify_owner 的收件人；留空则由第一个私聊的用户自动填充
+# 会话隔离粒度：
+#   isolated = 每个聊天独立上下文（私聊按人、群聊按群）
+#   unified  = 所有飞书消息汇入同一个永恒会话，跨群跨私聊记忆连贯
+session_mode = "isolated"
 # 进度表情：在用户那条消息上标注处理进度，同一时刻只挂一个。
-# 值必须是飞书的 emoji_type 枚举，不能填 Unicode 字符（否则接口报 231001）。
-# 留空 = 关闭该状态的标记。
+# 值必须是飞书的 emoji_type 枚举（OnIt / DONE / ERROR / Typing / THINKING …），
+# 不能填 Unicode 字符，否则接口报 231001。任意一项留空 = 关闭该状态的标记。
 queued_reaction = "OneSecond"             # 排队等待中
 processing_reaction = "OnIt"              # 正在处理
 done_reaction = "DONE"                    # 处理成功
 failed_reaction = "ERROR"                 # 处理失败
 rejected_reaction = "Sigh"                # 积压超限，本条不处理
+
+# ============================================================
+#  联网搜索（AnySearch）
+#  开启后模型可主动搜索网页、读取网页正文。注意查询词会发往第三方服务。
+# ============================================================
+[search]
+enabled = false                           # 开关，关闭时不向模型暴露搜索工具
+api_key = ""                              # 敏感（支持环境变量 ANYSEARCH_API_KEY 覆盖）；留空 = 匿名，速率受限
+base_url = "https://api.anysearch.com"
+max_results = 5                           # 默认返回条数，接口上限 10
+zone = ""                                 # cn / intl，留空由服务端判断
+timeout_secs = 30
+extract_limit = 8000                      # 网页正文截断字符数（接口最多返回 5 万，全塞进上下文会挤爆预算）
+
+# ============================================================
+#  Agent 基础工具沙箱（文件 / 终端）
+#  限制对所有来源统一生效 —— 桌面端与飞书渠道同一套边界。
+# ============================================================
+[tools]
+# 文件工具（read_file / write_file / delete_file / get_directory_contents）
+# 允许访问的根目录，读写同边界。三种写法含义不同：
+#   整行不写   = 用默认工作区 data_root/workspace（推荐，换机器不用改）
+#   写成 []    = 禁止全部文件操作
+#   写成列表   = 只允许列出的目录及其子目录
+# 提示：Windows 绝对路径请用正斜杠，反斜杠在 TOML 中是转义符
+# workspace_roots = ["f:/我的项目", "f:/Avalon/data/workspace"]
+
+# 终端 run_shell_command 可执行的命令白名单（裸命令名，不含路径与扩展名）。
+# 留空 = 禁用终端。命令不经过 shell，参数逐个传递，
+# 因此 && | > ; 等元字符没有任何特殊含义，也用不了管道与重定向。
+#
+# 只解析 .exe/.com，脚本包装（.bat/.cmd/.ps1）一律拒绝 —— 它们会重新拉起
+# 解释器，等于绕开这里的全部限制。npm / yarn / conda 因此永远用不了。
+#
+# 往下面加命令前请想清楚这层性质：一旦放进解释器（python / node /
+# powershell）或带插件机制的工具（git 的 -c core.pager、npm 的 run 脚本），
+# 限制就从「防恶意」退化成「防误操作」—— 一行代码即可绕开工作区边界。
+# 同理不建议加 findstr：它的 /f: 参数能读任意文件，而这功能 read_file 已覆盖。
+# dir / type 加了也没用，它们是 cmd 内建命令，没有对应的可执行文件。
+shell_allowlist = ["where", "ping", "ipconfig", "tasklist", "systeminfo", "hostname"]

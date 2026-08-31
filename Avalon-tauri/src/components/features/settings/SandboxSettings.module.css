@@ -1,0 +1,37 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+/* 路径与命令列表都可能很长，单列铺满比挤在半栏里好读 */
+.wide {
+  grid-column: 1 / -1;
+}
+
+/* 目录列表在下拉框下方独立成块，与上面的 grid 拉开距离 */
+.roots {
+  margin-top: 14px;
+}
+
+/* 约束与取舍说明 */
+.hint {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+}
+
+/* 「已关掉某项能力」这种需要用户确认是本意的状态 */
+.warn {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--error-700);
+}
+
+@media (max-width: 640px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

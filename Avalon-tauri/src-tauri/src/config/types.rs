@@ -34,6 +34,9 @@ pub struct AppConfig {
     /// 联网搜索配置（新增段，老配置文件缺失时取默认值）
     #[serde(default)]
     pub search: SearchConfig,
+    /// Agent 基础工具的沙箱配置（新增段，老配置文件缺失时取默认值）
+    #[serde(default)]
+    pub tools: ToolsConfig,
 
     // —— 运行时派生，不落盘 ——
     /// Avalon-config.toml 完整路径（保存时写回原位置）
@@ -230,6 +233,55 @@ impl FeishuConfig {
     /// 域名去掉尾部斜杠，避免拼出 `https://x//open-apis/...`
     pub fn base_url(&self) -> &str {
         self.domain.trim_end_matches('/')
+    }
+}
+
+/// Agent 基础工具（文件 / 终端）的沙箱配置。
+///
+/// 两条边界对所有来源统一生效 —— 不按渠道分档。桌面端的模型同样会被
+/// read_web_page 抓回的内容注入，按来源分档只是把高危操作挪个地方。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolsConfig {
+    /// 文件工具允许访问的根目录（读写同边界）。
+    ///
+    /// 用 Option 而不是空 Vec 是为了区分两种意图：
+    ///   字段缺失 → 取默认 data_root/workspace
+    ///   显式写 [] → 禁止全部文件操作
+    ///
+    /// skip_serializing_if 不能省：没配过的用户存一次设置就会被写进一行
+    /// `workspace_roots = ...`，把「按默认推导」固化成一个绝对路径，
+    /// 换台机器或改了 data_root 就废
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_roots: Option<Vec<String>>,
+    /// 终端可执行的命令白名单（裸命令名，不含路径与扩展名）。留空 = 禁用终端。
+    ///
+    /// 注意这个列表的性质：一旦放进解释器（python / node / powershell）
+    /// 或带插件机制的工具（git 的 -c core.pager、npm 的 run 脚本），
+    /// 限制就从「防恶意」退化成「防误操作」—— 一行代码即可绕开全部约束。
+    pub shell_allowlist: Vec<String>,
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            workspace_roots: None,
+            // 只放只读诊断命令，且都是真实可执行文件。
+            // 刻意不含 findstr（/f: 能读任意文件，一条命令废掉整个读边界，
+            // 且功能已被 read_file 覆盖）与 git（-c core.pager 是任意命令执行）。
+            // dir / type 不在列表里不是遗漏 —— 它们是 cmd 内建，没有对应 exe
+            shell_allowlist: if cfg!(windows) {
+                ["where", "ping", "ipconfig", "tasklist", "systeminfo", "hostname"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            } else {
+                ["ls", "ping", "ps", "uname", "hostname", "df"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            },
+        }
     }
 }
 

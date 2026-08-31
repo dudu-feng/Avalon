@@ -118,6 +118,33 @@ max_results = 5                           # 默认返回条数，接口上限 10
 zone = ""                                 # cn / intl，留空由服务端判断
 timeout_secs = 30
 extract_limit = 8000                      # 网页正文截断字符数（接口最多返回 5 万，全塞进上下文会挤爆预算）
+
+# ============================================================
+#  Agent 基础工具沙箱（文件 / 终端）
+#  限制对所有来源统一生效 —— 桌面端与飞书渠道同一套边界。
+# ============================================================
+[tools]
+# 文件工具（read_file / write_file / delete_file / get_directory_contents）
+# 允许访问的根目录，读写同边界。三种写法含义不同：
+#   整行不写   = 用默认工作区 data_root/workspace（推荐，换机器不用改）
+#   写成 []    = 禁止全部文件操作
+#   写成列表   = 只允许列出的目录及其子目录
+# 提示：Windows 绝对路径请用正斜杠，反斜杠在 TOML 中是转义符
+# workspace_roots = ["f:/我的项目", "f:/Avalon/data/workspace"]
+
+# 终端 run_shell_command 可执行的命令白名单（裸命令名，不含路径与扩展名）。
+# 留空 = 禁用终端。命令不经过 shell，参数逐个传递，
+# 因此 && | > ; 等元字符没有任何特殊含义，也用不了管道与重定向。
+#
+# 只解析 .exe/.com，脚本包装（.bat/.cmd/.ps1）一律拒绝 —— 它们会重新拉起
+# 解释器，等于绕开这里的全部限制。npm / yarn / conda 因此永远用不了。
+#
+# 往下面加命令前请想清楚这层性质：一旦放进解释器（python / node /
+# powershell）或带插件机制的工具（git 的 -c core.pager、npm 的 run 脚本），
+# 限制就从「防恶意」退化成「防误操作」—— 一行代码即可绕开工作区边界。
+# 同理不建议加 findstr：它的 /f: 参数能读任意文件，而这功能 read_file 已覆盖。
+# dir / type 加了也没用，它们是 cmd 内建命令，没有对应的可执行文件。
+shell_allowlist = ["where", "ping", "ipconfig", "tasklist", "systeminfo", "hostname"]
 "#;
 
 /// 加载配置：定位 → 不存在则生成默认模板 → 反序列化 → 回填 config_path → 环境变量覆盖
@@ -180,6 +207,24 @@ pub fn validate(config: &AppConfig) -> Vec<String> {
         }
         if config.feishu.domain.is_empty() {
             warnings.push("飞书渠道已启用但 domain 为空".to_string());
+        }
+    }
+
+    // 0.5 工具沙箱：两条都只是提醒，不阻断启动 —— 用户可能就是想临时关掉某项。
+    //     显式配成空（禁用）不告警，那是明确的意图；配了但不生效才需要说
+    for root in config.workspace_roots() {
+        if !root.is_dir() {
+            warnings.push(format!(
+                "工作区根目录不存在或不是目录，文件工具无法访问它: {}",
+                root.display()
+            ));
+        }
+    }
+    for cmd in &config.tools.shell_allowlist {
+        if crate::tool::resolve_allowed_command(cmd).is_none() {
+            warnings.push(format!(
+                "终端白名单里的 '{cmd}' 找不到对应的可执行文件（脚本包装 .bat/.cmd 不被支持），调用时会失败"
+            ));
         }
     }
 

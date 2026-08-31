@@ -1,0 +1,59 @@
+/* 输入框 + 浏览按钮同一行。按钮要和输入框底边对齐，
+   而 Input 自带 label 占了上面一行，所以用 flex-end 而不是 center */
+.row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.row .field {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 多路径列表：每行一个目录 + 移除按钮 */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.path {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--foreground);
+  /* 路径常常超宽。截断而不换行，完整值挂在 title 上，悬停可见 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  padding: 10px 0;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+
+.label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.actions {
+  margin-top: 10px;
+}
