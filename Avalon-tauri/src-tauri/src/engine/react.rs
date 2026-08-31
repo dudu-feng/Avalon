@@ -88,9 +88,7 @@ where
 
         accumulated_message.push_str(&result.message);
         accumulated_thought.push_str(&result.thought);
-        accumulated_usage.input_tokens += result.usage.input_tokens;
-        accumulated_usage.output_tokens += result.usage.output_tokens;
-        accumulated_usage.total_tokens += result.usage.total_tokens;
+        accumulated_usage += &result.usage;
 
         // 持久化本轮 assistant 消息（中间 tool_calls 轮 / 最终正文轮都存）
         persisted.push(history::assistant_entry(&result));

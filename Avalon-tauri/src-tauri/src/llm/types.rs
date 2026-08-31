@@ -20,6 +20,21 @@ pub struct TokenUsage {
     pub cached_tokens: u32,
 }
 
+/// 跨轮累加。
+///
+/// 用 AddAssign 而不是在调用处逐字段相加：字段列表只存在于这一个地方，
+/// 以后再加字段不会因为漏改某个累加点而静默恒零 ——
+/// reasoning_tokens 与 cached_tokens 就是这么丢了很久的。
+impl std::ops::AddAssign<&TokenUsage> for TokenUsage {
+    fn add_assign(&mut self, rhs: &TokenUsage) {
+        self.input_tokens += rhs.input_tokens;
+        self.output_tokens += rhs.output_tokens;
+        self.total_tokens += rhs.total_tokens;
+        self.reasoning_tokens += rhs.reasoning_tokens;
+        self.cached_tokens += rhs.cached_tokens;
+    }
+}
+
 /// 工具调用描述（对齐 OpenAI tool_calls 数组元素）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
