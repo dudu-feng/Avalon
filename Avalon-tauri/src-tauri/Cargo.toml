@@ -1,6 +1,6 @@
 [package]
 name = "avalon"
-version = "0.4.2"
+version = "0.4.3"
 description = "Avalon - AI agent 应用"
 authors = ["duedudu"]
 edition = "2021"

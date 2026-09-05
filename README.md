@@ -4,7 +4,7 @@
 
 A lightweight personal intelligent assistant focused on individuals, humanized, low-threshold, and interaction-friendly.
 
-![Version](https://img.shields.io/badge/version-0.4.2-blue)
+![Version](https://img.shields.io/badge/version-0.4.3-blue)
 ![Tauri](https://img.shields.io/badge/Tauri-2-orange)
 ![React](https://img.shields.io/badge/React-19-61dafb)
 ![Rust](https://img.shields.io/badge/Rust-1.7x-dea584)
@@ -135,7 +135,9 @@ cd Avalon-tauri
 npx tauri build
 ```
 
-产物：`src-tauri/target/release/bundle/nsis/Avalon_0.4.2_x64-setup.exe`（Windows 安装包，双击安装，默认装到当前用户目录，无需管理员权限）。
+产物：`src-tauri/target/release/bundle/nsis/Avalon_0.4.3_x64-setup.exe`（Windows 安装包，双击安装，默认装到当前用户目录，无需管理员权限）。
+
+本地 embedding 模型 `bge-small-zh-v1.5`（candle 所需的 `config.json` / `tokenizer.json` / `model.safetensors` 三个文件，约 96MB）已随安装包一起打包，装到 `数据目录/data/vector/models/embedding/bge-small-zh-v1.5/`，安装后开箱即用，无需手动下载或复制模型。这也是安装包体积从几 MB 涨到约 100MB 的原因。
 
 ## 📁 仓库结构
 
