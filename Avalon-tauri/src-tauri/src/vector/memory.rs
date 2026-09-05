@@ -76,8 +76,14 @@ pub struct InMemoryStore {
 }
 
 impl InMemoryStore {
-    /// 打开（存在则加载，不存在则空），对齐 Python「已存在 open / 不存在 create」
+    /// 打开（存在则加载，不存在则空），对齐 Python「已存在 open / 不存在 create」。
+    /// 顺带确保目录存在：persist 写 memory.bin.tmp 前不建目录，首次压缩入库时若
+    /// vector_db 目录缺失，std::fs::write 会直接报「写入向量库临时文件失败」。
     pub fn open(path: &Path, handle: EmbedderHandle) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("创建向量库目录失败: {}", parent.display()))?;
+        }
         let store = Self {
             index: RwLock::new(Index::new()),
             path: path.to_path_buf(),

@@ -64,7 +64,7 @@ pub fn run() {
     // 3. 组装依赖链（决策甲：EmbedderHandle 贯穿 embedding→vector→session，load_mode 由配置驱动）
     let cfg = store.get();
     let handle = embedding::EmbedderHandle::new(cfg.clone());
-    let llm = LlmState::new();
+    let llm = LlmState::new(cfg.llm.timeout_secs);
 
     let (vector_store, memory_index) = match vector::build(&cfg, handle.clone()) {
         Ok(v) => v,

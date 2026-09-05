@@ -17,16 +17,26 @@ use super::types::*;
 
 /// 共享 HTTP 客户端状态（复用连接池，避免每次请求重建）。
 /// Clone 为浅拷贝（reqwest::Client 内部 Arc），供 session 等模块克隆共享。
+/// 建立连接（TCP + TLS）的超时：只罩握手阶段，不随流式时长累积。
+const CONNECT_TIMEOUT_SECS: u64 = 30;
+
 #[derive(Clone)]
 pub struct LlmState {
     http: reqwest::Client,
 }
 
 impl LlmState {
-    pub fn new() -> Self {
-        Self {
-            http: reqwest::Client::new(),
-        }
+    /// 构造共享 HTTP 客户端。
+    /// 连接级超时在这里定死：connect_timeout 只罩握手；read_timeout 按 timeout_secs 做
+    /// 逐块空闲超时（每收到一块就重置）。流式请求绝不能套「总超时」—— 思考/长回答的流
+    /// 会超过 timeout_secs，reqwest 会在流中间掐断连接，表现为「读取流失败」。
+    pub fn new(timeout_secs: u64) -> Self {
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .read_timeout(Duration::from_secs(timeout_secs))
+            .build()
+            .expect("构建 HTTP 客户端失败");
+        Self { http }
     }
 
     /// 从配置快照构建客户端（配置变更后重建即生效，替代 Python 单例 refresh_models）
@@ -72,7 +82,7 @@ impl LlmClient {
             body["tool_choice"] = json!("auto");
         }
 
-        let resp = self.post(&body).await?;
+        let resp = self.post(&body, true).await?;
 
         let mut usage = TokenUsage::default();
         let mut thought = String::new();
@@ -141,17 +151,21 @@ impl LlmClient {
         Ok(result)
     }
 
-    /// 发送请求并校验状态码，返回响应体
-    async fn post(&self, body: &Value) -> Result<reqwest::Response> {
-        let resp = self
+    /// 发送请求并校验状态码，返回响应体。
+    /// `streaming` 决定是否套「总超时」：非流式（compress / JSON 动作）要总超时防挂起；
+    /// 流式不能套 —— 长思考/长回答会超过 timeout_secs，总超时会在流中间掐断连接。
+    /// 流式的空闲检测由客户端级 read_timeout 承担（见 LlmState::new）。
+    async fn post(&self, body: &Value, streaming: bool) -> Result<reqwest::Response> {
+        let mut req = self
             .http
             .post(self.endpoint())
             .bearer_auth(&self.model.key)
-            .timeout(Duration::from_secs(self.params.timeout_secs))
-            .json(body)
-            .send()
-            .await
-            .context("请求 LLM 失败")?;
+            .json(body);
+        if !streaming {
+            req = req.timeout(Duration::from_secs(self.params.timeout_secs));
+        }
+
+        let resp = req.send().await.context("请求 LLM 失败")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -195,7 +209,7 @@ impl LlmClient {
             body["response_format"] = json!({"type": "json_object"});
         }
 
-        let resp = self.post(&body).await?;
+        let resp = self.post(&body, false).await?;
         let v: Value = resp.json().await.context("解析响应 JSON 失败")?;
 
         let content = v["choices"][0]["message"]["content"]
