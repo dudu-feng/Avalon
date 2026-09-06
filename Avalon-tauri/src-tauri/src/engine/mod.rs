@@ -180,6 +180,11 @@ impl Engine {
         self.session.save_current_session(channel).await
     }
 
+    /// 主动压缩当前会话（不归档），返回是否实际压缩 —— 供输入区进度圈点击触发
+    pub async fn compress_session(&self, channel: &str) -> Result<bool> {
+        self.session.compress_session(channel).await
+    }
+
     /// 重建会话向量库（维护操作，设置页触发）：清空 + 重扫 history/current + 重新入库
     /// 逐 session 处理时经 on_progress 上报进度（跨 spawn_blocking 线程，回调须 Send + Sync）
     pub fn rebuild_memory_index(

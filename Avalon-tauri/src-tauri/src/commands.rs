@@ -162,6 +162,18 @@ pub async fn save_session(
         .map_err(|e| e.to_string())
 }
 
+/// 主动压缩当前会话上下文（不归档），返回是否实际压缩（空会话返回 false）
+#[tauri::command]
+pub async fn compress_session(
+    channel_name: String,
+    engine: State<'_, Arc<Engine>>,
+) -> Result<bool, String> {
+    engine
+        .compress_session(&channel_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// 列出全部会话元信息（active 置顶 + 归档按时间倒序），供会话历史列表
 #[tauri::command]
 pub fn list_sessions(

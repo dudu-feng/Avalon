@@ -49,3 +49,38 @@
   min-width: 30%;
   max-width: 78%;
 }
+
+/* 压缩上下文提示条：居中显示过程状态（不套气泡外壳，不入历史） */
+.compressRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.compressSpinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--muted);
+  border-top-color: var(--foreground);
+  border-radius: 50%;
+  animation: compressSpin 0.7s linear infinite;
+}
+
+.compressIcon {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted-foreground);
+}
+
+.compressLabel {
+  font: 400 12px/1.5 var(--font-sans);
+  color: var(--muted-foreground);
+}
+
+@keyframes compressSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}

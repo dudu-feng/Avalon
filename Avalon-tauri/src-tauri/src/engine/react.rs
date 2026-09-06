@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use crate::config::ConfigStore;
 use crate::llm::{ChatResult, LlmState, StreamEvent, TokenUsage};
 use crate::prompt::PromptAssembler;
+use crate::session::store::max_input_tokens;
 use crate::session::{Message, SessionStore};
 use crate::tool::ToolRegistry;
 use crate::usage::UsageStore;
@@ -142,9 +143,10 @@ where
         }
     };
 
-    // 每轮收尾：持久化完整轨迹 + 自动压缩检查（决策 D3：init/save 留给调用方）
+    // 每轮收尾：先持久化轨迹，再发 Done（模型回答完成，前端光标停），最后做压缩维护。
+    // Done 与压缩解耦 —— 压缩里藏着非流式 LLM 调用，若排在 Done 之前，会把「回答已结束」
+    // 的信号拖到压缩完成后才发，前端气泡光标会一直跳。
     session.update_current_session(channel, &persisted)?;
-    session.auto_compress_check(channel, &persisted).await?;
 
     // 旁路统计：失败只记日志，绝不把 chat 主流程带崩（决策 D5）
     if let Err(e) = usage.record_usage(&last_result.model, &last_result.usage) {
@@ -152,6 +154,21 @@ where
     }
 
     on_event(EngineEvent::Done { result: last_result });
+
+    // 自动压缩：先发「压缩中」气泡可视化，再串行执行（决策 D3：init/save 留给调用方）。
+    // 压缩是读改写 current 的临界区，串行保证不丢消息；这里只把它挪出「消息结束」的关键路径。
+    let threshold = config.get().session_memory.compress_threshold;
+    if max_input_tokens(&persisted) >= threshold {
+        on_event(EngineEvent::CompressStart);
+        match session.auto_compress_check(channel, &persisted).await {
+            Ok(_) => on_event(EngineEvent::CompressDone { success: true, error: None }),
+            Err(e) => {
+                log::warn!(target: "session", "自动压缩失败: {e:#}");
+                on_event(EngineEvent::CompressDone { success: false, error: Some(e.to_string()) });
+            }
+        }
+    }
+
     Ok(())
 }
 

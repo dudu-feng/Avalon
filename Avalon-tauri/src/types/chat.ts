@@ -97,6 +97,8 @@ export type EngineEvent =
   | { type: 'tool_call'; id: string; tool_name: string; arguments?: unknown }
   | { type: 'tool_result'; tool_name: string; success: boolean; result: string }
   | { type: 'done'; result: ChatResult }
+  | { type: 'compress_start' }
+  | { type: 'compress_done'; success: boolean; error?: string | null }
   | { type: 'error'; code: number; message: string };
 
 // ============ 展示模型（camelCase，前端内部）============
@@ -131,4 +133,11 @@ export type ChatMessage =
       error?: string;
       tokenUsage?: TokenUsage;
     }
-  | { id: string; role: 'tool'; tool: ToolCallRecord };
+  | { id: string; role: 'tool'; tool: ToolCallRecord }
+  | {
+      id: string;
+      /** 压缩上下文提示（运行时过程提示，不入历史）：running=压缩中 / done=完成 / error=失败 */
+      role: 'compress';
+      status: 'running' | 'done' | 'error';
+      error?: string;
+    };

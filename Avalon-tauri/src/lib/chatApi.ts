@@ -41,6 +41,11 @@ export async function saveSession(channelName: string): Promise<void> {
   await invoke('save_session', { channelName });
 }
 
+/** 主动压缩当前会话上下文（不归档），返回是否实际压缩（空会话返回 false） */
+export async function compressSession(channelName: string): Promise<boolean> {
+  return invoke<boolean>('compress_session', { channelName });
+}
+
 /** 停止当前会话正在进行的流式生成 */
 export async function stopChat(channelName: string): Promise<void> {
   await invoke('stop_chat', { channelName });

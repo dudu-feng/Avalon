@@ -44,7 +44,11 @@ pub fn plugin(dir: PathBuf) -> tauri::plugin::TauriPlugin<tauri::Wry> {
         }
     };
 
-    let mut builder = Builder::new().target(Target::new(TargetKind::Stdout));
+    // clear_targets 必须：Builder::new() 自带 Stdout + LogDir 两个默认 target，
+    // 不清理再叠加 target 会导致每条日志重复输出（且多写一份 app_log_dir 的日志文件）
+    let mut builder = Builder::new()
+        .clear_targets()
+        .target(Target::new(TargetKind::Stdout));
     if let Some(target) = file_target {
         builder = builder.target(target);
     }

@@ -36,6 +36,8 @@ pub trait SessionStore: Send + Sync {
     fn update_current_session(&self, channel: &str, chat_history: &[Message]) -> Result<()>;
     /// 自动压缩检查：输入 token 超阈值触发压缩，返回是否触发
     async fn auto_compress_check(&self, channel: &str, chat_history: &[Message]) -> Result<bool>;
+    /// 主动压缩当前会话（不归档，仅压缩未压缩消息并入库），返回是否实际压缩（空会话返回 false）
+    async fn compress_session(&self, channel: &str) -> Result<bool>;
     /// 归档当前会话（先压缩，写 history/{id}/index.json，重置 current）
     async fn save_current_session(&self, channel: &str) -> Result<()>;
     /// 重建向量索引：清空 + 重扫 history/current + 重新入库（维护操作，设置页触发）

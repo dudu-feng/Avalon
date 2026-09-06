@@ -55,3 +55,24 @@
   align-items: center;
   gap: 8px;
 }
+
+/* 上下文进度圈的可点击包裹层：透明按钮，hover 淡底提示可点，压缩中禁用 */
+.usageButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.usageButton:hover:not(:disabled) {
+  background: var(--muted);
+}
+
+.usageButton:disabled {
+  cursor: default;
+  opacity: 0.6;
+}

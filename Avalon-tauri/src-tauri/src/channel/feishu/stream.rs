@@ -382,6 +382,8 @@ pub async fn pump(
                             }
                         }
                         EngineEvent::RoundStart => {}
+                        // 压缩上下文事件：飞书走过程卡片，无气泡可更新，忽略即可
+                        EngineEvent::CompressStart | EngineEvent::CompressDone { .. } => {}
                     }
                 }
                 // 发送端随 Engine::run 的闭包一起 drop，这是正常的结束信号

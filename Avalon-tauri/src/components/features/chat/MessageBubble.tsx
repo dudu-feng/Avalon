@@ -20,6 +20,28 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     );
   }
 
+  // compress 消息：压缩上下文的过程提示条（居中，不套气泡外壳，不入历史）
+  if (message.role === 'compress') {
+    const label =
+      message.status === 'running'
+        ? '正在压缩上下文…'
+        : message.status === 'done'
+          ? '上下文已压缩'
+          : `压缩上下文失败${message.error ? `：${message.error}` : ''}`;
+    return (
+      <div className={styles.compressRow}>
+        {message.status === 'running' ? (
+          <span className={styles.compressSpinner} />
+        ) : (
+          <span className={styles.compressIcon}>{message.status === 'done' ? '✓' : '✗'}</span>
+        )}
+        <span className={styles.compressLabel} data-status={message.status}>
+          {label}
+        </span>
+      </div>
+    );
+  }
+
   const isUser = message.role === 'user';
   const isError = message.status === 'error';
   const isStreaming = message.status === 'streaming';

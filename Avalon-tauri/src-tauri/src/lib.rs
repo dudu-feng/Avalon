@@ -154,6 +154,7 @@ pub fn run() {
             commands::init_session,
             commands::create_session,
             commands::save_session,
+            commands::compress_session,
             commands::get_current_session,
             commands::get_context_usage,
             commands::list_sessions,

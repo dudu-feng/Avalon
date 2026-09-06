@@ -539,6 +539,17 @@ impl SessionStore for FileSessionStore {
         }
     }
 
+    async fn compress_session(&self, channel: &str) -> Result<bool> {
+        // 空会话无需压缩（compress 内部也会短路，这里提前返回以便前端区分「已压缩」与「无内容」）
+        let had_content = !self.read_current(channel)?.messages.is_empty();
+        if !had_content {
+            log::debug!(target: "session", "当前会话为空，无需主动压缩。");
+            return Ok(false);
+        }
+        self.compress(channel).await?;
+        Ok(true)
+    }
+
     async fn save_current_session(&self, channel: &str) -> Result<()> {
         let mut data = self.read_current(channel)?;
         if data.id.is_empty() {

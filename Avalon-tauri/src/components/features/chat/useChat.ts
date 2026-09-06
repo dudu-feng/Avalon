@@ -13,6 +13,7 @@ import type {
 } from '../../../types/chat';
 import {
   chat,
+  compressSession,
   createSession,
   DEFAULT_CHANNEL,
   deleteSession as deleteSessionApi,
@@ -31,6 +32,7 @@ export interface UseChatOptions {
 
 type AssistantMessage = Extract<ChatMessage, { role: 'assistant' }>;
 type ToolMessage = Extract<ChatMessage, { role: 'tool' }>;
+type CompressMessage = Extract<ChatMessage, { role: 'compress' }>;
 
 /** 后端历史消息（user/assistant/tool 平铺）→ 前端展示消息（逐条直映，无归并）。
  *  key 区分来源（块号 / 'cur'），保证拼接更早块时消息 id 全局唯一。 */
@@ -120,6 +122,25 @@ function applyEvent(prev: ChatMessage[], ev: EngineEvent, newId: () => string): 
     return copy;
   }
 
+  // 压缩开始：追加独立提示气泡（running），compress_done 再回填完成/失败
+  if (ev.type === 'compress_start') {
+    return [...prev, { id: newId(), role: 'compress', status: 'running' }];
+  }
+
+  // 压缩结束：更新最后一条 compress 气泡的状态与错误信息
+  if (ev.type === 'compress_done') {
+    const idx = lastIndexByRole(prev, 'compress');
+    if (idx < 0) return prev;
+    const copy = [...prev];
+    const current = copy[idx] as CompressMessage;
+    copy[idx] = {
+      ...current,
+      status: ev.success ? 'done' : 'error',
+      error: ev.error ?? undefined,
+    };
+    return copy;
+  }
+
   // 其余事件作用于最后一条 assistant
   const idx = lastIndexByRole(prev, 'assistant');
   if (idx < 0) return prev;
@@ -158,6 +179,7 @@ export function useChat(options: UseChatOptions = {}) {
   const { channelName = DEFAULT_CHANNEL } = options;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isBusy, setIsBusy] = useState(false);
+  const [compressing, setCompressing] = useState(false);
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [resetting, setResetting] = useState(false);
@@ -332,11 +354,24 @@ export function useChat(options: UseChatOptions = {}) {
     stopChat(channelName);
   }, [channelName]);
 
+  // 主动压缩当前会话上下文：调后端压缩，成功后刷新用量（进度圈归零/下降）。
+  // 错误向上抛给调用方（ChatInput 确认框的 handleCompress 兜底 console.error）
+  const compressNow = useCallback(async () => {
+    if (isBusy || compressing || resetting || switching) return;
+    setCompressing(true);
+    try {
+      await compressSession(channelName);
+    } finally {
+      setCompressing(false);
+      refreshUsage();
+    }
+  }, [isBusy, compressing, resetting, switching, channelName, refreshUsage]);
+
   // 发送一条消息：推 user + 空 assistant，跑 chat，逐事件组装
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || isBusy || resetting || switching) return;
+      if (!trimmed || isBusy || compressing || resetting || switching) return;
 
       const userMsg: ChatMessage = {
         id: nextId(),
@@ -366,15 +401,17 @@ export function useChat(options: UseChatOptions = {}) {
         refreshUsage();
       }
     },
-    [isBusy, resetting, switching, channelName, nextId, refreshUsage],
+    [isBusy, compressing, resetting, switching, channelName, nextId, refreshUsage],
   );
 
   return {
     messages,
     isBusy,
+    compressing,
     send,
     newSession,
     stop,
+    compressNow,
     contextUsage,
     loading: initialLoading || resetting || switching,
     resetting,

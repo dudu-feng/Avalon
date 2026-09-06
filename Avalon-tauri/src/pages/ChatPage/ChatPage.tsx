@@ -9,9 +9,11 @@ export function ChatPage() {
   const {
     messages,
     isBusy,
+    compressing,
     send,
     newSession,
     stop,
+    compressNow,
     contextUsage,
     loading,
     sessions,
@@ -85,6 +87,8 @@ export function ChatPage() {
           activeModel={activeModel}
           onModelChange={onModelChange}
           contextUsage={contextUsage}
+          onCompress={compressNow}
+          compressing={compressing}
         />
       </div>
 

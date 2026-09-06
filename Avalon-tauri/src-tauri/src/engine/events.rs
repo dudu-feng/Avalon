@@ -26,6 +26,10 @@ pub enum EngineEvent {
     ToolResult { tool_name: String, success: bool, result: String },
     /// 整体结束（结果驱动前端落库展示）
     Done { result: ChatResult },
+    /// 开始压缩上下文（前端据此展示「正在压缩」提示气泡）
+    CompressStart,
+    /// 压缩结束（success 指示结果；失败时 error 给原因，前端展示失败态）
+    CompressDone { success: bool, error: Option<String> },
     /// 非致命异常（致命错误走 Result 由 command 层转错误）
     Error { code: i32, message: String },
 }
