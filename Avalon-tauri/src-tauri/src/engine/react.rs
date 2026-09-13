@@ -227,6 +227,7 @@ pub(crate) fn tool_failed(result: &str) -> bool {
         "记忆检索未配置",
         "未找到工具",
         "灵魂条目",
+        "技能",
     ];
     FAIL_PREFIXES.iter().any(|p| result.starts_with(p))
 }

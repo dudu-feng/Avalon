@@ -82,6 +82,12 @@ impl AppConfig {
         self.data_root().join("memory/prompt")
     }
 
+    /// 技能目录：data_root/skills（每个技能一个子目录，含 SKILL.md）。
+    /// 与 memory 平级 —— 技能是「怎么做」的能力知识，不属于记忆生命周期
+    pub fn skills_dir(&self) -> PathBuf {
+        self.data_root().join("skills")
+    }
+
     pub fn memory_path(&self) -> PathBuf {
         self.data_root().join("memory")
     }

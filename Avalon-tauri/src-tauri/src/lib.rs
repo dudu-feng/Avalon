@@ -12,6 +12,7 @@ mod logging;
 mod prompt;
 mod scheduler;
 mod session;
+mod skill;
 mod soul;
 mod tool;
 mod tray;
@@ -90,8 +91,12 @@ pub fn run() {
     if let Err(e) = soul_registry.init() {
         boot_log.push((log::Level::Error, format!("初始化灵魂注册表失败: {e}")));
     }
-    let prompt_asm: Arc<prompt::PromptAssembler> =
-        Arc::new(prompt::PromptAssembler::new(soul_registry.clone()));
+    // 技能注册表：data/skills/<name>/SKILL.md，可复用流程知识，按需加载
+    let skill_registry: Arc<skill::SkillRegistry> =
+        Arc::new(skill::SkillRegistry::new(cfg.skills_dir()));
+    let prompt_asm: Arc<prompt::PromptAssembler> = Arc::new(
+        prompt::PromptAssembler::new(soul_registry.clone()).with_skills(skill_registry.clone()),
+    );
     let usage_store: Arc<usage::UsageStore> = Arc::new(usage::UsageStore::new(cfg.usage_path()));
     let task_store: Arc<scheduler::TaskStore> =
         Arc::new(scheduler::TaskStore::new(cfg.scheduler_path()));
@@ -104,6 +109,7 @@ pub fn run() {
         .with_scheduler(task_store.clone())
         .with_feishu(feishu_handle.clone())
         .with_soul(soul_registry.clone())
+        .with_skill(skill_registry.clone())
         .with_prompt(prompt_asm.clone());
     // 搜索工具按配置开关注入：不注入就等于对模型完全隐藏，
     // 比注入之后再在调用时拒绝要干净 —— 模型不会反复尝试一个用不了的工具
@@ -153,6 +159,7 @@ pub fn run() {
         .manage(usage_store)
         .manage(task_store)
         .manage(soul_registry)
+        .manage(skill_registry)
         .manage(prompt_asm)
         .manage(channels)
         .invoke_handler(tauri::generate_handler![
@@ -195,6 +202,11 @@ pub fn run() {
             commands::update_soul_entry,
             commands::delete_soul_entry,
             commands::set_soul_entry_enabled,
+            commands::list_skills,
+            commands::get_skill,
+            commands::create_skill,
+            commands::update_skill,
+            commands::delete_skill,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

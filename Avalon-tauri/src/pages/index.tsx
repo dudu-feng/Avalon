@@ -5,6 +5,7 @@ import {
   ChatIcon,
   ClockIcon,
   BookIcon,
+  ZapIcon,
   SettingsIcon,
   InfoIcon,
 } from '../components/icons';
@@ -12,6 +13,7 @@ import { DashboardPage } from './DashboardPage';
 import { ChatPage } from './ChatPage';
 import { SchedulePage } from './SchedulePage';
 import { SoulPage } from './SoulPage';
+import { SkillPage } from './SkillPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
 
@@ -24,6 +26,7 @@ export const pages: PageConfig[] = [
   { id: 'chat', label: '对话', icon: <ChatIcon />, component: ChatPage },
   { id: 'schedule', label: '定时任务', icon: <ClockIcon />, component: SchedulePage },
   { id: 'soul', label: '灵魂', icon: <BookIcon />, component: SoulPage },
+  { id: 'skill', label: '技能', icon: <ZapIcon />, component: SkillPage },
   { id: 'settings', label: '设置', icon: <SettingsIcon />, component: SettingsPage, position: 'bottom' },
   { id: 'about', label: '关于', icon: <InfoIcon />, component: AboutPage, position: 'bottom' },
 ];

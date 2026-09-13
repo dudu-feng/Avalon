@@ -14,6 +14,7 @@ use crate::channel::FeishuHandle;
 use crate::config::{ConfigStore, SearchMode};
 use crate::prompt::PromptAssembler;
 use crate::scheduler::TaskStore;
+use crate::skill::SkillRegistry;
 use crate::soul::SoulRegistry;
 use crate::vector::MemoryIndex;
 
@@ -22,6 +23,7 @@ use super::fs_tools;
 use super::memory_tools;
 use super::sandbox::Sandbox;
 use super::scheduler_tools;
+use super::skill_tools;
 use super::soul_tools;
 use super::web_tools::SearchClient;
 use super::ToolRegistry;
@@ -188,7 +190,87 @@ fn scheduler_tool_defs() -> Vec<ToolDef> {
     ]
 }
 
-/// 灵魂注册表工具定义（仅注入 SoulRegistry 时暴露，4 个）
+/// 技能工具定义（仅注入 SkillRegistry 时暴露，5 个）
+fn skill_tool_defs() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "use_skill",
+            description: "加载指定技能的流程指令。技能清单（name + description）见系统提示词里的「可用技能」段；\
+                          当任务匹配某个技能时，先调用本工具获取其详细步骤，再按步骤执行。\
+                          正文末尾会列出该技能的参考文档（references），需要时再带 reference 参数逐份读取"
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "技能名（「可用技能」清单里的 name）"},
+                    "reference": {"type": "string", "description": "可选：要加载的二级参考文档相对路径（如 auth.md 或 sub/advanced.md），省略则返回技能正文"}
+                },
+                "required": ["name"]
+            }),
+        },
+        ToolDef {
+            name: "create_skill",
+            description: "沉淀一个新技能（可复用流程知识）。写技能有门槛：仅当某类任务反复出现、\
+                          且步骤可复用、确实值得沉淀时才创建；创建前先对照系统提示词里的「可用技能」清单查重。\
+                          name 只能含字母/数字/-/_，description 一句话说明何时用，content 为可执行的流程步骤"
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "技能名（目录名，仅字母/数字/-/_）"},
+                    "description": {"type": "string", "description": "一句话描述这个技能做什么、何时用"},
+                    "content": {"type": "string", "description": "技能正文：可执行的流程步骤"}
+                },
+                "required": ["name", "content"]
+            }),
+        },
+        ToolDef {
+            name: "update_skill",
+            description: "修改已有技能的描述或正文（name 只读）。当技能步骤过时、发现更好的做法时调用"
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "技能名（不可改，用于定位）"},
+                    "description": {"type": "string", "description": "新描述（一句话）"},
+                    "content": {"type": "string", "description": "新正文"}
+                },
+                "required": ["name", "content"]
+            }),
+        },
+        ToolDef {
+            name: "delete_skill",
+            description: "删除一个已过时、错误、不再需要的技能（连带其目录）。谨慎使用"
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "技能名"}
+                },
+                "required": ["name"]
+            }),
+        },
+        ToolDef {
+            name: "install_skill",
+            description: "按链接拉取并安装一个技能。用户给出 GitHub 等渠道的技能链接时调用。\
+                          支持两种链接：单文件（github.com/.../blob/... 或 raw 直链）与\
+                          目录（github.com/.../tree/<branch>/<path>，会拉取整个技能的 SKILL.md 与 references/ 参考文档）。\
+                          也可传 name 显式指定技能名，description 可显式提供（缺省取 frontmatter）"
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "指向技能 SKILL.md 的链接，或 github.com/.../tree/... 技能目录链接（http/https）"},
+                    "name": {"type": "string", "description": "技能名（可选，缺省依次取 frontmatter name / 文件名 / 目录名）"},
+                    "description": {"type": "string", "description": "技能描述（可选，缺省取 frontmatter）"}
+                },
+                "required": ["url"]
+            }),
+        },
+    ]
+}
+
+/// 灵魂注册表工具定义（仅注入 SoulRegistry 时暴露，6 个）
 fn soul_tool_defs() -> Vec<ToolDef> {
     vec![
         ToolDef {
@@ -362,8 +444,12 @@ pub struct ToolSet {
     feishu: Option<Arc<FeishuHandle>>,
     /// 灵魂注册表（None 则不暴露灵魂条目工具）
     soul: Option<Arc<SoulRegistry>>,
+    /// 技能注册表（None 则不暴露 use_skill 工具）
+    skill: Option<Arc<SkillRegistry>>,
     /// 提示词组装器（条目变更后 refresh 缓存，下一轮对话生效）
     prompt: Option<Arc<PromptAssembler>>,
+    /// 直连 HTTP 客户端（install_skill 拉取技能正文用，独立于 SearchClient 的搜索服务）
+    http: reqwest::Client,
 }
 
 impl ToolSet {
@@ -375,7 +461,12 @@ impl ToolSet {
             search: None,
             feishu: None,
             soul: None,
+            skill: None,
             prompt: None,
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_default(),
         }
     }
 
@@ -416,6 +507,12 @@ impl ToolSet {
     /// 注入灵魂注册表，启用 list/create/update/delete_soul_entry 工具
     pub fn with_soul(mut self, soul: Arc<SoulRegistry>) -> Self {
         self.soul = Some(soul);
+        self
+    }
+
+    /// 注入技能注册表，启用 use_skill 工具（技能清单已由 PromptAssembler 注入 system prompt）
+    pub fn with_skill(mut self, skill: Arc<SkillRegistry>) -> Self {
+        self.skill = Some(skill);
         self
     }
 
@@ -465,6 +562,9 @@ impl ToolSet {
         }
         if self.soul.is_some() {
             defs.extend(soul_tool_defs());
+        }
+        if self.skill.is_some() {
+            defs.extend(skill_tool_defs());
         }
         defs
     }
@@ -549,6 +649,26 @@ impl ToolRegistry for ToolSet {
             "list_soul_entries" => match &self.soul {
                 Some(s) => soul_tools::list_soul_entries(s),
                 None => "灵魂注册表未配置".to_string(),
+            },
+            "use_skill" => match &self.skill {
+                Some(s) => skill_tools::use_skill(args, s),
+                None => "技能未配置".to_string(),
+            },
+            "create_skill" => match &self.skill {
+                Some(s) => skill_tools::create_skill(args, s),
+                None => "技能未配置".to_string(),
+            },
+            "update_skill" => match &self.skill {
+                Some(s) => skill_tools::update_skill(args, s),
+                None => "技能未配置".to_string(),
+            },
+            "delete_skill" => match &self.skill {
+                Some(s) => skill_tools::delete_skill(args, s),
+                None => "技能未配置".to_string(),
+            },
+            "install_skill" => match &self.skill {
+                Some(s) => skill_tools::install_skill(args, s, &self.http).await,
+                None => "技能未配置".to_string(),
             },
             "get_soul_entry" => match &self.soul {
                 Some(s) => soul_tools::get_soul_entry(args, s),

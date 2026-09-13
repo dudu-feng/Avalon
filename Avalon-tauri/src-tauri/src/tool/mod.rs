@@ -13,6 +13,7 @@ pub mod memory_tools;
 pub mod registry;
 pub mod sandbox;
 pub mod scheduler_tools;
+pub mod skill_tools;
 pub mod soul_tools;
 pub mod web_tools;
 
