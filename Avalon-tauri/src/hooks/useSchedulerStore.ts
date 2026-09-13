@@ -13,6 +13,7 @@ import {
   markTaskRead,
   onTaskFinished,
   toggleScheduledTask,
+  updateScheduledTask,
   type ScheduleKind,
 } from '../lib/schedulerApi';
 
@@ -53,14 +54,13 @@ export async function refreshScheduler() {
 
 let initialized = false;
 
-/** 应用级初始化：注册任务完成事件订阅 + 首次拉取（幂等） */
+/** 应用级初始化：注册任务完成事件订阅（幂等，全局只订阅一次） */
 export function initScheduler() {
   if (initialized) return;
   initialized = true;
   onTaskFinished(() => {
     refreshScheduler();
   });
-  refreshScheduler();
 }
 
 /** 组件用：读状态 + 操作（操作后自动刷新） */
@@ -69,6 +69,8 @@ export function useScheduler() {
 
   useEffect(() => {
     initScheduler();
+    // 每次挂载都刷新：页面切走再切回时重新拉取，避免拿到启动时的旧快照
+    refreshScheduler();
   }, []);
 
   const create = async (
@@ -88,10 +90,20 @@ export function useScheduler() {
     await toggleScheduledTask(id, enabled);
     await refreshScheduler();
   };
+  const update = async (
+    id: string,
+    name: string,
+    prompt: string,
+    scheduleType: ScheduleKind,
+    scheduleValue: string,
+  ) => {
+    await updateScheduledTask(id, name, prompt, scheduleType, scheduleValue);
+    await refreshScheduler();
+  };
   const markRead = async (id: string) => {
     await markTaskRead(id);
     await refreshScheduler();
   };
 
-  return { ...s, create, remove, toggle, markRead };
+  return { ...s, create, remove, toggle, update, markRead };
 }

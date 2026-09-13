@@ -17,6 +17,25 @@ pub const PROMPT_MAX_CHARS: usize = 500;
 /// 任务名称最大长度（字符）
 pub const NAME_MAX_CHARS: usize = 50;
 
+/// 校验 name/prompt 非空与长度，返回 trim 后的 (name, prompt)
+fn validate_name_prompt(name: &str, prompt: &str) -> Result<(String, String)> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(anyhow!("任务名称不能为空"));
+    }
+    if name.chars().count() > NAME_MAX_CHARS {
+        return Err(anyhow!("任务名称过长（上限 {} 字符）", NAME_MAX_CHARS));
+    }
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Err(anyhow!("任务内容不能为空"));
+    }
+    if prompt.chars().count() > PROMPT_MAX_CHARS {
+        return Err(anyhow!("任务内容过长（上限 {} 字符）", PROMPT_MAX_CHARS));
+    }
+    Ok((name.to_string(), prompt.to_string()))
+}
+
 pub struct TaskStore {
     path: PathBuf,
     inner: Mutex<Vec<ScheduledTask>>,
@@ -50,20 +69,7 @@ impl TaskStore {
         prompt: &str,
         schedule: ScheduleType,
     ) -> Result<ScheduledTask> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(anyhow!("任务名称不能为空"));
-        }
-        if name.chars().count() > NAME_MAX_CHARS {
-            return Err(anyhow!("任务名称过长（上限 {} 字符）", NAME_MAX_CHARS));
-        }
-        let prompt = prompt.trim();
-        if prompt.is_empty() {
-            return Err(anyhow!("任务内容不能为空"));
-        }
-        if prompt.chars().count() > PROMPT_MAX_CHARS {
-            return Err(anyhow!("任务内容过长（上限 {} 字符）", PROMPT_MAX_CHARS));
-        }
+        let (name, prompt) = validate_name_prompt(name, prompt)?;
 
         let mut tasks = self.inner.lock().unwrap();
         if source == TaskSource::Agent {
@@ -80,8 +86,8 @@ impl TaskStore {
         let task = ScheduledTask {
             id: format!("task_{}", now.timestamp_millis()),
             source,
-            name: name.to_string(),
-            prompt: prompt.to_string(),
+            name,
+            prompt,
             schedule,
             enabled: true,
             created_at: now.format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -113,6 +119,33 @@ impl TaskStore {
             .ok_or_else(|| anyhow!("任务 '{id}' 不存在"))?;
         task.enabled = enabled;
         self.write_locked(&tasks[..])
+    }
+
+    /// 编辑任务定义（name/prompt/schedule）。id 不变，执行历史（runs）保留；
+    /// 仅当 schedule 变化时重置 last_run_at，让新调度立即生效（避免 once 改时间后永不触发）。
+    pub fn update(
+        &self,
+        id: &str,
+        name: &str,
+        prompt: &str,
+        schedule: ScheduleType,
+    ) -> Result<ScheduledTask> {
+        let (name, prompt) = validate_name_prompt(name, prompt)?;
+
+        let mut tasks = self.inner.lock().unwrap();
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == id)
+            .ok_or_else(|| anyhow!("任务 '{id}' 不存在"))?;
+        if task.schedule != schedule {
+            task.last_run_at = None;
+        }
+        task.name = name;
+        task.prompt = prompt;
+        task.schedule = schedule;
+        let updated = task.clone();
+        self.write_locked(&tasks[..])?;
+        Ok(updated)
     }
 
     /// 到期且未执行的任务列表（心跳循环消费）

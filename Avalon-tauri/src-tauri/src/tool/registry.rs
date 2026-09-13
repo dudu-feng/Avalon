@@ -167,6 +167,21 @@ fn scheduler_tool_defs() -> Vec<ToolDef> {
                 "required": ["task_id"]
             }),
         },
+        ToolDef {
+            name: "update_scheduled_task",
+            description: "编辑指定 id 的定时任务（名称、内容或触发时间）。task_id 用 list_scheduled_tasks 查得；schedule_type/schedule_value 格式同 create_scheduled_task".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "任务 id"},
+                    "name": {"type": "string", "description": "任务名称（简短标题）"},
+                    "prompt": {"type": "string", "description": "任务内容（每次触发时喂给 agent 的输入）"},
+                    "schedule_type": {"type": "string", "enum": ["once", "daily", "weekly"], "description": "触发方式"},
+                    "schedule_value": {"type": "string", "description": "触发时间：once=YYYY-MM-DD HH:MM；daily=HH:MM；weekly=N HH:MM"}
+                },
+                "required": ["task_id", "name", "prompt", "schedule_type", "schedule_value"]
+            }),
+        },
     ]
 }
 
@@ -192,12 +207,14 @@ fn web_tool_defs() -> Vec<ToolDef> {
         ToolDef {
             name: "read_web_page",
             description: "读取指定网页的正文并转为 Markdown。只支持 http/https 网页，\
-                          PDF、图片、音视频等二进制格式无法读取。正文过长会被截断"
+                         PDF、图片、音视频等二进制格式无法读取。正文过长会被截断，\
+                         截断时会在结尾提示下一个 offset，带上 offset 参数继续读下一段"
                 .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "网页链接，必须是 http 或 https"}
+                    "url": {"type": "string", "description": "网页链接，必须是 http 或 https"},
+                    "offset": {"type": "integer", "description": "续读起始字符位置（可选，默认 0 从头读）"}
                 },
                 "required": ["url"]
             }),
@@ -382,6 +399,10 @@ impl ToolRegistry for ToolSet {
             },
             "delete_scheduled_task" => match &self.scheduler {
                 Some(s) => scheduler_tools::delete_scheduled_task(args, s),
+                None => "定时任务未配置".to_string(),
+            },
+            "update_scheduled_task" => match &self.scheduler {
+                Some(s) => scheduler_tools::update_scheduled_task(args, s),
                 None => "定时任务未配置".to_string(),
             },
             "web_search" => match &self.search {

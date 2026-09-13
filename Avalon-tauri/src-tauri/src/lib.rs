@@ -168,6 +168,7 @@ pub fn run() {
             commands::list_scheduled_tasks,
             commands::delete_scheduled_task,
             commands::toggle_scheduled_task,
+            commands::update_scheduled_task,
             commands::mark_task_read,
             commands::get_unread_task_count,
             commands::feishu_start,

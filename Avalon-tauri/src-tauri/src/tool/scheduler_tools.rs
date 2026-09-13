@@ -64,3 +64,32 @@ pub fn delete_scheduled_task(args: &Value, store: &TaskStore) -> String {
         Err(e) => format!("删除定时任务失败: {e}"),
     }
 }
+
+/// 编辑定时任务（agent 修正自己或用户建的任务；不区分来源，id 不变）
+pub fn update_scheduled_task(args: &Value, store: &TaskStore) -> String {
+    let Some(task_id) = args.get("task_id").and_then(Value::as_str) else {
+        return "参数错误: 缺少 task_id".to_string();
+    };
+    let Some(name) = args.get("name").and_then(Value::as_str) else {
+        return "参数错误: 缺少 name 或类型应为字符串".to_string();
+    };
+    let Some(prompt) = args.get("prompt").and_then(Value::as_str) else {
+        return "参数错误: 缺少 prompt 或类型应为字符串".to_string();
+    };
+    let Some(schedule_type) = args.get("schedule_type").and_then(Value::as_str) else {
+        return "参数错误: 缺少 schedule_type（once / daily / weekly）".to_string();
+    };
+    let Some(schedule_value) = args.get("schedule_value").and_then(Value::as_str) else {
+        return "参数错误: 缺少 schedule_value".to_string();
+    };
+
+    let schedule = match parse_schedule(schedule_type, schedule_value) {
+        Ok(s) => s,
+        Err(e) => return format!("参数错误: {e}"),
+    };
+
+    match store.update(task_id, name, prompt, schedule) {
+        Ok(task) => format!("已更新定时任务 {}（{}）", task.id, task.name),
+        Err(e) => format!("更新定时任务失败: {e}"),
+    }
+}

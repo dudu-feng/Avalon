@@ -15,7 +15,7 @@ pub use scheduler::Scheduler;
 pub use store::TaskStore;
 
 /// 触发时间（结构化，不裸 cron：不支持比「每天」更细的粒度，天然防 agent 创建高频率任务）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ScheduleType {
     /// 一次性：具体时刻 "YYYY-MM-DD HH:MM"（或带 :SS）

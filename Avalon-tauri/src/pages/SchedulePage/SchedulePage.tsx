@@ -38,19 +38,11 @@ function lastRunText(task: ScheduledTask): string {
 }
 
 export function SchedulePage() {
-  const { tasks, unread, loaded, create, remove, toggle, markRead } = useScheduler();
+  const { tasks, unread, loaded, create, remove, toggle, update, markRead } = useScheduler();
 
-  // 创建表单
+  // 表单：creating=新建，editing=编辑某任务（二者互斥）
   const [creating, setCreating] = useState(false);
-  const [name, setName] = useState('');
-  const [prompt, setPrompt] = useState('');
-  const [scheduleType, setScheduleType] = useState<ScheduleKind>('once');
-  const [onceValue, setOnceValue] = useState('');
-  const [dailyTime, setDailyTime] = useState('');
-  const [weeklyDay, setWeeklyDay] = useState('1');
-  const [weeklyTime, setWeeklyTime] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
+  const [editing, setEditing] = useState<ScheduledTask | null>(null);
 
   // 删除确认
   const [confirmDelete, setConfirmDelete] = useState<ScheduledTask | null>(null);
@@ -58,68 +50,27 @@ export function SchedulePage() {
   // 执行历史（内部 TaskHistoryModal 用 useChat 驱动，可继续对话）
   const [viewing, setViewing] = useState<ScheduledTask | null>(null);
 
-  // 重置创建表单（打开 / 关闭 / 创建成功后统一清空，避免残留）
-  const resetForm = () => {
-    setName('');
-    setPrompt('');
-    setScheduleType('once');
-    setOnceValue('');
-    setDailyTime('');
-    setWeeklyDay('1');
-    setWeeklyTime('');
-    setError('');
-  };
-
   const openCreate = () => {
-    resetForm();
+    setEditing(null);
     setCreating(true);
   };
 
-  const closeCreate = () => {
+  const openEdit = (task: ScheduledTask) => {
     setCreating(false);
-    resetForm();
+    setEditing(task);
   };
 
-  const submitCreate = async () => {
-    setError('');
-    let value = '';
-    if (scheduleType === 'once') {
-      value = onceValue.replace('T', ' ');
-      if (!onceValue) {
-        setError('请选择执行时间');
-        return;
-      }
-    } else if (scheduleType === 'daily') {
-      value = dailyTime;
-      if (!dailyTime) {
-        setError('请选择执行时间');
-        return;
-      }
-    } else {
-      value = `${weeklyDay} ${weeklyTime}`;
-      if (!weeklyTime) {
-        setError('请选择执行时间');
-        return;
-      }
-    }
-    if (!name.trim()) {
-      setError('请填写任务名称');
-      return;
-    }
-    if (!prompt.trim()) {
-      setError('请填写任务内容');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await create(name.trim(), prompt.trim(), scheduleType, value);
-      closeCreate();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSubmitting(false);
-    }
+  const closeForm = () => {
+    setCreating(false);
+    setEditing(null);
   };
+
+  // 提交：编辑走 update，新建走 create（TaskFormModal 内部处理校验/loading/错误）
+  const submitForm = editing
+    ? (name: string, prompt: string, scheduleType: ScheduleKind, value: string) =>
+        update(editing.id, name, prompt, scheduleType, value)
+    : (name: string, prompt: string, scheduleType: ScheduleKind, value: string) =>
+        create(name, prompt, scheduleType, value);
 
   const viewHistory = (task: ScheduledTask) => {
     setViewing(task);
@@ -176,6 +127,9 @@ export function SchedulePage() {
                   <Button variant="secondary" size="sm" onClick={() => viewHistory(task)}>
                     历史
                   </Button>
+                  <Button variant="ghost" size="sm" onClick={() => openEdit(task)}>
+                    编辑
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -193,107 +147,16 @@ export function SchedulePage() {
         </div>
       )}
 
-      {/* 创建表单 */}
-      <Modal
-        open={creating}
-        onClose={closeCreate}
-        title="新建定时任务"
-        width={480}
-        footer={
-          <>
-            <Button variant="secondary" onClick={closeCreate}>
-              取消
-            </Button>
-            <Button variant="primary" onClick={submitCreate} disabled={submitting}>
-              {submitting ? '创建中…' : '创建'}
-            </Button>
-          </>
-        }
-      >
-        <div className={styles.form}>
-          <Input
-            label="任务名称"
-            value={name}
-            placeholder="例如：每日晨报"
-            onChange={(e) => setName(e.currentTarget.value)}
-          />
-          <label className={styles.fieldLabel} htmlFor="task-prompt">
-            任务内容
-          </label>
-          <textarea
-            id="task-prompt"
-            className={styles.textarea}
-            value={prompt}
-            rows={4}
-            placeholder="描述要做什么，agent 每次触发时按此执行"
-            onChange={(e) => setPrompt(e.currentTarget.value)}
-          />
-
-          <span className={styles.fieldLabel}>触发方式</span>
-          <div className={styles.scheduleTypeRow}>
-            {(
-              [
-                ['once', '一次性'],
-                ['daily', '每天'],
-                ['weekly', '每周'],
-              ] as [ScheduleKind, string][]
-            ).map(([k, label]) => (
-              <button
-                key={k}
-                type="button"
-                className={[styles.typeChip, scheduleType === k && styles.typeChipActive]
-                  .filter(Boolean)
-                  .join(' ')}
-                onClick={() => setScheduleType(k)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div className={styles.scheduleValueRow}>
-            {scheduleType === 'once' && (
-              <input
-                type="datetime-local"
-                className={styles.field}
-                value={onceValue}
-                onChange={(e) => setOnceValue(e.currentTarget.value)}
-              />
-            )}
-            {scheduleType === 'daily' && (
-              <input
-                type="time"
-                className={styles.field}
-                value={dailyTime}
-                onChange={(e) => setDailyTime(e.currentTarget.value)}
-              />
-            )}
-            {scheduleType === 'weekly' && (
-              <>
-                <select
-                  className={styles.select}
-                  value={weeklyDay}
-                  onChange={(e) => setWeeklyDay(e.currentTarget.value)}
-                >
-                  {WEEKDAYS.map((w, i) => (
-                    <option key={w} value={String(i + 1)}>
-                      {w}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="time"
-                  className={styles.field}
-                  value={weeklyTime}
-                  onChange={(e) => setWeeklyTime(e.currentTarget.value)}
-                />
-              </>
-            )}
-          </div>
-
-          {error && <p className={styles.error}>{error}</p>}
-        </div>
-      </Modal>
+      {/* 新建 / 编辑表单（复用 TaskFormModal） */}
+      {(creating || editing) && (
+        <TaskFormModal
+          key={editing ? editing.id : 'create'}
+          title={editing ? '编辑定时任务' : '新建定时任务'}
+          initial={editing ?? undefined}
+          onSubmit={submitForm}
+          onClose={closeForm}
+        />
+      )}
 
       {/* 执行历史：独立会话视图，用户可继续对话（channel = task.id） */}
       {viewing && (
@@ -311,6 +174,185 @@ export function SchedulePage() {
         onCancel={() => setConfirmDelete(null)}
       />
     </PageContainer>
+  );
+}
+
+/** 新建/编辑共用的任务表单：initial 为空则新建，否则预填编辑；内部处理校验、loading 与错误显示 */
+function TaskFormModal({
+  title,
+  initial,
+  onSubmit,
+  onClose,
+}: {
+  title: string;
+  initial?: ScheduledTask;
+  onSubmit: (
+    name: string,
+    prompt: string,
+    scheduleType: ScheduleKind,
+    value: string,
+  ) => Promise<void>;
+  onClose: () => void;
+}) {
+  const init = initial?.schedule;
+  const [name, setName] = useState(initial?.name ?? '');
+  const [prompt, setPrompt] = useState(initial?.prompt ?? '');
+  const [scheduleType, setScheduleType] = useState<ScheduleKind>(init?.type ?? 'once');
+  const [onceValue, setOnceValue] = useState(
+    init && init.type === 'once' ? init.at.replace(' ', 'T') : '',
+  );
+  const [dailyTime, setDailyTime] = useState(init && init.type === 'daily' ? init.time : '');
+  const [weeklyDay, setWeeklyDay] = useState(
+    init && init.type === 'weekly' ? String(init.weekday) : '1',
+  );
+  const [weeklyTime, setWeeklyTime] = useState(
+    init && init.type === 'weekly' ? init.time : '',
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async () => {
+    setError('');
+    let value = '';
+    if (scheduleType === 'once') {
+      value = onceValue.replace('T', ' ');
+      if (!onceValue) {
+        setError('请选择执行时间');
+        return;
+      }
+    } else if (scheduleType === 'daily') {
+      value = dailyTime;
+      if (!dailyTime) {
+        setError('请选择执行时间');
+        return;
+      }
+    } else {
+      value = `${weeklyDay} ${weeklyTime}`;
+      if (!weeklyTime) {
+        setError('请选择执行时间');
+        return;
+      }
+    }
+    if (!name.trim()) {
+      setError('请填写任务名称');
+      return;
+    }
+    if (!prompt.trim()) {
+      setError('请填写任务内容');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await onSubmit(name.trim(), prompt.trim(), scheduleType, value);
+      onClose();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={title}
+      width={480}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            取消
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={submitting}>
+            {submitting ? '保存中…' : '保存'}
+          </Button>
+        </>
+      }
+    >
+      <div className={styles.form}>
+        <Input
+          label="任务名称"
+          value={name}
+          placeholder="例如：每日晨报"
+          onChange={(e) => setName(e.currentTarget.value)}
+        />
+        <label className={styles.fieldLabel} htmlFor="task-prompt">
+          任务内容
+        </label>
+        <textarea
+          id="task-prompt"
+          className={styles.textarea}
+          value={prompt}
+          rows={4}
+          placeholder="描述要做什么，agent 每次触发时按此执行"
+          onChange={(e) => setPrompt(e.currentTarget.value)}
+        />
+
+        <span className={styles.fieldLabel}>触发方式</span>
+        <div className={styles.scheduleTypeRow}>
+          {(
+            [
+              ['once', '一次性'],
+              ['daily', '每天'],
+              ['weekly', '每周'],
+            ] as [ScheduleKind, string][]
+          ).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              className={[styles.typeChip, scheduleType === k && styles.typeChipActive]
+                .filter(Boolean)
+                .join(' ')}
+              onClick={() => setScheduleType(k)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className={styles.scheduleValueRow}>
+          {scheduleType === 'once' && (
+            <input
+              type="datetime-local"
+              className={styles.field}
+              value={onceValue}
+              onChange={(e) => setOnceValue(e.currentTarget.value)}
+            />
+          )}
+          {scheduleType === 'daily' && (
+            <input
+              type="time"
+              className={styles.field}
+              value={dailyTime}
+              onChange={(e) => setDailyTime(e.currentTarget.value)}
+            />
+          )}
+          {scheduleType === 'weekly' && (
+            <>
+              <select
+                className={styles.select}
+                value={weeklyDay}
+                onChange={(e) => setWeeklyDay(e.currentTarget.value)}
+              >
+                {WEEKDAYS.map((w, i) => (
+                  <option key={w} value={String(i + 1)}>
+                    {w}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="time"
+                className={styles.field}
+                value={weeklyTime}
+                onChange={(e) => setWeeklyTime(e.currentTarget.value)}
+              />
+            </>
+          )}
+        </div>
+
+        {error && <p className={styles.error}>{error}</p>}
+      </div>
+    </Modal>
   );
 }
 

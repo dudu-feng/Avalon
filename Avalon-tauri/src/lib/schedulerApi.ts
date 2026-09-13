@@ -40,6 +40,23 @@ export async function toggleScheduledTask(taskId: string, enabled: boolean): Pro
   await invoke('toggle_scheduled_task', { taskId, enabled });
 }
 
+/** 编辑定时任务定义（id 不变，执行历史保留），返回更新后的完整任务 */
+export async function updateScheduledTask(
+  taskId: string,
+  name: string,
+  prompt: string,
+  scheduleType: ScheduleKind,
+  scheduleValue: string,
+): Promise<ScheduledTask> {
+  return invoke<ScheduledTask>('update_scheduled_task', {
+    taskId,
+    name,
+    prompt,
+    scheduleType,
+    scheduleValue,
+  });
+}
+
 /** 清除某任务未读标记（查看执行历史后调用） */
 export async function markTaskRead(taskId: string): Promise<void> {
   await invoke('mark_task_read', { taskId });

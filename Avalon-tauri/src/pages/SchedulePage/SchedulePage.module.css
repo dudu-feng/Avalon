@@ -95,7 +95,8 @@
 }
 
 .cardMeta {
-  margin: 0;
+  /* 让「上次执行」这行与操作栏一起沉底，中间空隙留在内容与这行之间 */
+  margin: auto 0 0;
   font: 400 12px/1.4 var(--font-sans);
   color: var(--muted-foreground);
 }
@@ -103,7 +104,6 @@
 .cardActions {
   display: flex;
   gap: 8px;
-  margin-top: 4px;
 }
 
 /* 创建表单 */

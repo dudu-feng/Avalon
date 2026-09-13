@@ -299,6 +299,22 @@ pub fn toggle_scheduled_task(
     store.toggle(&task_id, enabled).map_err(|e| e.to_string())
 }
 
+/// 编辑定时任务定义（名称/内容/触发方式），id 不变，执行历史保留
+#[tauri::command]
+pub fn update_scheduled_task(
+    task_id: String,
+    name: String,
+    prompt: String,
+    schedule_type: String,
+    schedule_value: String,
+    store: State<'_, Arc<TaskStore>>,
+) -> Result<ScheduledTask, String> {
+    let schedule = parse_schedule(&schedule_type, &schedule_value).map_err(|e| e.to_string())?;
+    store
+        .update(&task_id, &name, &prompt, schedule)
+        .map_err(|e| e.to_string())
+}
+
 /// 清除某任务的未读标记（前端查看执行历史后调用）
 #[tauri::command]
 pub fn mark_task_read(task_id: String, store: State<'_, Arc<TaskStore>>) -> Result<(), String> {
