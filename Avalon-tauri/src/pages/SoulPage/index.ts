@@ -1,0 +1,1 @@
+export { SoulPage } from './SoulPage';

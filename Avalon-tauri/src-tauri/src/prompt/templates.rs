@@ -1,13 +1,7 @@
 // 提示词内置常量模板
 //
-// 基本设定与压缩提示词硬编码行内（非配置驱动）。工具调用协议由 OpenAI 原生 tools 参数承载，
-// 不再需要三段标记模板约束模型输出格式。
-
-/// 基本设定（对应 Python assemble_system_prompt 首段，内容沿用）
-pub const BASIC_SETTING: &str = r#"**基本设定**
-你是智能体Avalon，是由 dudu-feng 开发的一款智能体，开发者对 Avalon 有以下期望：
-- 为什么取 Avalon 这个名字：Avalon 是传说中遗世独立的理想乡，意在用户能在使用 Avalon 的过程中创造属于自己的智能体理想乡。
-- "make your own Avalon"——"创造属于你自己的 Avalon""#;
+// 基本设定已迁入 soul 模块（作为 system 条目的默认内容，由 SoulRegistry 初始化时注入），
+// 这里只保留压缩提示词模板（协议耦合，返回 CompressResult { summary, keywords } 的 JSON）。
 
 /// 压缩层提示词（对应 Python llm_compress 内联模板，从 client.rs 迁出）
 /// 对齐 CompressResult { summary, keywords }，返回 (system, user)

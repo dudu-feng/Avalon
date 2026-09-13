@@ -10,6 +10,9 @@ export type { CardProps } from './Card';
 export { Badge } from './Badge';
 export type { BadgeProps } from './Badge';
 
+export { Switch } from './Switch';
+export type { SwitchProps } from './Switch';
+
 export { ThemeToggle } from './ThemeToggle';
 export type { ThemeToggleProps } from './ThemeToggle';
 

@@ -12,6 +12,7 @@ mod logging;
 mod prompt;
 mod scheduler;
 mod session;
+mod soul;
 mod tool;
 mod tray;
 mod usage;
@@ -81,7 +82,16 @@ pub fn run() {
         llm.clone(),
         vector_store,
     ));
-    let prompt_asm = prompt::PromptAssembler::new(&cfg);
+    // 灵魂注册表：统一管理灵魂/画像条目（registry.json），首次启动时从旧分节 .md 迁移
+    let soul_registry: Arc<soul::SoulRegistry> = Arc::new(
+        soul::SoulRegistry::new(cfg.prompt_file_path())
+            .with_history(cfg.log_path().join("soul_history.md")),
+    );
+    if let Err(e) = soul_registry.init() {
+        boot_log.push((log::Level::Error, format!("初始化灵魂注册表失败: {e}")));
+    }
+    let prompt_asm: Arc<prompt::PromptAssembler> =
+        Arc::new(prompt::PromptAssembler::new(soul_registry.clone()));
     let usage_store: Arc<usage::UsageStore> = Arc::new(usage::UsageStore::new(cfg.usage_path()));
     let task_store: Arc<scheduler::TaskStore> =
         Arc::new(scheduler::TaskStore::new(cfg.scheduler_path()));
@@ -92,7 +102,9 @@ pub fn run() {
         .with_memory(memory_index)
         .with_config(store.clone())
         .with_scheduler(task_store.clone())
-        .with_feishu(feishu_handle.clone());
+        .with_feishu(feishu_handle.clone())
+        .with_soul(soul_registry.clone())
+        .with_prompt(prompt_asm.clone());
     // 搜索工具按配置开关注入：不注入就等于对模型完全隐藏，
     // 比注入之后再在调用时拒绝要干净 —— 模型不会反复尝试一个用不了的工具
     if cfg.search.enabled {
@@ -103,7 +115,7 @@ pub fn run() {
     let engine = Arc::new(engine::Engine::new(
         store.clone(),
         llm.clone(),
-        prompt_asm,
+        prompt_asm.clone(),
         tool_registry,
         session_store,
         usage_store.clone(),
@@ -140,6 +152,8 @@ pub fn run() {
         .manage(engine)
         .manage(usage_store)
         .manage(task_store)
+        .manage(soul_registry)
+        .manage(prompt_asm)
         .manage(channels)
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
@@ -175,6 +189,12 @@ pub fn run() {
             commands::feishu_stop,
             commands::feishu_status,
             commands::feishu_test_connection,
+            commands::list_soul_entries,
+            commands::get_soul_entry,
+            commands::create_soul_entry,
+            commands::update_soul_entry,
+            commands::delete_soul_entry,
+            commands::set_soul_entry_enabled,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

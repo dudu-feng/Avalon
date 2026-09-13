@@ -73,3 +73,9 @@ export const DashboardIcon = createIcon(
     <rect x="3" y="16" width="7" height="5" rx="1" />
   </>,
 );
+
+export const BookIcon = createIcon(
+  <>
+    <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+  </>,
+);

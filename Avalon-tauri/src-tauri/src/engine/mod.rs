@@ -57,7 +57,7 @@ impl<'a> UserInput<'a> {
 pub struct Engine {
     config: ConfigStore,
     llm: LlmState,
-    prompt: PromptAssembler,
+    prompt: Arc<PromptAssembler>,
     tools: Arc<dyn ToolRegistry>,
     session: Arc<dyn SessionStore>,
     usage: Arc<UsageStore>,
@@ -71,7 +71,7 @@ impl Engine {
     pub fn new(
         config: ConfigStore,
         llm: LlmState,
-        prompt: PromptAssembler,
+        prompt: Arc<PromptAssembler>,
         tools: Arc<dyn ToolRegistry>,
         session: Arc<dyn SessionStore>,
         usage: Arc<UsageStore>,
@@ -116,7 +116,7 @@ impl Engine {
             channel,
             &self.config,
             &self.llm,
-            &self.prompt,
+            self.prompt.as_ref(),
             self.tools.as_ref(),
             self.session.as_ref(),
             self.usage.as_ref(),

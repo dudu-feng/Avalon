@@ -12,7 +12,9 @@ use serde_json::{json, Value};
 
 use crate::channel::FeishuHandle;
 use crate::config::{ConfigStore, SearchMode};
+use crate::prompt::PromptAssembler;
 use crate::scheduler::TaskStore;
+use crate::soul::SoulRegistry;
 use crate::vector::MemoryIndex;
 
 use super::feishu_tools;
@@ -20,6 +22,7 @@ use super::fs_tools;
 use super::memory_tools;
 use super::sandbox::Sandbox;
 use super::scheduler_tools;
+use super::soul_tools;
 use super::web_tools::SearchClient;
 use super::ToolRegistry;
 
@@ -185,6 +188,92 @@ fn scheduler_tool_defs() -> Vec<ToolDef> {
     ]
 }
 
+/// 灵魂注册表工具定义（仅注入 SoulRegistry 时暴露，4 个）
+fn soul_tool_defs() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "list_soul_entries",
+            description: "列出灵魂注册表中的可见条目（id、类别、保护级别、标题，不含系统基本设定），\
+                          用于查看当前灵魂结构与已有画像，增删改前先查 id"
+                .to_string(),
+            parameters: json!({ "type": "object", "properties": {} }),
+        },
+        ToolDef {
+            name: "create_soul_entry",
+            description: "向灵魂注册表新增一条条目（category 为 soul=灵魂 / profile=用户画像）。\
+                          当出现值得长期记住的新信息、而现有条目无法容纳时调用。\
+                          title 为条目标题，content 为条目内容"
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "enum": ["soul", "profile"], "description": "soul=灵魂（自我设定），profile=用户画像（关于主人的长期记忆）"},
+                    "title": {"type": "string", "description": "条目标题，如「偏好与习惯」"},
+                    "content": {"type": "string", "description": "条目内容"}
+                },
+                "required": ["category", "title", "content"]
+            }),
+        },
+        ToolDef {
+            name: "update_soul_entry",
+            description: "编辑灵魂注册表中的一条条目（title 与 content 至少传一个）。\
+                          用户画像的稳定信息积累用本工具追加到已有条目；\
+                          系统注入条目（kind=system）只读，不可修改"
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "条目 id，用 list_soul_entries 查得"},
+                    "title": {"type": "string", "description": "新标题（可选，不传则不修改）"},
+                    "content": {"type": "string", "description": "新内容（可选，不传则不修改）"}
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolDef {
+            name: "delete_soul_entry",
+            description: "删除灵魂注册表中的一条 user 条目。系统注入与种子条目（kind=system/seed）\
+                          不可删除。仅删除确已过时、错误的条目"
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "条目 id，用 list_soul_entries 查得"}
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolDef {
+            name: "get_soul_entry",
+            description: "读取灵魂注册表中某一条目的完整内容（标题 + 正文）。\
+                          list_soul_entries 只返回元数据，需要看某条的具体内容时用本工具"
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "条目 id，用 list_soul_entries 查得"}
+                },
+                "required": ["id"]
+            }),
+        },
+        ToolDef {
+            name: "set_soul_entry_enabled",
+            description: "切换灵魂注册表中某条目是否注入 system prompt（enabled）。\
+                          停用后该条目不再拼进系统提示词，可再次启用恢复；\
+                          系统注入条目（基本设定）不可切换"
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "条目 id，用 list_soul_entries 查得"},
+                    "enabled": {"type": "boolean", "description": "true=注入，false=停用"}
+                },
+                "required": ["id", "enabled"]
+            }),
+        },
+    ]
+}
+
 /// 联网搜索工具定义（仅注入 SearchClient 时暴露，2 个）
 fn web_tool_defs() -> Vec<ToolDef> {
     vec![
@@ -271,6 +360,10 @@ pub struct ToolSet {
     search: Option<SearchClient>,
     /// 飞书发送句柄（None 则不暴露飞书工具）
     feishu: Option<Arc<FeishuHandle>>,
+    /// 灵魂注册表（None 则不暴露灵魂条目工具）
+    soul: Option<Arc<SoulRegistry>>,
+    /// 提示词组装器（条目变更后 refresh 缓存，下一轮对话生效）
+    prompt: Option<Arc<PromptAssembler>>,
 }
 
 impl ToolSet {
@@ -281,6 +374,8 @@ impl ToolSet {
             scheduler: None,
             search: None,
             feishu: None,
+            soul: None,
+            prompt: None,
         }
     }
 
@@ -315,6 +410,18 @@ impl ToolSet {
     /// 启动那一刻的 enabled 说明不了运行期的状态。在线与否由句柄在调用时回答。
     pub fn with_feishu(mut self, feishu: Arc<FeishuHandle>) -> Self {
         self.feishu = Some(feishu);
+        self
+    }
+
+    /// 注入灵魂注册表，启用 list/create/update/delete_soul_entry 工具
+    pub fn with_soul(mut self, soul: Arc<SoulRegistry>) -> Self {
+        self.soul = Some(soul);
+        self
+    }
+
+    /// 注入提示词组装器，画像/灵魂更新成功后 refresh 缓存，下一轮对话生效
+    pub fn with_prompt(mut self, prompt: Arc<PromptAssembler>) -> Self {
+        self.prompt = Some(prompt);
         self
     }
 
@@ -356,7 +463,25 @@ impl ToolSet {
         if self.feishu.is_some() {
             defs.extend(feishu_tool_defs());
         }
+        if self.soul.is_some() {
+            defs.extend(soul_tool_defs());
+        }
         defs
+    }
+
+    /// 调用灵魂条目变更工具（create/update/delete），成功后刷新提示词缓存（下一轮对话即生效）。
+    /// 错误（参数错误 / 灵魂条目失败）不刷新 —— 没改动就不该刷缓存。
+    fn invoke_soul_mutation(&self, f: impl Fn(&SoulRegistry) -> String) -> String {
+        let Some(soul) = &self.soul else {
+            return "灵魂注册表未配置".to_string();
+        };
+        let out = f(soul);
+        if !out.starts_with("参数错误") && !out.starts_with("灵魂条目") {
+            if let Some(asm) = &self.prompt {
+                asm.refresh();
+            }
+        }
+        out
     }
 }
 
@@ -421,6 +546,26 @@ impl ToolRegistry for ToolSet {
                 Some(h) => feishu_tools::send_to(args, h).await,
                 None => "飞书工具未配置".to_string(),
             },
+            "list_soul_entries" => match &self.soul {
+                Some(s) => soul_tools::list_soul_entries(s),
+                None => "灵魂注册表未配置".to_string(),
+            },
+            "get_soul_entry" => match &self.soul {
+                Some(s) => soul_tools::get_soul_entry(args, s),
+                None => "灵魂注册表未配置".to_string(),
+            },
+            "create_soul_entry" => {
+                self.invoke_soul_mutation(|s| soul_tools::create_soul_entry(args, s))
+            }
+            "update_soul_entry" => {
+                self.invoke_soul_mutation(|s| soul_tools::update_soul_entry(args, s))
+            }
+            "delete_soul_entry" => {
+                self.invoke_soul_mutation(|s| soul_tools::delete_soul_entry(args, s))
+            }
+            "set_soul_entry_enabled" => {
+                self.invoke_soul_mutation(|s| soul_tools::set_soul_entry_enabled(args, s))
+            }
             _ => format!("未找到工具: {name}"),
         }
     }
