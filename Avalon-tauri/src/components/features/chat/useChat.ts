@@ -1,430 +1,56 @@
-// 聊天状态机 hook —— 唯一调用 chatApi 的地方
+// 聊天状态机的对外 hook —— 状态本体在 useChatStore（模块级分桶单例）。
 //
-// 对接后端 engine 的 EngineEvent 流式协议，把扁平事件流组装成
-// messages（ChatMessage[]）供展示组件渲染。会话生命周期（init/save）也收在此。
+// 这里只做三件事：取桶、订阅、把动作包成稳定引用。组件里不持有任何对话状态，
+// 所以切页卸载不会丢失正在流式累积的输出。
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type {
-  ChatMessage,
-  ContextUsage,
-  EngineEvent,
-  HistoryMessage,
-  SessionMeta,
-} from '../../../types/chat';
-import {
-  chat,
-  compressSession,
-  createSession,
-  DEFAULT_CHANNEL,
-  deleteSession as deleteSessionApi,
-  getContextUsage,
-  getCurrentSession,
-  listSessions,
-  loadSessionHistory,
-  renameSession as renameSessionApi,
-  stopChat,
-  switchSession as switchSessionApi,
-} from '../../../lib/chatApi';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { DEFAULT_CHANNEL } from '../../../lib/chatApi';
+import * as chatStore from './useChatStore';
 
 export interface UseChatOptions {
   channelName?: string;
 }
 
-type AssistantMessage = Extract<ChatMessage, { role: 'assistant' }>;
-type ToolMessage = Extract<ChatMessage, { role: 'tool' }>;
-type CompressMessage = Extract<ChatMessage, { role: 'compress' }>;
-
-/** 后端历史消息（user/assistant/tool 平铺）→ 前端展示消息（逐条直映，无归并）。
- *  key 区分来源（块号 / 'cur'），保证拼接更早块时消息 id 全局唯一。 */
-function mapHistoryMessages(msgs: HistoryMessage[], key: string): ChatMessage[] {
-  const out: ChatMessage[] = [];
-  let idx = 0;
-
-  for (const m of msgs) {
-    if (m.role === 'user') {
-      out.push({ id: `hist-${key}-${idx++}`, role: 'user', status: 'done', content: m.content });
-    } else if (m.role === 'assistant') {
-      out.push({
-        id: `hist-${key}-${idx++}`,
-        role: 'assistant',
-        status: 'done',
-        thought: m.reasoning_content ?? '',
-        content: m.content,
-        tokenUsage: m.token_usage,
-      });
-    } else {
-      // role === 'tool'：独立折叠卡片，参数/状态/结果自包含，不依附 assistant
-      out.push({
-        id: `hist-${key}-${idx++}`,
-        role: 'tool',
-        tool: {
-          id: m.tool_call_id,
-          toolName: m.name,
-          arguments: m.arguments,
-          status: m.success ? 'success' : 'error',
-          result: m.content,
-        },
-      });
-    }
-  }
-  return out;
-}
-
-/** 定位最后一条指定 role 的消息（assistant 事件更新末 assistant；tool_result 更新末 tool） */
-function lastIndexByRole(messages: ChatMessage[], role: ChatMessage['role']): number {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === role) return i;
-  }
-  return -1;
-}
-
-/** 新建一条空的 streaming assistant 气泡（首轮由 send 预创建，后续轮由 round_start 触发） */
-function newAssistant(id: string): ChatMessage {
-  return { id, role: 'assistant', status: 'streaming', thought: '', content: '' };
-}
-
-/** 事件 → 新消息数组（纯函数，供 setMessages 函数式更新） */
-function applyEvent(prev: ChatMessage[], ev: EngineEvent, newId: () => string): ChatMessage[] {
-  // 轮次边界：封口上一轮 assistant、开新气泡（第一轮复用 send 预创建的空气泡）
-  if (ev.type === 'round_start') {
-    const idx = lastIndexByRole(prev, 'assistant');
-    if (idx < 0) return prev;
-    const current = prev[idx] as AssistantMessage;
-    const isEmpty = !current.thought && !current.content;
-    if (isEmpty) return prev;
-    const copy = [...prev];
-    copy[idx] = { ...current, status: 'done' };
-    return [...copy, newAssistant(newId())];
-  }
-
-  // 工具发起：追加独立 tool 消息（running 状态，tool_result 再回填结果）
-  if (ev.type === 'tool_call') {
-    return [
-      ...prev,
-      {
-        id: newId(),
-        role: 'tool',
-        tool: { id: ev.id, toolName: ev.tool_name, arguments: ev.arguments, status: 'running' },
-      },
-    ];
-  }
-
-  // 工具结果：更新最后一条 tool 消息的状态与结果
-  if (ev.type === 'tool_result') {
-    const idx = lastIndexByRole(prev, 'tool');
-    if (idx < 0) return prev;
-    const copy = [...prev];
-    const current = copy[idx] as ToolMessage;
-    copy[idx] = {
-      ...current,
-      tool: { ...current.tool, result: ev.result, status: ev.success ? 'success' : 'error' },
-    };
-    return copy;
-  }
-
-  // 压缩开始：追加独立提示气泡（running），compress_done 再回填完成/失败
-  if (ev.type === 'compress_start') {
-    return [...prev, { id: newId(), role: 'compress', status: 'running' }];
-  }
-
-  // 压缩结束：更新最后一条 compress 气泡的状态与错误信息
-  if (ev.type === 'compress_done') {
-    const idx = lastIndexByRole(prev, 'compress');
-    if (idx < 0) return prev;
-    const copy = [...prev];
-    const current = copy[idx] as CompressMessage;
-    copy[idx] = {
-      ...current,
-      status: ev.success ? 'done' : 'error',
-      error: ev.error ?? undefined,
-    };
-    return copy;
-  }
-
-  // 其余事件作用于最后一条 assistant
-  const idx = lastIndexByRole(prev, 'assistant');
-  if (idx < 0) return prev;
-
-  const current = prev[idx] as AssistantMessage;
-  let next: AssistantMessage = current;
-
-  switch (ev.type) {
-    case 'thought_delta':
-      next = { ...current, thought: current.thought + ev.delta };
-      break;
-    case 'message_delta':
-      next = { ...current, content: current.content + ev.delta };
-      break;
-    case 'done':
-      next = {
-        ...current,
-        status: 'done',
-        tokenUsage: ev.result.usage,
-        content: ev.result.message || current.content,
-      };
-      break;
-    case 'error':
-      next = { ...current, error: ev.message };
-      break;
-    default:
-      return prev;
-  }
-
-  const copy = [...prev];
-  copy[idx] = next;
-  return copy;
-}
-
 export function useChat(options: UseChatOptions = {}) {
   const { channelName = DEFAULT_CHANNEL } = options;
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isBusy, setIsBusy] = useState(false);
-  const [compressing, setCompressing] = useState(false);
-  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [resetting, setResetting] = useState(false);
-  const [switching, setSwitching] = useState(false);
-  const [sessions, setSessions] = useState<SessionMeta[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-  // 渐进式加载历史游标：当前已加载的最早块号 / 是否还有更早块 / 是否正在加载更早
-  const [earliestChunk, setEarliestChunk] = useState<number | null>(null);
-  const [hasEarlier, setHasEarlier] = useState(false);
-  const [loadingEarlier, setLoadingEarlier] = useState(false);
-  const idRef = useRef(0);
 
-  const nextId = useCallback(() => `msg-${(idRef.current += 1)}`, []);
-
-  // 当前活跃会话 id：由列表推导（后端保证 active 唯一且置顶），切换/新建后随 refreshSessions 更新
-  const activeId = useMemo(() => sessions.find((s) => s.status === 'active')?.id ?? '', [sessions]);
-
-  // 拉取会话历史列表（挂载 + 新建/切换/删除/重命名后刷新）
-  const refreshSessions = useCallback(async () => {
-    try {
-      setSessions(await listSessions(channelName));
-    } catch (e) {
-      console.error('list_sessions 失败:', e);
-    } finally {
-      setSessionsLoading(false);
-    }
-  }, [channelName]);
+  // useMemo 固化桶引用：同一次挂载内 getSnapshot 与 subscribe 必须来自同一个 store 对象，
+  // 否则会出现「读的是新桶、订阅的是旧桶」→ 永不重渲染。
+  const store = useMemo(() => chatStore.getChatStore(channelName), [channelName]);
+  const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
 
   useEffect(() => {
-    refreshSessions();
-  }, [refreshSessions]);
+    chatStore.ensureInit(store); // 一次性：历史只拉一次，否则每次回页都会冲掉正在累积的流式内容
+    void chatStore.refreshSessions(store); // 每次挂载都刷：列表/用量是「轻」状态，不覆盖 messages
+    void chatStore.refreshUsage(store);
+  }, [store]);
 
-  // 拉取当前会话上下文用量（挂载 + 每轮对话落库后刷新）
-  const refreshUsage = useCallback(async () => {
-    try {
-      setContextUsage(await getContextUsage(channelName));
-    } catch (e) {
-      console.error('get_context_usage 失败:', e);
-    }
-  }, [channelName]);
-
-  // 挂载时加载当前会话历史：未压缩消息（底部）+ 最新压缩块（顶部），按「旧→新」拼接。
-  // 修复空会话 bug：压缩后 messages 被清空，历史全在 raw 块，需额外读最新块。
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const s = await getCurrentSession(channelName);
-        if (cancelled) return;
-        const base = mapHistoryMessages(s.messages, 'cur'); // 未压缩的最新消息（底部）
-        if (s.compress_round > 0) {
-          const hist = await loadSessionHistory(s.id, null); // 最新压缩块
-          if (cancelled) return;
-          setEarliestChunk(hist.chunk);
-          setHasEarlier(hist.has_earlier);
-          // 时间线（旧→新）：[块 N 消息] + [current 未压缩消息]
-          setMessages([
-            ...mapHistoryMessages(hist.messages, String(hist.chunk ?? 'cur')),
-            ...base,
-          ]);
-        } else {
-          setEarliestChunk(null);
-          setHasEarlier(false);
-          setMessages(base);
-        }
-      } catch (e) {
-        console.error('get_current_session 失败:', e);
-      } finally {
-        if (!cancelled) setInitialLoading(false);
-      }
-    })();
-    refreshUsage();
-    return () => {
-      cancelled = true;
-    };
-  }, [channelName, refreshUsage]);
-
-  // 新会话：归档当前 + 新建 + 清空前端列表
-  // 点击后先置 resetting 并乐观清空（立即反馈，避免等后端导致的静止），后端收尾后复位
-  const newSession = useCallback(async () => {
-    if (isBusy || resetting || switching) return;
-    setResetting(true);
-    setMessages([]);
-    setEarliestChunk(null);
-    setHasEarlier(false);
-    try {
-      await createSession(channelName);
-      await refreshSessions();
-      refreshUsage();
-    } catch (e) {
-      console.error('new_session 失败:', e);
-    } finally {
-      setResetting(false);
-    }
-  }, [channelName, isBusy, resetting, switching, refreshSessions, refreshUsage]);
-
-  // 切换会话：归档当前（后端处理），将目标历史会话设为 active，读取其最新压缩块原始消息渲染
-  const switchSession = useCallback(
-    async (id: string) => {
-      if (isBusy || resetting || switching || !id || id === activeId) return;
-      setSwitching(true);
-      try {
-        await switchSessionApi(channelName, id);
-        const hist = await loadSessionHistory(id, null); // 目标会话最新块
-        setEarliestChunk(hist.chunk);
-        setHasEarlier(hist.has_earlier);
-        setMessages(mapHistoryMessages(hist.messages, String(hist.chunk ?? 'cur')));
-        await refreshSessions();
-        refreshUsage();
-      } catch (e) {
-        console.error('switch_session 失败:', e);
-      } finally {
-        setSwitching(false);
-      }
-    },
-    [channelName, isBusy, resetting, switching, activeId, refreshSessions, refreshUsage],
-  );
-
-  // 加载更早一块历史：以最早块号为 before_chunk 请求上一块，拼接到消息区头部
-  const loadEarlier = useCallback(async () => {
-    if (loadingEarlier || !hasEarlier || !activeId) return;
-    setLoadingEarlier(true);
-    try {
-      const hist = await loadSessionHistory(activeId, earliestChunk);
-      setEarliestChunk(hist.chunk);
-      setHasEarlier(hist.has_earlier);
-      if (hist.messages.length > 0) {
-        setMessages((prev) => [
-          ...mapHistoryMessages(hist.messages, String(hist.chunk ?? 'cur')),
-          ...prev,
-        ]);
-      }
-    } catch (e) {
-      console.error('load_session_history 失败:', e);
-    } finally {
-      setLoadingEarlier(false);
-    }
-  }, [loadingEarlier, hasEarlier, activeId, earliestChunk]);
-
-  // 删除归档会话：后端清目录 + 向量 chunk，随后刷新列表
-  const deleteSession = useCallback(
-    async (id: string) => {
-      try {
-        await deleteSessionApi(id);
-      } catch (e) {
-        console.error('delete_session 失败:', e);
-      } finally {
-        await refreshSessions();
-      }
-    },
-    [refreshSessions],
-  );
-
-  // 重命名会话标题（活跃或归档均可），随后刷新列表
-  const renameSession = useCallback(
-    async (id: string, title: string) => {
-      const trimmed = title.trim();
-      if (!trimmed) return;
-      try {
-        await renameSessionApi(channelName, id, trimmed);
-      } catch (e) {
-        console.error('rename_session 失败:', e);
-      } finally {
-        await refreshSessions();
-      }
-    },
-    [channelName, refreshSessions],
-  );
-
-  // 停止当前流式生成：置位后端取消标志，chat 提前收尾返回部分结果
-  const stop = useCallback(() => {
-    stopChat(channelName);
-  }, [channelName]);
-
-  // 主动压缩当前会话上下文：调后端压缩，成功后刷新用量（进度圈归零/下降）。
-  // 错误向上抛给调用方（ChatInput 确认框的 handleCompress 兜底 console.error）
-  const compressNow = useCallback(async () => {
-    if (isBusy || compressing || resetting || switching) return;
-    setCompressing(true);
-    try {
-      await compressSession(channelName);
-    } finally {
-      setCompressing(false);
-      refreshUsage();
-    }
-  }, [isBusy, compressing, resetting, switching, channelName, refreshUsage]);
-
-  // 发送一条消息：推 user + 空 assistant，跑 chat，逐事件组装
-  const send = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed || isBusy || compressing || resetting || switching) return;
-
-      const userMsg: ChatMessage = {
-        id: nextId(),
-        role: 'user',
-        content: trimmed,
-        status: 'done',
-      };
-      const assistantId = nextId();
-
-      setMessages((prev) => [...prev, userMsg, newAssistant(assistantId)]);
-      setIsBusy(true);
-
-      try {
-        await chat(trimmed, channelName, (ev) => {
-          setMessages((prev) => applyEvent(prev, ev, nextId));
-        });
-      } catch (error) {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId && m.role === 'assistant'
-              ? { ...m, status: 'error', error: String(error) }
-              : m,
-          ),
-        );
-      } finally {
-        setIsBusy(false);
-        refreshUsage();
-      }
-    },
-    [isBusy, compressing, resetting, switching, channelName, nextId, refreshUsage],
-  );
-
+  // 动作必须用 useCallback 固定引用：MessageList 的滚轮 effect 依赖 onLoadEarlier，
+  // 内联箭头会让它每次父组件重渲染都重绑监听，甚至丢掉手势中的滚轮事件。
   return {
-    messages,
-    isBusy,
-    compressing,
-    send,
-    newSession,
-    stop,
-    compressNow,
-    contextUsage,
-    loading: initialLoading || resetting || switching,
-    resetting,
-    switching,
-    sessions,
-    sessionsLoading,
-    activeId,
-    switchSession,
-    deleteSession,
-    renameSession,
-    earliestChunk,
-    hasEarlier,
-    loadingEarlier,
-    loadEarlier,
+    messages: s.messages,
+    isBusy: s.isBusy,
+    compressing: s.compressing,
+    contextUsage: s.contextUsage,
+    loading: s.initialLoading || s.resetting || s.switching,
+    resetting: s.resetting,
+    switching: s.switching,
+    sessions: s.sessions,
+    sessionsLoading: s.sessionsLoading,
+    activeId: s.activeId,
+    earliestChunk: s.earliestChunk,
+    hasEarlier: s.hasEarlier,
+    loadingEarlier: s.loadingEarlier,
+    send: useCallback((text: string) => chatStore.send(store, text), [store]),
+    newSession: useCallback(() => chatStore.newSession(store), [store]),
+    stop: useCallback(() => chatStore.stop(store), [store]),
+    compressNow: useCallback(() => chatStore.compressNow(store), [store]),
+    switchSession: useCallback((id: string) => chatStore.switchSession(store, id), [store]),
+    deleteSession: useCallback((id: string) => chatStore.deleteSession(store, id), [store]),
+    renameSession: useCallback(
+      (id: string, title: string) => chatStore.renameSession(store, id, title),
+      [store],
+    ),
+    loadEarlier: useCallback(() => chatStore.loadEarlier(store), [store]),
   };
 }

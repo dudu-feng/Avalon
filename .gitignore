@@ -60,3 +60,6 @@ Avalon-config.toml
 .env
 .env.*
 !.env.example
+
+# 毕业设计
+毕业设计/
