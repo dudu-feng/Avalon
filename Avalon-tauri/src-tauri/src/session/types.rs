@@ -6,6 +6,7 @@
 #![allow(dead_code)] // session 模块供未来 engine/tool 引用，当前无调用方，接入后移除
 
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
 
 use crate::llm::{TokenUsage, ToolCall};
 
@@ -180,6 +181,76 @@ pub enum Message {
     },
 }
 
+impl Message {
+    /// 模型可见投影：会话文件保留完整元数据，拼进 system prompt 前只留模型需要的字段。
+    ///
+    /// 附件只保留 `path` / `original_name` / `observation` / `ocr_text` / `labels`；
+    /// `mime`、`size`、`sha256`、尺寸、观察来源等只供前端渲染或追溯，见 doc 8.3.1。
+    /// 投影是副本，不修改落盘消息。
+    pub fn for_prompt(&self) -> Message {
+        match self {
+            Message::User { time, content, meta } => Message::User {
+                time: time.clone(),
+                content: content.clone(),
+                meta: meta.as_ref().and_then(project_user_meta),
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// 是否携带图片观察文本。观察来自视觉模型，属于不可信数据；
+    /// system prompt 据此决定是否注入图片安全规则（纯文本轮次也要防历史注入）。
+    pub fn has_image_observation(&self) -> bool {
+        let Message::User { meta: Some(meta), .. } = self else {
+            return false;
+        };
+        meta.get("attachments")
+            .and_then(Value::as_array)
+            .is_some_and(|list| {
+                list.iter().any(|a| {
+                    a.get("observation")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.trim().is_empty())
+                })
+            })
+    }
+}
+
+/// 用户消息投影：保留渠道来源字段，只裁剪 attachments
+fn project_user_meta(meta: &Value) -> Option<Value> {
+    let obj = meta.as_object()?;
+    let mut out = Map::new();
+    for (key, value) in obj {
+        if key != "attachments" {
+            out.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some(list) = obj.get("attachments").and_then(Value::as_array) {
+        let attachments: Vec<Value> = list.iter().filter_map(project_attachment).collect();
+        if !attachments.is_empty() {
+            out.insert("attachments".to_string(), Value::Array(attachments));
+        }
+    }
+    (!out.is_empty()).then(|| Value::Object(out))
+}
+
+/// 单个附件投影：白名单字段，缺失/null 一律省略
+fn project_attachment(value: &Value) -> Option<Value> {
+    let obj = value.as_object()?;
+    let mut out = Map::new();
+    for key in ["path", "original_name", "observation", "ocr_text"] {
+        if let Some(v) = obj.get(key).filter(|v| !v.is_null()) {
+            out.insert(key.to_string(), v.clone());
+        }
+    }
+    if let Some(labels) = obj.get("labels").and_then(Value::as_array) {
+        if !labels.is_empty() {
+            out.insert("labels".to_string(), Value::Array(labels.clone()));
+        }
+    }
+    (!out.is_empty()).then(|| Value::Object(out))
+}
+
 /// 当前会话上下文用量（get_context_usage 命令返回）
 #[derive(Debug, Clone, Serialize)]
 pub struct ContextUsage {
@@ -200,6 +271,8 @@ pub struct SessionContext {
     pub compressed: Vec<CompressedChunk>,
     /// 当前未压缩消息
     pub messages: Vec<Message>,
+    /// 会话里是否存在图片观察文本（引擎据此注入不可信数据规则）
+    pub has_image_observations: bool,
     /// 裁剪掉的旧块数（超限时存在）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub older_chunks_omitted: Option<usize>,

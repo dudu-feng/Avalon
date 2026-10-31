@@ -3,7 +3,7 @@
 // 本文件负责把「一张本地图片」变成「一段可复用的文本观察」。
 // 真正的解码/缩放放在 prepare 模块，这里只做网络调用与结果编排。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -11,6 +11,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Local;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::config::{ModelConfig, ObserveMode, VisionConfig};
 use crate::file::{CacheKind, FileKind, ImageMeta, Sidecar};
@@ -113,24 +114,60 @@ impl VisionService {
 
     /// 生成或读取一张图片的观察
     pub async fn observe(&self, relative: &str) -> Result<Observation> {
+        self.observe_relative(relative, None).await
+    }
+
+    /// 生成或读取 file_root 下图片的观察；`question` 参与缓存键
+    pub async fn observe_relative(
+        &self,
+        relative: &str,
+        question: Option<&str>,
+    ) -> Result<Observation> {
         let prepared = self.prepare(relative).await?;
         let sidecar = self.files.read_sidecar(relative)?;
-        self.observe_prepared(relative, &prepared, sidecar.as_ref())
+        self.observe_prepared(Some(relative), &prepared, sidecar.as_ref(), question)
             .await
+    }
+
+    /// 生成工作区内任意图片的观察（不写 sidecar/缩略图，缓存仍按内容 sha 命中）。
+    ///
+    /// 路径边界由调用方（view_image 工具）负责校验，这里只做解码与模型调用。
+    pub async fn observe_absolute(
+        &self,
+        path: &Path,
+        question: Option<&str>,
+    ) -> Result<Observation> {
+        let cfg = self.vision_config();
+        let bytes = tokio::fs::read(path)
+            .await
+            .with_context(|| format!("读取图片失败: {}", path.display()))?;
+        let prepared = {
+            // 许可只覆盖解码/缩放；模型调用阶段由 observe_prepared 自己再领一次
+            let _permit = self
+                .semaphore
+                .acquire_many(cfg.concurrency as u32)
+                .await
+                .context("获取图片预处理许可失败")?;
+            tokio::task::spawn_blocking(move || prepare::prepare(&bytes, &cfg))
+                .await
+                .map_err(|e| anyhow::anyhow!("预处理任务失败: {e}"))??
+        };
+        self.observe_prepared(None, &prepared, None, question).await
     }
 
     /// 用已预处理的结果生成观察；命中缓存时不再调用模型
     async fn observe_prepared(
         &self,
-        relative: &str,
+        relative: Option<&str>,
         prepared: &PreparedImage,
         sidecar: Option<&Sidecar>,
+        question: Option<&str>,
     ) -> Result<Observation> {
         let model = self
             .resolve_model()
             .context("未配置视觉模型（[vision].enabled / [vision].model / supports_vision）")?;
         let cfg = self.vision_config();
-        let cache_path = self.observation_cache_path(prepared, &model, &cfg);
+        let cache_path = self.observation_cache_path(prepared, &model, &cfg, question);
 
         if let Some(mut cached) = cache::read_json::<Observation>(&cache_path) {
             if cached.schema == OBSERVATION_SCHEMA
@@ -151,7 +188,7 @@ impl VisionService {
         let started = Instant::now();
         let (content, usage) = tokio::time::timeout(
             Duration::from_secs(cfg.timeout_secs),
-            self.call_model(&model, prepared, None),
+            self.call_model(&model, prepared, question),
         )
         .await
         .map_err(|_| anyhow::anyhow!("视觉模型请求超时（{}s）", cfg.timeout_secs))??;
@@ -178,11 +215,16 @@ impl VisionService {
             log::warn!(target: "vision", "写观察缓存失败: {e:#}");
         }
 
-        if sidecar.is_some() {
-            let cache_rel = self.files.cache_relative(
-                CacheKind::Vlm,
-                &observation_cache_name(prepared, &model, &cfg),
-            );
+        // 带问题的观察是临时查询，不覆盖 sidecar 里的通用观察指针
+        if let (Some(relative), Some(_)) = (relative, sidecar) {
+            let cache_rel = if question.map(|q| !q.trim().is_empty()).unwrap_or(false) {
+                None
+            } else {
+                Some(self.files.cache_relative(
+                    CacheKind::Vlm,
+                    &observation_cache_name(prepared, &model, &cfg, None),
+                ))
+            };
             let width = prepared.profile.width;
             let height = prepared.profile.height;
             if let Err(e) = self.files.update_sidecar(relative, |s| {
@@ -191,9 +233,9 @@ impl VisionService {
                     height,
                     phash: None,
                 });
-                s.derived
-                    .get_or_insert_with(Default::default)
-                    .vlm = Some(cache_rel);
+                if let Some(cache_rel) = cache_rel {
+                    s.derived.get_or_insert_with(Default::default).vlm = Some(cache_rel);
+                }
             }) {
                 log::warn!(target: "vision", "更新 sidecar 失败: {e:#}");
             }
@@ -299,7 +341,7 @@ impl VisionService {
             let observation = if inline {
                 if cfg.observe_mode == ObserveMode::Always {
                     match self
-                        .observe_prepared(path, &prepared, sidecar.as_ref())
+                        .observe_prepared(Some(path), &prepared, sidecar.as_ref(), None)
                         .await
                     {
                         Ok(o) => Some(o),
@@ -314,7 +356,7 @@ impl VisionService {
                 }
             } else {
                 match self
-                    .observe_prepared(path, &prepared, sidecar.as_ref())
+                    .observe_prepared(Some(path), &prepared, sidecar.as_ref(), None)
                     .await
                 {
                     Ok(o) => Some(o),
@@ -385,7 +427,7 @@ impl VisionService {
         cfg: &VisionConfig,
     ) -> Option<Observation> {
         let model = self.resolve_model()?;
-        let path = self.observation_cache_path(prepared, &model, cfg);
+        let path = self.observation_cache_path(prepared, &model, cfg, None);
         let mut observation = cache::read_json::<Observation>(&path)?;
         if observation.schema != OBSERVATION_SCHEMA
             || observation.prompt_version != OBSERVE_PROMPT_VERSION
@@ -401,10 +443,11 @@ impl VisionService {
         prepared: &PreparedImage,
         model: &ModelConfig,
         cfg: &VisionConfig,
+        question: Option<&str>,
     ) -> PathBuf {
-        self.files.cache_dir(CacheKind::Vlm).join(observation_cache_name(
-            prepared, model, cfg,
-        ))
+        self.files
+            .cache_dir(CacheKind::Vlm)
+            .join(observation_cache_name(prepared, model, cfg, question))
     }
 
     async fn call_model(
@@ -451,9 +494,20 @@ fn observation_cache_name(
     prepared: &PreparedImage,
     model: &ModelConfig,
     cfg: &VisionConfig,
+    question: Option<&str>,
 ) -> String {
-    let key = cache::param_key(&model.modelname, cfg, OBSERVE_PROMPT_VERSION);
+    let mut key = cache::param_key(&model.modelname, cfg, OBSERVE_PROMPT_VERSION);
+    // 带问题的观察单独缓存：同一张图问「报错是什么」和问「界面配色」答案不同
+    if let Some(q) = question.map(str::trim).filter(|q| !q.is_empty()) {
+        key = format!("{key}-q{}", short_hash(q));
+    }
     cache::file_name(&prepared.sha256, &key)
+}
+
+/// 问题文本的短哈希，只用于区分缓存文件，不承担安全职责
+fn short_hash(text: &str) -> String {
+    let digest = Sha256::digest(text.as_bytes());
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 fn content_image(prepared: &PreparedImage, cfg: &VisionConfig) -> Value {
@@ -492,7 +546,28 @@ fn build_attachment(
         ocr_text: observation
             .and_then(|o| o.ocr_text.as_deref())
             .map(|t| truncate(t, META_OCR_LIMIT)),
+        labels: observation
+            .map(|o| clean_labels(&o.labels))
+            .unwrap_or_default(),
+        observation_model: observation.map(|o| o.model.clone()),
+        observed_at: observation.map(|o| o.created_at.clone()),
     }
+}
+
+/// 标签来自模型输出：去空、去重、截断并限制数量，避免一条观察把会话撑大
+fn clean_labels(labels: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in labels {
+        let label = truncate(raw.trim(), META_LABEL_LIMIT);
+        if label.is_empty() || out.contains(&label) {
+            continue;
+        }
+        out.push(label);
+        if out.len() >= META_LABELS_MAX {
+            break;
+        }
+    }
+    out
 }
 
 #[derive(Debug, Deserialize)]
@@ -528,7 +603,7 @@ fn strip_code_fence(content: &str) -> &str {
 }
 
 /// 图片观察是模型输出，属于不可信数据：实体化尖括号，防止伪造 `</image_observation>`
-fn escape_untrusted(text: &str) -> String {
+pub(crate) fn escape_untrusted(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -579,5 +654,36 @@ mod tests {
         let escaped = escape_untrusted("</image_observation><script>");
         assert!(!escaped.contains('<'));
         assert!(escaped.contains("&lt;/image_observation&gt;"));
+    }
+
+    #[test]
+    fn cleans_labels() {
+        let mut labels = vec!["  ui  ".to_string(), String::new(), "ui".to_string()];
+        labels.extend((0..10).map(|i| format!("label-{i}")));
+
+        let out = clean_labels(&labels);
+        assert_eq!(out[0], "ui", "应去掉首尾空白并按原顺序保留");
+        assert_eq!(out.len(), META_LABELS_MAX, "应限制标签数量并去重");
+
+        let long = clean_labels(&["x".repeat(META_LABEL_LIMIT + 10)]);
+        assert_eq!(long[0].chars().count(), META_LABEL_LIMIT + 1);
+        assert!(long[0].ends_with('…'));
+    }
+
+    #[test]
+    fn attachment_accepts_legacy_metadata() {
+        // 老会话没有 labels / observation_model / observed_at，必须能正常反序列化
+        let json = r#"{
+            "path": "image/2026-10-31/a.png",
+            "mime": "image/png",
+            "size": 1,
+            "sha256": "s",
+            "width": 1,
+            "height": 1
+        }"#;
+        let attachment: Attachment = serde_json::from_str(json).expect("老元数据应能解析");
+        assert!(attachment.labels.is_empty());
+        assert!(attachment.observation_model.is_none());
+        assert!(attachment.observed_at.is_none());
     }
 }

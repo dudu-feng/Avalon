@@ -22,6 +22,8 @@ use super::reaction::{ReactionGate, ReactionTracker};
 use super::stream;
 use crate::config::{ConfigStore, FeishuConfig, FeishuSessionMode};
 use crate::engine::{Engine, EngineEvent, UserInput};
+use crate::file::{FileSource, SaveRequest};
+use crate::vision::ChatAttachment;
 
 /// 已处理 event_id 的保留时长
 const DEDUP_TTL: Duration = Duration::from_secs(600);
@@ -85,6 +87,8 @@ struct IncomingMessage {
     message_type: String,
     /// 已剥离 @ 占位符的正文
     text: String,
+    /// 图片消息的资源 key（message_type == "image" 时存在）
+    image_key: Option<String>,
     mentioned_bot: bool,
 }
 
@@ -132,13 +136,14 @@ impl IncomingMessage {
     /// 尚未落盘，system prompt 里没有它，所以要在正文前临时挂一行。
     /// 不含 message_id —— 表情回应、消息引用这类工具应由代码从当前消息注入 id，
     /// 让模型转抄 32 位哈希既费 token 又容易出错。
-    fn source_hint(&self) -> String {
+    /// 指定正文的来源提示。图片消息正文为空时，调用方会换成「发来一张图片」
+    fn source_hint_with(&self, text: &str) -> String {
         let scene = if self.is_group() {
             "飞书群聊"
         } else {
             "飞书私聊"
         };
-        format!("[{scene} | {}]\n{}", self.sender_open_id, self.text)
+        format!("[{scene} | {}]\n{}", self.sender_open_id, text)
     }
 }
 
@@ -278,14 +283,19 @@ impl MessageHandler {
             return Ok(());
         }
 
-        if msg.message_type != "text" {
-            self.api
-                .send_text(&msg.chat_id, "目前只能处理文本消息哦。")
-                .await?;
-            return Ok(());
+        match msg.message_type.as_str() {
+            "text" => {}
+            // 图片资源在准入之后才下载：没资格的人不该触发网络请求
+            "image" if msg.image_key.is_some() => {}
+            _ => {
+                self.api
+                    .send_text(&msg.chat_id, "目前只能处理文本和图片消息哦。")
+                    .await?;
+                return Ok(());
+            }
         }
 
-        if msg.text.trim().is_empty() {
+        if msg.text.trim().is_empty() && msg.image_key.is_none() {
             return Ok(());
         }
 
@@ -349,6 +359,21 @@ impl MessageHandler {
         result
     }
 
+    /// 下载飞书图片并落进 FileStore，返回 `file_root` 相对路径。
+    /// 后续观察/压缩/会话快照都复用桌面端同一条视觉链路
+    async fn save_image(&self, msg: &IncomingMessage, image_key: &str) -> Result<String> {
+        let bytes = self.api.download_image(&msg.message_id, image_key).await?;
+        let stored = self.engine.file_store().save_image(SaveRequest {
+            bytes: &bytes,
+            original_name: "",
+            declared_mime: None,
+            source: FileSource::Feishu,
+            session_id: None,
+            message_id: Some(&msg.message_id),
+        })?;
+        Ok(stored.path)
+    }
+
     /// 跑一次 ReAct 并把输出推给飞书
     async fn drive(&self, msg: &IncomingMessage, channel: &str) -> Result<()> {
         // 幂等：已有 active 会话就复用，没有才新建
@@ -356,13 +381,32 @@ impl MessageHandler {
 
         let cancel: Arc<AtomicBool> = self.engine.begin_chat(channel);
 
+        // 图片消息没有文字：给模型和会话补一句占位，否则历史里只剩一个附件
+        let mut history_text = if msg.text.trim().is_empty() {
+            "发来一张图片".to_string()
+        } else {
+            msg.text.clone()
+        };
+        let mut attachments = Vec::new();
+        if let Some(image_key) = &msg.image_key {
+            match self.save_image(msg, image_key).await {
+                Ok(path) => attachments.push(ChatAttachment { path }),
+                Err(e) => {
+                    // 下载/落盘失败不丢整条消息：把原因写进正文，用户知道发生了什么
+                    let note = format!("[图片下载失败：{e:#}]");
+                    history_text.push_str("\n\n");
+                    history_text.push_str(&note);
+                }
+            }
+        }
+
         // 来源提示只喂给模型，落盘存原文 —— 否则 open_id 会在正文和 meta 里各存一份
-        let hinted = msg.source_hint();
+        let hinted = msg.source_hint_with(&history_text);
         let input = UserInput {
             for_model: &hinted,
-            for_history: &msg.text,
+            for_history: &history_text,
             meta: Some(msg.meta()),
-            attachments: Vec::new(),
+            attachments,
         };
 
         // on_event 是同步闭包，里面不能 await，所以所有推送都挪到 pump 任务里
@@ -457,6 +501,15 @@ impl MessageHandler {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        let image_key = if message_type == "image" {
+            content
+                .get("image_key")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        };
 
         // mentions[].key 形如 @_user_1，是正文里的占位符，要按 key 精确剔除
         let mut mentioned_bot = false;
@@ -484,6 +537,7 @@ impl MessageHandler {
             sender_open_id,
             message_type,
             text: text.trim().to_string(),
+            image_key,
             mentioned_bot,
         })
     }

@@ -138,7 +138,9 @@ pub fn run() {
         .with_feishu(feishu_handle.clone())
         .with_soul(soul_registry.clone())
         .with_skill(skill_registry.clone())
-        .with_prompt(prompt_asm.clone());
+        .with_prompt(prompt_asm.clone())
+        // view_image 是否暴露由 [vision].enabled 实时决定，支持设置页热开关
+        .with_vision(vision_service.clone());
     // 搜索工具按配置开关注入：不注入就等于对模型完全隐藏，
     // 比注入之后再在调用时拒绝要干净 —— 模型不会反复尝试一个用不了的工具
     if cfg.search.enabled {

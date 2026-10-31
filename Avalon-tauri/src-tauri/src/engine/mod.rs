@@ -95,6 +95,11 @@ impl Engine {
         }
     }
 
+    /// 文件存储句柄。渠道层下载图片后需要落盘，复用视觉服务持有的同一个 FileStore
+    pub(crate) fn file_store(&self) -> &crate::file::FileStore {
+        self.vision.file_store()
+    }
+
     /// 跑一次完整 ReAct 循环：输入用户消息，经事件回调推送中间态，结束返回。
     /// init/save（会话生命周期节点）由调用方触发，update/compress 在循环内自动完成（决策 D3）。
     pub async fn run(

@@ -127,6 +127,82 @@ impl FeishuApi {
         self.send_message(target, "interactive", &content).await
     }
 
+    /// 下载消息里的图片资源。
+    ///
+    /// 这个端点成功时返回二进制，失败时返回 JSON —— 不能复用 request_raw
+    /// 的「解析 JSON 再查 code」路径。按 Content-Type 分流，并保留 token 失效重试。
+    pub async fn download_image(&self, message_id: &str, file_key: &str) -> Result<Vec<u8>> {
+        /// 单张图片下载上限，防止异常资源把内存吃满
+        const MAX_DOWNLOAD: u64 = 32 * 1024 * 1024;
+
+        let path =
+            format!("/open-apis/im/v1/messages/{message_id}/resources/{file_key}?type=image");
+        let url = format!("{}{}", self.base_url, path);
+        let mut last_err = String::new();
+
+        for attempt in 0..2 {
+            let token = self.token.get().await?;
+            let resp = self
+                .http
+                .get(&url)
+                .bearer_auth(&token)
+                .send()
+                .await
+                .with_context(|| format!("请求飞书图片失败: {path}"))?;
+
+            let status = resp.status();
+            let content_type = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+
+            // 成功响应是图片二进制；JSON 一律按错误体处理（HTTP 200 也可能是错误）
+            if status.is_success() && !content_type.contains("application/json") {
+                if let Some(len) = resp.content_length() {
+                    if len > MAX_DOWNLOAD {
+                        bail!(
+                            "飞书图片超过上限 {} MB",
+                            MAX_DOWNLOAD / 1024 / 1024
+                        );
+                    }
+                }
+                let bytes = resp
+                    .bytes()
+                    .await
+                    .with_context(|| format!("读取飞书图片响应失败: {path}"))?;
+                if bytes.is_empty() {
+                    bail!("飞书返回空图片: {path}");
+                }
+                if bytes.len() as u64 > MAX_DOWNLOAD {
+                    bail!(
+                        "飞书图片超过上限 {} MB",
+                        MAX_DOWNLOAD / 1024 / 1024
+                    );
+                }
+                return Ok(bytes.to_vec());
+            }
+
+            let text = resp.text().await.unwrap_or_default();
+            let parsed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+            let code = parsed.get("code").and_then(Value::as_i64).unwrap_or(-1);
+            let msg = parsed
+                .get("msg")
+                .and_then(Value::as_str)
+                .unwrap_or("非 JSON 错误响应");
+            last_err = format!("code={code} msg={msg} (HTTP {status})");
+
+            if is_token_error(code) && attempt == 0 {
+                self.token.invalidate();
+                continue;
+            }
+            break;
+        }
+
+        bail!("飞书图片下载失败：{last_err}")
+    }
+
     /// 给消息加一个表情回应，返回 reaction_id（取消时要用）
     pub async fn add_reaction(&self, message_id: &str, emoji_type: &str) -> Result<String> {
         let data = self

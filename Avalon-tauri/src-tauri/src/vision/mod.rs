@@ -17,6 +17,7 @@ pub use types::{
     Attachment, ChatAttachment, ImageProfile, Observation, PreparedImage, Thumbnail,
     VisionCapability, MAX_ATTACHMENTS_PER_MESSAGE, OBSERVATION_SCHEMA, OBSERVE_PROMPT_VERSION,
 };
+pub(crate) use understand::escape_untrusted;
 
 use std::sync::Arc;
 
@@ -51,6 +52,11 @@ impl VisionService {
             usage,
             semaphore: Arc::new(Semaphore::new(8)),
         }
+    }
+
+    /// 文件存储句柄（view_image 在 file_root 内解析相对路径）
+    pub(crate) fn file_store(&self) -> &FileStore {
+        &self.files
     }
 
     /// 当前生效的视觉配置（已归一化到安全范围）

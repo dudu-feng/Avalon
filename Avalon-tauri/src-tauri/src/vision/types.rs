@@ -29,6 +29,15 @@ pub struct Attachment {
     pub observation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ocr_text: Option<String>,
+    /// VLM 给出的短标签；限制数量与长度，避免会话元数据膨胀
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    /// 生成这条观察的模型（modelname），用于追溯观察来源
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation_model: Option<String>,
+    /// 观察生成时间（RFC3339）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<String>,
 }
 
 /// 原图的基础画像。字段只描述「是什么」，不做语义判断
@@ -114,3 +123,9 @@ pub const META_OBSERVATION_LIMIT: usize = 1000;
 
 /// OCR 文本写入会话时的截断长度
 pub const META_OCR_LIMIT: usize = 4000;
+
+/// 标签写入会话时的最大数量
+pub const META_LABELS_MAX: usize = 8;
+
+/// 单个标签写入会话时的截断长度
+pub const META_LABEL_LIMIT: usize = 32;

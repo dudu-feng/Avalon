@@ -501,12 +501,16 @@ impl SessionStore for FileSessionStore {
         let max = self.config.get().session_memory.context_chunks;
         let omitted = data.compressed.len().saturating_sub(max);
         let start = data.compressed.len() - max.min(data.compressed.len());
+        // 投影：附件只留模型需要的字段，落盘会话本身不动
+        let messages: Vec<Message> = data.messages.iter().map(Message::for_prompt).collect();
+        let has_image_observations = messages.iter().any(Message::has_image_observation);
         let ctx = SessionContext {
             id: data.id,
             status: data.status,
             super_compressed: data.super_compressed,
             compressed: data.compressed[start..].to_vec(),
-            messages: data.messages,
+            messages,
+            has_image_observations,
             older_chunks_omitted: (omitted > 0).then_some(omitted),
         };
         serde_json::to_string(&ctx).context("序列化会话上下文失败")

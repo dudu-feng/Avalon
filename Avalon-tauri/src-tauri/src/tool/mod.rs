@@ -15,6 +15,7 @@ pub mod sandbox;
 pub mod scheduler_tools;
 pub mod skill_tools;
 pub mod soul_tools;
+pub mod vision_tools;
 pub mod web_tools;
 
 use async_trait::async_trait;

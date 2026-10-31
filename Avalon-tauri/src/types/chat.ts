@@ -34,6 +34,12 @@ export interface MessageAttachment {
   /** 已生成的图像观察；后续轮次靠它回忆图片内容 */
   observation?: string;
   ocr_text?: string;
+  /** VLM 短标签；旧会话可能没有 */
+  labels?: string[];
+  /** 生成观察的模型名 */
+  observation_model?: string;
+  /** 观察生成时间（RFC3339） */
+  observed_at?: string;
 }
 
 /** 工具调用（对齐后端 ToolCall） */
