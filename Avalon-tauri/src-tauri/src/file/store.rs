@@ -204,6 +204,31 @@ impl FileStore {
         Ok(report)
     }
 
+    /// 清理可重建的视觉缓存（缩略图 / OCR / VLM）。
+    ///
+    /// `ttl_days = 0` 表示不自动清理；负数视为配置错误。缓存文件按 mtime 判断，
+    /// sidecar 里的 `derived` 指针允许残留 —— 读取方发现文件不存在会自动重建。
+    pub fn cleanup_cache(
+        &self,
+        now: DateTime<Local>,
+        ttl_days: i64,
+    ) -> Result<CleanupReport> {
+        if ttl_days < 0 {
+            bail!("缓存 TTL 不能为负数");
+        }
+
+        let mut report = CleanupReport::default();
+        if ttl_days == 0 {
+            return Ok(report);
+        }
+
+        let cutoff = now - Duration::days(ttl_days);
+        for kind in [CacheKind::Thumb, CacheKind::Ocr, CacheKind::Vlm] {
+            self.cleanup_dir(&self.cache_dir(kind), cutoff, &mut report)?;
+        }
+        Ok(report)
+    }
+
     fn save_inner(
         &self,
         req: SaveRequest<'_>,

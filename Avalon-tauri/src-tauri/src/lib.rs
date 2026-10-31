@@ -119,12 +119,15 @@ pub fn run() {
         prompt::PromptAssembler::new(soul_registry.clone()).with_skills(skill_registry.clone()),
     );
     let usage_store: Arc<usage::UsageStore> = Arc::new(usage::UsageStore::new(cfg.usage_path()));
+    // OCR 引擎只构造句柄，模型在首次 ocr_image 调用时才加载（启动不占内存）
+    let ocr_engine = vision::build_engine(&cfg.vision.ocr, cfg.ocr_model_dir());
     // 视觉服务：预处理/观察/缓存都需要文件、模型与用量，放在 engine 之前组装
     let vision_service = Arc::new(vision::VisionService::new(
         store.clone(),
         llm.clone(),
         file_store.clone(),
         usage_store.clone(),
+        ocr_engine,
     ));
     let task_store: Arc<scheduler::TaskStore> =
         Arc::new(scheduler::TaskStore::new(cfg.scheduler_path()));

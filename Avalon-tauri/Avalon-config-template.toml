@@ -152,6 +152,7 @@ cache_ttl_days = 30                       # VLM/OCR 缓存保留天数，0 = 不
 confirm_before_send = true                # 首次向某个视觉模型发送图片前弹确认
 
 [vision.ocr]
-enabled = false                           # 本地 OCR 快路（P2）
-engine = "none"                           # none | onnx
-min_confidence = 0.75
+enabled = false                           # 本地 OCR 工具（P2）
+engine = "none"                           # none | onnx（tract 为后置备选，未实现）
+min_confidence = 0.75                     # 低于该值在工具输出里标注低置信度
+model_dir = ""                            # 模型目录；留空 = data_root/models/ocr

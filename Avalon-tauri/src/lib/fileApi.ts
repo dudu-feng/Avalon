@@ -75,12 +75,17 @@ export function getThumbnail(path: string): Promise<string> {
   return invoke<string>('get_thumbnail', { path });
 }
 
-/** 清理过期 temp / quarantine；不传 TTL 时后端用默认值 */
+/** 清理过期 temp / quarantine / 视觉缓存；不传 TTL 时后端用默认值或配置值 */
 export function cleanupFiles(
-  options: { tempTtlHours?: number; quarantineTtlDays?: number } = {},
+  options: {
+    tempTtlHours?: number;
+    quarantineTtlDays?: number;
+    cacheTtlDays?: number;
+  } = {},
 ): Promise<CleanupReport> {
   return invoke<CleanupReport>('cleanup_files', {
     tempTtlHours: options.tempTtlHours ?? null,
     quarantineTtlDays: options.quarantineTtlDays ?? null,
+    cacheTtlDays: options.cacheTtlDays ?? null,
   });
 }

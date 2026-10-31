@@ -346,15 +346,17 @@ pub enum ObserveMode {
     Lazy,
 }
 
-/// 本地 OCR 配置。P0 只保留开关，具体引擎在 P2 接入
+/// 本地 OCR 配置。引擎首次调用时才加载，启动不占内存
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OcrConfig {
     pub enabled: bool,
-    /// none | onnx
+    /// none | onnx（tract 为后置备选，当前未实现）
     pub engine: String,
-    /// 文本置信度达到该值才允许跳过 VLM
+    /// 低于该置信度时在工具输出里标注「低置信度」；不决定是否调用 VLM
     pub min_confidence: f32,
+    /// 模型目录；留空 = data_root/models/ocr（det.onnx / rec.onnx / ppocr_keys_v1.txt）
+    pub model_dir: String,
 }
 
 impl Default for OcrConfig {
@@ -363,6 +365,7 @@ impl Default for OcrConfig {
             enabled: false,
             engine: "none".to_string(),
             min_confidence: 0.75,
+            model_dir: String::new(),
         }
     }
 }

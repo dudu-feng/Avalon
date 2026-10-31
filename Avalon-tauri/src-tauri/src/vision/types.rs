@@ -69,6 +69,9 @@ pub struct PreparedImage {
     pub height: u32,
     /// 原图内容哈希，用于缓存键
     pub sha256: String,
+    /// 64 位感知哈希（dHash，16 位十六进制）。对缩放/重编码不敏感，
+    /// 用于近重复图片复用观察；纯色图会退化为全 0，不能参与去重判断
+    pub phash: String,
     pub profile: ImageProfile,
     pub thumbnail: Thumbnail,
 }

@@ -95,11 +95,12 @@ impl VisionService {
         if sidecar.is_some() {
             let width = prepared.profile.width;
             let height = prepared.profile.height;
+            let phash = prepared.phash.clone();
             if let Err(e) = files.update_sidecar(relative, |s| {
                 s.image = Some(ImageMeta {
                     width,
                     height,
-                    phash: None,
+                    phash: Some(phash),
                 });
                 s.derived
                     .get_or_insert_with(Default::default)
@@ -167,14 +168,31 @@ impl VisionService {
             .resolve_model()
             .context("未配置视觉模型（[vision].enabled / [vision].model / supports_vision）")?;
         let cfg = self.vision_config();
-        let cache_path = self.observation_cache_path(prepared, &model, &cfg, question);
+        let has_question = question.map(|q| !q.trim().is_empty()).unwrap_or(false);
+        let cache_name = observation_cache_name(prepared, &model, &cfg, question);
+        let cache_path = self.files.cache_dir(CacheKind::Vlm).join(&cache_name);
 
         if let Some(mut cached) = cache::read_json::<Observation>(&cache_path) {
             if cached.schema == OBSERVATION_SCHEMA
                 && cached.prompt_version == OBSERVE_PROMPT_VERSION
             {
                 cached.cached = true;
+                // 老版本写下的缓存没有索引条目，命中时顺带补登记
+                if !has_question {
+                    self.index_observation(prepared, &model, &cache_name);
+                }
                 return Ok(cached);
+            }
+        }
+
+        // 近重复复用：带问题的观察必须重新问模型，不能拿通用观察顶替
+        if !has_question {
+            if let Some((observation, cache_file)) = self.similar_observation(prepared, &model) {
+                if let (Some(relative), Some(_)) = (relative, sidecar) {
+                    let cache_rel = self.files.cache_relative(CacheKind::Vlm, &cache_file);
+                    self.update_image_sidecar(relative, prepared, Some(cache_rel));
+                }
+                return Ok(observation);
             }
         }
 
@@ -214,31 +232,19 @@ impl VisionService {
         if let Err(e) = cache::write_json(&cache_path, &observation) {
             log::warn!(target: "vision", "写观察缓存失败: {e:#}");
         }
+        // 通用观察才进 phash 索引；带问题的缓存不参与近重复复用
+        if !has_question {
+            self.index_observation(prepared, &model, &cache_name);
+        }
 
         // 带问题的观察是临时查询，不覆盖 sidecar 里的通用观察指针
         if let (Some(relative), Some(_)) = (relative, sidecar) {
-            let cache_rel = if question.map(|q| !q.trim().is_empty()).unwrap_or(false) {
+            let cache_rel = if has_question {
                 None
             } else {
-                Some(self.files.cache_relative(
-                    CacheKind::Vlm,
-                    &observation_cache_name(prepared, &model, &cfg, None),
-                ))
+                Some(self.files.cache_relative(CacheKind::Vlm, &cache_name))
             };
-            let width = prepared.profile.width;
-            let height = prepared.profile.height;
-            if let Err(e) = self.files.update_sidecar(relative, |s| {
-                s.image = Some(ImageMeta {
-                    width,
-                    height,
-                    phash: None,
-                });
-                if let Some(cache_rel) = cache_rel {
-                    s.derived.get_or_insert_with(Default::default).vlm = Some(cache_rel);
-                }
-            }) {
-                log::warn!(target: "vision", "更新 sidecar 失败: {e:#}");
-            }
+            self.update_image_sidecar(relative, prepared, cache_rel);
         }
 
         if let Err(e) = self.usage.record_usage(&model.modelname, &usage) {
@@ -246,6 +252,87 @@ impl VisionService {
         }
 
         Ok(observation)
+    }
+
+    /// 近重复观察：只信任同模型、同提示词版本、纹理足够、dHash 完全一致且宽高比相同的缓存
+    fn similar_observation(
+        &self,
+        prepared: &PreparedImage,
+        model: &ModelConfig,
+    ) -> Option<(Observation, String)> {
+        if !cache::is_textured(&prepared.phash) {
+            return None;
+        }
+
+        let dir = self.files.cache_dir(CacheKind::Vlm);
+        // 只在读索引时持锁；读缓存文件本身不需要
+        let entry = {
+            let _guard = self.index_lock.lock().ok()?;
+            let entries = cache::read_phash_index(&dir);
+            cache::find_similar(
+                &entries,
+                &prepared.phash,
+                &model.modelname,
+                OBSERVE_PROMPT_VERSION,
+                aspect_ratio(prepared),
+                cache::NEAR_DUPLICATE_MAX_DISTANCE,
+            )?
+            .clone()
+        };
+
+        let mut observation = cache::read_json::<Observation>(&dir.join(&entry.file))?;
+        if observation.schema != OBSERVATION_SCHEMA
+            || observation.prompt_version != OBSERVE_PROMPT_VERSION
+            || observation.model != model.modelname
+        {
+            return None;
+        }
+        // 复用的是另一份字节的观察：sha 要替换成当前图，避免下游误以为是同一文件
+        observation.sha256 = prepared.sha256.clone();
+        observation.cached = true;
+        Some((observation, entry.file))
+    }
+
+    /// 登记当前图到 phash 索引。失败只记日志，不影响观察结果
+    fn index_observation(&self, prepared: &PreparedImage, model: &ModelConfig, file: &str) {
+        let dir = self.files.cache_dir(CacheKind::Vlm);
+        let entry = cache::PhashEntry {
+            phash: prepared.phash.clone(),
+            aspect: aspect_ratio(prepared),
+            file: file.to_string(),
+            model: model.modelname.clone(),
+            prompt_version: OBSERVE_PROMPT_VERSION,
+            updated_at: Local::now().to_rfc3339(),
+        };
+
+        let Ok(_guard) = self.index_lock.lock() else {
+            log::warn!(target: "vision", "phash 索引锁已中毒，跳过登记");
+            return;
+        };
+        let mut entries = cache::read_phash_index(&dir);
+        cache::upsert_phash(&mut entries, entry);
+        if let Err(e) = cache::write_phash_index(&dir, &entries) {
+            log::warn!(target: "vision", "写 phash 索引失败: {e:#}");
+        }
+    }
+
+    /// sidecar 只更新图片元信息与 VLM 指针，不碰其他字段
+    fn update_image_sidecar(&self, relative: &str, prepared: &PreparedImage, vlm: Option<String>) {
+        let width = prepared.profile.width;
+        let height = prepared.profile.height;
+        let phash = prepared.phash.clone();
+        if let Err(e) = self.files.update_sidecar(relative, |s| {
+            s.image = Some(ImageMeta {
+                width,
+                height,
+                phash: Some(phash),
+            });
+            if let Some(vlm) = vlm {
+                s.derived.get_or_insert_with(Default::default).vlm = Some(vlm);
+            }
+        }) {
+            log::warn!(target: "vision", "更新 sidecar 失败: {e:#}");
+        }
     }
 
     /// 缩略图相对路径；没有现成的就生成一次
@@ -502,6 +589,11 @@ fn observation_cache_name(
         key = format!("{key}-q{}", short_hash(q));
     }
     cache::file_name(&prepared.sha256, &key)
+}
+
+/// 原图宽高比；prepare 已保证尺寸非 0，这里只做防御性兜底
+fn aspect_ratio(prepared: &PreparedImage) -> f64 {
+    prepared.profile.width as f64 / prepared.profile.height.max(1) as f64
 }
 
 /// 问题文本的短哈希，只用于区分缓存文件，不承担安全职责

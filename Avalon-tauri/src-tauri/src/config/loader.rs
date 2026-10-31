@@ -167,9 +167,10 @@ cache_ttl_days = 30                       # VLM/OCR 缓存保留天数，0 = 不
 confirm_before_send = true                # 首次向某个视觉模型发送图片前弹确认
 
 [vision.ocr]
-enabled = false                           # 本地 OCR 快路（P2）
-engine = "none"                           # none | onnx
-min_confidence = 0.75
+enabled = false                           # 本地 OCR 工具（P2）
+engine = "none"                           # none | onnx（tract 为后置备选，未实现）
+min_confidence = 0.75                     # 低于该值在工具输出里标注低置信度
+model_dir = ""                            # 模型目录；留空 = data_root/models/ocr
 "#;
 
 /// 加载配置：定位 → 不存在则生成默认模板 → 反序列化 → 回填 config_path → 环境变量覆盖
@@ -315,8 +316,25 @@ pub fn validate(config: &AppConfig) -> Vec<String> {
                 config.vision.model
             ));
         }
-        if config.vision.ocr.enabled && config.vision.ocr.engine == "none" {
-            warnings.push("视觉 OCR 已启用但 engine = none".to_string());
+        if config.vision.ocr.enabled {
+            match config.vision.ocr.engine.trim().to_ascii_lowercase().as_str() {
+                "none" | "" => warnings.push("视觉 OCR 已启用但 engine = none".to_string()),
+                "onnx" => {
+                    // 模型是外部资产，缺失时工具不会注册；启动时就提示，免得调用时才报错。
+                    // 字典不强制：RapidOCR 导出的 rec 模型自带字符表
+                    let dir = config.ocr_model_dir();
+                    for file in ["det.onnx", "rec.onnx"] {
+                        if !dir.join(file).is_file() {
+                            warnings.push(format!(
+                                "视觉 OCR 缺少模型文件: {}",
+                                dir.join(file).display()
+                            ));
+                        }
+                    }
+                }
+                "tract" => warnings.push("OCR engine=tract 尚未实现".to_string()),
+                other => warnings.push(format!("未知的 OCR 引擎: {other}")),
+            }
         }
     } else if let Some(m) = config.active_model_config() {
         // 模型能力（supports_vision）和视觉总开关（[vision].enabled）分处设置页两栏，

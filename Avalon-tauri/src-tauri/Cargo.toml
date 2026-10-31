@@ -68,6 +68,9 @@ image = { version = "0.25", default-features = false, features = [
     "tiff",
 ] }
 kamadak-exif = "0.6"
+# OCR：构建期下载 ONNX Runtime 并静态链接进应用，用户无需安装运行时。
+# copy-dylibs 只额外复制 DirectML.dll（未启用该执行提供者，运行时不加载）
+ort = "2.0.0-rc.15"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

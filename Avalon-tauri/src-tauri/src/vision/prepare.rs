@@ -80,9 +80,29 @@ pub fn prepare(bytes: &[u8], cfg: &VisionConfig) -> Result<PreparedImage> {
         width: out_w,
         height: out_h,
         sha256: sha256_hex(bytes),
+        phash: dhash(&oriented),
         profile,
         thumbnail,
     })
+}
+
+/// 64 位差值哈希：灰度 → 9×8 → 比较每行相邻像素。
+///
+/// 在方向校正后的原图上计算，因此 max_edge 改变不会影响哈希；JPEG 重编码
+/// 带来的像素抖动也很少改变比较结果，适合识别「同一张图另存/转发」。
+pub(crate) fn dhash(image: &DynamicImage) -> String {
+    let gray = image.to_luma8();
+    let small = image::imageops::resize(&gray, 9, 8, FilterType::Triangle);
+
+    let mut bits = 0u64;
+    for y in 0..8 {
+        for x in 0..8 {
+            let left = small.get_pixel(x, y)[0];
+            let right = small.get_pixel(x + 1, y)[0];
+            bits = (bits << 1) | u64::from(left > right);
+        }
+    }
+    format!("{bits:016x}")
 }
 
 fn check_dimensions(width: u32, height: u32) -> Result<()> {
@@ -273,5 +293,57 @@ mod tests {
         // 头部声明 20000x1：超过单边上限，应在解码前被拒绝
         let bytes = png(20_000, 1, false);
         assert!(prepare(&bytes, &cfg()).is_err());
+    }
+
+    /// 生成有明确横向梯度与棋盘纹理的图，避免纯色图 dHash 退化
+    fn pattern(invert: bool) -> DynamicImage {
+        let img = image::RgbImage::from_fn(128, 128, |x, y| {
+            let checker: u8 = if (x / 16 + y / 16) % 2 == 0 { 40 } else { 200 };
+            let gradient: u8 = (x * 120 / 127) as u8;
+            let base = if invert { 255 - checker } else { checker };
+            let v = base.saturating_add(gradient / 3);
+            image::Rgb([v, v / 2, 255 - v])
+        });
+        DynamicImage::ImageRgb8(img)
+    }
+
+    fn encode(image: &DynamicImage, format: ImageFormat) -> Vec<u8> {
+        let mut buf = Vec::new();
+        image
+            .write_to(&mut Cursor::new(&mut buf), format)
+            .unwrap();
+        buf
+    }
+
+    #[test]
+    fn dhash_is_stable_across_reencoding() {
+        let source = pattern(false);
+        let png = encode(&source, ImageFormat::Png);
+        let jpeg = encode(&source, ImageFormat::Jpeg);
+
+        let a = prepare(&png, &cfg()).unwrap();
+        let b = prepare(&jpeg, &cfg()).unwrap();
+        assert_eq!(a.phash, b.phash, "JPEG 重编码不应改变 dHash");
+        assert_eq!(a.phash.len(), 16);
+    }
+
+    #[test]
+    fn dhash_separates_different_images() {
+        let a = prepare(&encode(&pattern(false), ImageFormat::Png), &cfg()).unwrap();
+        let b = prepare(&encode(&pattern(true), ImageFormat::Png), &cfg()).unwrap();
+        let distance = crate::vision::cache::phash_distance(&a.phash, &b.phash).unwrap();
+        assert!(distance > 4, "不同图案的 Hamming 距离应明显大于去重阈值");
+    }
+
+    #[test]
+    fn dhash_of_solid_color_is_flat() {
+        let solid = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            64,
+            64,
+            image::Rgb([128, 128, 128]),
+        ));
+        let out = prepare(&encode(&solid, ImageFormat::Png), &cfg()).unwrap();
+        assert_eq!(out.phash, "0000000000000000");
+        assert!(!crate::vision::cache::is_textured(&out.phash));
     }
 }

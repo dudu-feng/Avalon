@@ -116,6 +116,17 @@ impl AppConfig {
         self.data_root().join("models/whisper")
     }
 
+    /// OCR 模型目录：配置留空时取 data_root/models/ocr。
+    /// 与 whisper 平级 —— 都是「按需加载的本地模型资产」，不参与缓存清理
+    pub fn ocr_model_dir(&self) -> PathBuf {
+        let dir = self.vision.ocr.model_dir.trim();
+        if dir.is_empty() {
+            self.data_root().join("models/ocr")
+        } else {
+            PathBuf::from(dir)
+        }
+    }
+
     /// Agent 工作区默认根目录：data_root/workspace。
     /// 文件工具的沙箱边界 —— 与 memory/session/logs 平级，
     /// 刻意不放进它们内部：模型在工作区里的读写不该碰到会话与日志数据

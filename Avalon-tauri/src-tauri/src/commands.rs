@@ -45,12 +45,23 @@ pub fn set_active_model(name: String, store: State<'_, ConfigStore>) -> Result<V
 pub fn save_config(
     mut new_config: AppConfig,
     store: State<'_, ConfigStore>,
+    vision: State<'_, Arc<VisionService>>,
 ) -> Result<Vec<String>, String> {
     // 前端不会传 config_path（serde(skip)），继承当前值
     let current = store.get();
     new_config.config_path = current.config_path;
 
-    store.save(new_config).map_err(|e| e.to_string())
+    // 关闭 OCR、换引擎或换模型目录后，旧会话不再复用；释放已加载的 ONNX 会话
+    let ocr_changed = current.vision.ocr.enabled != new_config.vision.ocr.enabled
+        || current.vision.ocr.engine != new_config.vision.ocr.engine
+        || current.vision.ocr.model_dir != new_config.vision.ocr.model_dir;
+
+    let warnings = store.save(new_config).map_err(|e| e.to_string())?;
+    if ocr_changed {
+        vision.unload_ocr();
+        log::info!(target: "vision", "OCR 配置已变更，已卸载已加载的引擎");
+    }
+    Ok(warnings)
 }
 
 /// 校验当前配置，返回警告列表
@@ -135,21 +146,34 @@ pub fn resolve_file_path(
         .map_err(|e| format!("{e:#}"))
 }
 
-/// 清理过期 temp / quarantine。TTL 不传时用默认值
+/// 清理过期 temp / quarantine / 视觉缓存。TTL 不传时用默认值或配置值
 #[tauri::command]
 pub async fn cleanup_files(
     temp_ttl_hours: Option<i64>,
     quarantine_ttl_days: Option<i64>,
+    cache_ttl_days: Option<i64>,
     store: State<'_, Arc<FileStore>>,
+    config: State<'_, ConfigStore>,
 ) -> Result<CleanupReport, String> {
     let hours = temp_ttl_hours.unwrap_or(TEMP_TTL_HOURS);
     let days = quarantine_ttl_days.unwrap_or(QUARANTINE_TTL_DAYS);
+    // 缓存 TTL 以配置为默认值；命令参数只用于临时覆盖
+    let cache_days = cache_ttl_days.unwrap_or(config.get().vision.cache_ttl_days);
     let store = store.inner().clone();
 
     tokio::task::spawn_blocking(move || {
-        store
-            .cleanup_with_ttl(chrono::Local::now(), hours, days)
-            .map_err(|e| format!("{e:#}"))
+        let now = chrono::Local::now();
+        let mut report = store
+            .cleanup_with_ttl(now, hours, days)
+            .map_err(|e| format!("{e:#}"))?;
+        let cache = store
+            .cleanup_cache(now, cache_days)
+            .map_err(|e| format!("{e:#}"))?;
+
+        report.removed_files += cache.removed_files;
+        report.removed_dirs += cache.removed_dirs;
+        report.freed_bytes += cache.freed_bytes;
+        Ok(report)
     })
     .await
     .map_err(|e| format!("清理任务失败: {e}"))?
