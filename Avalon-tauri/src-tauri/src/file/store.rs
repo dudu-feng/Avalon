@@ -6,13 +6,14 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration, Local, NaiveDate};
 use sha2::{Digest, Sha256};
 
 use super::types::{
-    CleanupReport, FileKind, FileSource, Sidecar, StoredFile, SIDECAR_SCHEMA,
+    CacheKind, CleanupReport, FileKind, FileSource, Sidecar, StoredFile, SIDECAR_SCHEMA,
 };
 use crate::config::AppConfig;
 
@@ -38,11 +39,17 @@ pub struct SaveRequest<'a> {
 /// 以 `file_root` 为边界的文件存储
 pub struct FileStore {
     root: PathBuf,
+    /// sidecar 是「读 → 改 → 写」，缩略图与观察两条路径可能并发更新同一文件；
+    /// 进程内串行化即可，跨进程由原子 rename 兜底
+    sidecar_lock: Mutex<()>,
 }
 
 impl FileStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            sidecar_lock: Mutex::new(()),
+        }
     }
 
     pub fn from_config(cfg: &AppConfig) -> Self {
@@ -99,6 +106,77 @@ impl FileStore {
             bail!("路径越界: {relative}");
         }
         Ok(canon)
+    }
+
+    /// 读取文件内容，限制在单文件上限内。
+    /// 视觉预处理与后续文件读取统一走这里，避免各自拼接绝对路径
+    pub fn read(&self, relative: &str) -> Result<Vec<u8>> {
+        let path = self.resolve(relative)?;
+        let meta = fs::metadata(&path)
+            .with_context(|| format!("读取文件元信息失败: {}", path.display()))?;
+        if meta.len() > MAX_FILE_BYTES {
+            bail!(
+                "文件超过上限 {} MB: {relative}",
+                MAX_FILE_BYTES / 1024 / 1024
+            );
+        }
+        fs::read(&path).with_context(|| format!("读取文件失败: {}", path.display()))
+    }
+
+    /// 读取 `<id>.meta.json`。老文件没有 sidecar 时返回 None
+    pub fn read_sidecar(&self, relative: &str) -> Result<Option<Sidecar>> {
+        let path = self.sidecar_path(relative)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&path)
+            .with_context(|| format!("读取 sidecar 失败: {}", path.display()))?;
+        let sidecar = serde_json::from_slice(&bytes)
+            .with_context(|| format!("解析 sidecar 失败: {}", path.display()))?;
+        Ok(Some(sidecar))
+    }
+
+    /// 读 → 合并 → 原子写回 sidecar。
+    /// 调用方只改自己的字段（image / derived），避免缩略图与 VLM 两条路径互相覆盖
+    pub fn update_sidecar(
+        &self,
+        relative: &str,
+        update: impl FnOnce(&mut Sidecar),
+    ) -> Result<()> {
+        let _guard = self
+            .sidecar_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut sidecar = self
+            .read_sidecar(relative)?
+            .with_context(|| format!("sidecar 不存在: {relative}"))?;
+        update(&mut sidecar);
+        let path = self.sidecar_path(relative)?;
+        let json = serde_json::to_vec_pretty(&sidecar).context("序列化 sidecar 失败")?;
+        write_atomic(&path, &json)
+    }
+
+    /// sidecar 绝对路径：与主文件同目录的 `<stem>.meta.json`
+    pub fn sidecar_path(&self, relative: &str) -> Result<PathBuf> {
+        let path = self.resolve(relative)?;
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .with_context(|| format!("非法文件名: {relative}"))?;
+        let parent = path
+            .parent()
+            .with_context(|| format!("路径没有父目录: {relative}"))?;
+        Ok(parent.join(format!("{stem}.meta.json")))
+    }
+
+    /// 缓存目录（缩略图 / OCR / VLM），按分类分组
+    pub fn cache_dir(&self, kind: CacheKind) -> PathBuf {
+        self.root.join("cache").join(kind.dir_name())
+    }
+
+    /// 缓存文件的相对路径（写入 sidecar.derived 用）
+    pub fn cache_relative(&self, kind: CacheKind, file_name: &str) -> String {
+        format!("cache/{}/{}", kind.dir_name(), file_name)
     }
 
     /// 用默认 TTL 清理 temp / quarantine。定时清理任务接入后使用

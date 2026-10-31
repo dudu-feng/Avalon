@@ -19,6 +19,29 @@ export interface StoredFile {
   meta_path?: string;
 }
 
+/** 视觉模型对单张图片的观察结果（analyze_image 命令返回） */
+export interface Observation {
+  schema: number;
+  sha256: string;
+  model: string;
+  prompt_version: number;
+  description: string;
+  ocr_text?: string;
+  labels: string[];
+  elapsed_ms: number;
+  created_at: string;
+}
+
+/** 视觉能力状态（vision_status 命令返回） */
+export interface VisionStatus {
+  enabled: boolean;
+  /** 实际使用的视觉模型名（models[].name） */
+  model?: string | null;
+  /** 活跃模型本身是否能看图 */
+  active_supports_vision: boolean;
+  ocr_enabled: boolean;
+}
+
 /** 一次 temp/quarantine 清理的结果 */
 export interface CleanupReport {
   removed_files: number;

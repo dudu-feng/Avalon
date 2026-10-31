@@ -16,6 +16,26 @@ export interface TokenUsage {
   cached_tokens?: number;
 }
 
+/** 发给后端 chat 命令的图片附件引用：只信任路径，其余信息由后端从 sidecar 补齐 */
+export interface ChatAttachmentRef {
+  path: string;
+}
+
+/** 落进 user 消息 meta.attachments 的附件快照（对齐后端 vision::Attachment） */
+export interface MessageAttachment {
+  path: string;
+  mime: string;
+  size: number;
+  sha256: string;
+  /** 原图尺寸；前端乐观渲染时可能尚未知，后端快照会补齐 */
+  width?: number;
+  height?: number;
+  original_name?: string;
+  /** 已生成的图像观察；后续轮次靠它回忆图片内容 */
+  observation?: string;
+  ocr_text?: string;
+}
+
 /** 工具调用（对齐后端 ToolCall） */
 export interface ToolCall {
   id: string;
@@ -35,7 +55,13 @@ export interface ChatResult {
 
 /** 后端持久化的历史消息（get_current_session 返回的 messages 元素，判别联合） */
 export type HistoryMessage =
-  | { role: 'user'; time: string; content: string }
+  | {
+      role: 'user';
+      time: string;
+      content: string;
+      /** 渠道来源与附件快照（后端 Message::User.meta） */
+      meta?: { attachments?: MessageAttachment[]; [key: string]: unknown } | null;
+    }
   | {
       role: 'assistant';
       time: string;
@@ -123,7 +149,14 @@ export interface ToolCallRecord {
  * - tool：独立折叠卡片，参数/状态/结果自包含，不依附 assistant
  */
 export type ChatMessage =
-  | { id: string; role: 'user'; status: MessageStatus; content: string }
+  | {
+      id: string;
+      role: 'user';
+      status: MessageStatus;
+      content: string;
+      /** 本轮图片附件（历史消息从 meta.attachments 恢复） */
+      attachments?: MessageAttachment[];
+    }
   | {
       id: string;
       role: 'assistant';

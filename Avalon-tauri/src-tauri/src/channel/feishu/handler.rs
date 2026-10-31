@@ -362,6 +362,7 @@ impl MessageHandler {
             for_model: &hinted,
             for_history: &msg.text,
             meta: Some(msg.meta()),
+            attachments: Vec::new(),
         };
 
         // on_event 是同步闭包，里面不能 await，所以所有推送都挪到 pump 任务里

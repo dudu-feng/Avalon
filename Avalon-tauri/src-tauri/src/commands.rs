@@ -24,6 +24,7 @@ use crate::scheduler::{parse_schedule, ScheduledTask, TaskSource, TaskStore};
 use crate::session::{ContextUsage, LoadHistoryResult, SessionData, SessionMeta};
 use crate::usage::{DailyUsageRow, UsageStore};
 use crate::vector::{RebuildProgress, RebuildStats};
+use crate::vision::{ChatAttachment, Observation, VisionCapability, VisionService};
 
 // ============ 配置管理 ============
 
@@ -154,6 +155,45 @@ pub async fn cleanup_files(
     .map_err(|e| format!("清理任务失败: {e}"))?
 }
 
+// ============ 视觉 ============
+
+/// 视觉能力状态：前端据此决定是否显示附件入口
+#[tauri::command]
+pub fn vision_status(vision: State<'_, Arc<VisionService>>) -> VisionCapability {
+    vision.capability()
+}
+
+/// 对单张已落盘图片生成（或读取缓存的）观察文本
+#[tauri::command]
+pub async fn analyze_image(
+    path: String,
+    vision: State<'_, Arc<VisionService>>,
+) -> Result<Observation, String> {
+    vision.observe(&path).await.map_err(|e| format!("{e:#}"))
+}
+
+/// 返回缩略图相对路径（必要时生成一次），供需要路径的调用方使用
+#[tauri::command]
+pub async fn get_thumbnail(
+    path: String,
+    vision: State<'_, Arc<VisionService>>,
+) -> Result<String, String> {
+    vision.thumbnail(&path).await.map_err(|e| format!("{e:#}"))
+}
+
+/// 返回缩略图 data URL（必要时生成一次）。WebView 直接渲染，
+/// 不依赖 Tauri asset 协议，因而也不受可配置 file_root 的 scope 限制
+#[tauri::command]
+pub async fn get_thumbnail_data_url(
+    path: String,
+    vision: State<'_, Arc<VisionService>>,
+) -> Result<String, String> {
+    vision
+        .thumbnail_data_url(&path)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
 // ============ LLM 调用 ============
 
 /// 会话压缩：非流式 JSON，返回 summary + keywords。
@@ -182,12 +222,19 @@ pub async fn llm_compress(
 pub async fn chat(
     user_input: String,
     channel_name: String,
+    attachments: Option<Vec<ChatAttachment>>,
     engine: State<'_, Arc<Engine>>,
     on_event: Channel<EngineEvent>,
 ) -> Result<(), String> {
     let cancel = engine.begin_chat(&channel_name);
+    let input = crate::engine::UserInput {
+        for_model: &user_input,
+        for_history: &user_input,
+        meta: None,
+        attachments: attachments.unwrap_or_default(),
+    };
     engine
-        .run(&user_input, &channel_name, cancel, move |ev| {
+        .run_with_input(input, &channel_name, cancel, move |ev| {
             let _ = on_event.send(ev);
         })
         .await

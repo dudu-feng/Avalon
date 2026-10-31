@@ -13,6 +13,6 @@ pub use store::{
 // Sidecar / ImageMeta / DerivedPaths 等由测试与后续缓存、飞书接入使用
 #[allow(unused_imports)]
 pub use types::{
-    CleanupReport, DerivedPaths, FileKind, FileSource, ImageMeta, Sidecar, StoredFile,
+    CacheKind, CleanupReport, DerivedPaths, FileKind, FileSource, ImageMeta, Sidecar, StoredFile,
     SIDECAR_SCHEMA,
 };

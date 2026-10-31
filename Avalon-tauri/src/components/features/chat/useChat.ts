@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { DEFAULT_CHANNEL } from '../../../lib/chatApi';
+import type { MessageAttachment } from '../../../types/chat';
 import * as chatStore from './useChatStore';
 
 export interface UseChatOptions {
@@ -41,7 +42,10 @@ export function useChat(options: UseChatOptions = {}) {
     earliestChunk: s.earliestChunk,
     hasEarlier: s.hasEarlier,
     loadingEarlier: s.loadingEarlier,
-    send: useCallback((text: string) => chatStore.send(store, text), [store]),
+    send: useCallback(
+      (text: string, attachments?: MessageAttachment[]) => chatStore.send(store, text, attachments),
+      [store],
+    ),
     newSession: useCallback(() => chatStore.newSession(store), [store]),
     stop: useCallback(() => chatStore.stop(store), [store]),
     compressNow: useCallback(() => chatStore.compressNow(store), [store]),

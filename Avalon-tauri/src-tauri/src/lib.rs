@@ -19,6 +19,7 @@ mod tool;
 mod tray;
 mod usage;
 mod vector;
+mod vision;
 
 #[cfg(test)]
 mod test_file; // 单元测试（仅 cargo test 编译）
@@ -118,6 +119,13 @@ pub fn run() {
         prompt::PromptAssembler::new(soul_registry.clone()).with_skills(skill_registry.clone()),
     );
     let usage_store: Arc<usage::UsageStore> = Arc::new(usage::UsageStore::new(cfg.usage_path()));
+    // 视觉服务：预处理/观察/缓存都需要文件、模型与用量，放在 engine 之前组装
+    let vision_service = Arc::new(vision::VisionService::new(
+        store.clone(),
+        llm.clone(),
+        file_store.clone(),
+        usage_store.clone(),
+    ));
     let task_store: Arc<scheduler::TaskStore> =
         Arc::new(scheduler::TaskStore::new(cfg.scheduler_path()));
     // 飞书发送句柄。必须先于 ToolSet 创建 —— 工具层拿的是这个 Arc，
@@ -145,6 +153,7 @@ pub fn run() {
         tool_registry,
         session_store,
         usage_store.clone(),
+        vision_service.clone(),
     ));
 
     // 供 setup 里启动心跳循环（manage 会 move 原句柄，这里提前 clone）
@@ -178,6 +187,7 @@ pub fn run() {
         .manage(llm)
         .manage(engine)
         .manage(usage_store)
+        .manage(vision_service)
         .manage(task_store)
         .manage(soul_registry)
         .manage(skill_registry)
@@ -193,6 +203,10 @@ pub fn run() {
             commands::save_attachment,
             commands::resolve_file_path,
             commands::cleanup_files,
+            commands::vision_status,
+            commands::analyze_image,
+            commands::get_thumbnail,
+            commands::get_thumbnail_data_url,
             commands::llm_compress,
             commands::chat,
             commands::stop_chat,

@@ -1,4 +1,4 @@
-import { Input } from '../../ui';
+import { Input, Switch } from '../../ui';
 import type { ModelConfig } from '../../../types/config';
 import styles from './ModelForm.module.css';
 
@@ -40,6 +40,19 @@ export function ModelForm({ model, onChange }: ModelFormProps) {
         placeholder="支持环境变量 AVALON_LLM_API_KEY 覆盖"
         onChange={(e) => patch({ key: e.currentTarget.value })}
       />
+      <div className={styles.visionRow}>
+        <div className={styles.visionText}>
+          <span className={styles.visionLabel}>支持图片输入 supports_vision</span>
+          <span className={styles.visionHint}>
+            开启后该模型可直接接收图片（模型本身须为多模态）；还需在「视觉」页启用图片输入
+          </span>
+        </div>
+        <Switch
+          checked={model.supports_vision}
+          onChange={(checked) => patch({ supports_vision: checked })}
+          aria-label={`${model.name || '当前模型'}支持图片输入`}
+        />
+      </div>
     </div>
   );
 }

@@ -12,6 +12,7 @@ import type {
   ContextUsage,
   EngineEvent,
   HistoryMessage,
+  MessageAttachment,
   SessionMeta,
 } from '../../../types/chat';
 import {
@@ -40,7 +41,13 @@ function mapHistoryMessages(msgs: HistoryMessage[], key: string): ChatMessage[] 
 
   for (const m of msgs) {
     if (m.role === 'user') {
-      out.push({ id: `hist-${key}-${idx++}`, role: 'user', status: 'done', content: m.content });
+      out.push({
+        id: `hist-${key}-${idx++}`,
+        role: 'user',
+        status: 'done',
+        content: m.content,
+        attachments: m.meta?.attachments,
+      });
     } else if (m.role === 'assistant') {
       out.push({
         id: `hist-${key}-${idx++}`,
@@ -476,16 +483,23 @@ export async function compressNow(store: ChatStore) {
 
 /** 发送一条消息：推 user + 空 assistant，跑 chat，逐事件组装进模块状态。
  *  事件回调写的是模块状态而非组件 setState —— 页面卸载后事件照样累积，这是本 store 存在的理由。 */
-export async function send(store: ChatStore, text: string) {
+export async function send(
+  store: ChatStore,
+  text: string,
+  attachments: MessageAttachment[] = [],
+) {
   const st = store.state;
   const trimmed = text.trim();
-  if (!trimmed || st.isBusy || st.compressing || st.resetting || st.switching) return;
+  if ((!trimmed && attachments.length === 0) || st.isBusy || st.compressing || st.resetting || st.switching) {
+    return;
+  }
 
   const userMsg: ChatMessage = {
     id: nextId(store),
     role: 'user',
     content: trimmed,
     status: 'done',
+    attachments: attachments.length > 0 ? attachments : undefined,
   };
   const assistantId = nextId(store);
 
@@ -499,9 +513,14 @@ export async function send(store: ChatStore, text: string) {
   });
 
   try {
-    await chat(trimmed, store.channel, (ev) => {
-      updateMessages(store, (prev) => applyEvent(prev, ev, () => nextId(store)));
-    });
+    await chat(
+      trimmed,
+      store.channel,
+      attachments.map((a) => ({ path: a.path })),
+      (ev) => {
+        updateMessages(store, (prev) => applyEvent(prev, ev, () => nextId(store)));
+      },
+    );
   } catch (error) {
     updateMessages(store, (prev) =>
       prev.map((m) =>

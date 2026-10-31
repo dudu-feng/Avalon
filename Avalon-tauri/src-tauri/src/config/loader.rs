@@ -40,6 +40,7 @@ name = "deepseek"                         # 唯一标识（切换锚点）
 url = "https://api.deepseek.com"          # OpenAI 兼容 API 基础 URL
 key = ""                                  # API Key（支持环境变量 AVALON_LLM_API_KEY 覆盖）
 modelname = "deepseek-v4-flash"           # 实际模型名
+supports_vision = false                   # 是否支持图片输入（多模态）
 
 # ============================================================
 #  LLM 全局行为参数（所有模型共享）
@@ -146,6 +147,29 @@ extract_limit = 8000                      # 网页正文截断字符数（接口
 # 同理不建议加 findstr：它的 /f: 参数能读任意文件，而这功能 read_file 已覆盖。
 # dir / type 加了也没用，它们是 cmd 内建命令，没有对应的可执行文件。
 shell_allowlist = ["where", "ping", "ipconfig", "tasklist", "systeminfo", "hostname"]
+
+# ============================================================
+#  视觉输入（图片理解）
+#  开启后聊天输入框出现附件入口；图片会先本地缩放/去 EXIF，
+#  再发送给视觉模型。图片内容会离开本机，请确认模型服务可信。
+# ============================================================
+[vision]
+enabled = false                           # 开关，关闭时不注册图片入口
+model = ""                                # 视觉模型，指向 models[].name；留空 = 活跃模型（需 supports_vision = true）
+observe_mode = "always"                   # always = 首图生成并缓存观察；lazy = 需要时再生成
+max_edge = 1568                           # 送模型前的最长边
+max_bytes = 4194304                       # 编码后字节上限（4 MiB）
+jpeg_quality = 85
+detail = "auto"                           # auto / low / high；留空则不传该字段
+timeout_secs = 60
+concurrency = 2                           # 并发视觉调用上限
+cache_ttl_days = 30                       # VLM/OCR 缓存保留天数，0 = 不自动清理
+confirm_before_send = true                # 首次向某个视觉模型发送图片前弹确认
+
+[vision.ocr]
+enabled = false                           # 本地 OCR 快路（P2）
+engine = "none"                           # none | onnx
+min_confidence = 0.75
 "#;
 
 /// 加载配置：定位 → 不存在则生成默认模板 → 反序列化 → 回填 config_path → 环境变量覆盖
@@ -263,6 +287,48 @@ pub fn validate(config: &AppConfig) -> Vec<String> {
         }
     }
 
+    // 4. 视觉配置：只在开关打开时校验
+    if config.vision.enabled {
+        if config.vision.model.trim().is_empty() {
+            match config.active_model_config() {
+                Some(m) if !m.supports_vision => warnings.push(format!(
+                    "视觉已启用但未指定 [vision].model，且活跃模型 '{}' 未标记 supports_vision",
+                    m.name
+                )),
+                None => warnings.push("视觉已启用但找不到活跃模型".to_string()),
+                _ => {}
+            }
+        } else if let Some(m) = config
+            .models
+            .iter()
+            .find(|m| m.name == config.vision.model.trim())
+        {
+            if !m.supports_vision {
+                warnings.push(format!(
+                    "视觉模型 '{}' 未标记 supports_vision = true，图片调用可能失败",
+                    m.name
+                ));
+            }
+        } else {
+            warnings.push(format!(
+                "视觉模型 '{}' 不在模型列表中",
+                config.vision.model
+            ));
+        }
+        if config.vision.ocr.enabled && config.vision.ocr.engine == "none" {
+            warnings.push("视觉 OCR 已启用但 engine = none".to_string());
+        }
+    } else if let Some(m) = config.active_model_config() {
+        // 模型能力（supports_vision）和视觉总开关（[vision].enabled）分处设置页两栏，
+        // 只开了前者时聊天页不会出现图片入口。这里明确提醒，免得以为是前端坏了
+        if m.supports_vision {
+            warnings.push(format!(
+                "活跃模型 '{}' 已标记 supports_vision，但 [vision].enabled = false，聊天页不会显示图片入口",
+                m.name
+            ));
+        }
+    }
+
     warnings
 }
 
@@ -316,6 +382,7 @@ pub(crate) fn migrate_legacy_llm(content: &str, config: &mut AppConfig) -> Resul
                 url: l.base_url,
                 key: l.api_key,
                 modelname: l.model,
+                supports_vision: false,
             });
             config.active_model = "default".to_string();
             log::info!(target: "config", "检测到旧版单模型配置，已迁移为模型列表（name=default）");

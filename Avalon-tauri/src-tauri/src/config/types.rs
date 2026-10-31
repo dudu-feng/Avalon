@@ -37,6 +37,9 @@ pub struct AppConfig {
     /// Agent 基础工具的沙箱配置（新增段，老配置文件缺失时取默认值）
     #[serde(default)]
     pub tools: ToolsConfig,
+    /// 视觉输入配置（新增段，老配置文件缺失时取默认值）
+    #[serde(default)]
+    pub vision: VisionConfig,
 
     // —— 运行时派生，不落盘 ——
     /// Avalon-config.toml 完整路径（保存时写回原位置）
@@ -71,6 +74,10 @@ pub struct ModelConfig {
     pub key: String,
     /// 实际模型名
     pub modelname: String,
+    /// 是否支持图片输入。缺省 false —— 不能把纯文本模型误当视觉模型，
+    /// 否则发图时提供商会直接 400
+    #[serde(default)]
+    pub supports_vision: bool,
 }
 
 /// 全局 LLM 行为参数（所有模型共享）
@@ -326,5 +333,94 @@ impl SearchConfig {
     /// 去掉尾部斜杠，避免拼出 `https://x//v1/search`
     pub fn base_url(&self) -> &str {
         self.base_url.trim_end_matches('/')
+    }
+}
+
+/// 图像观察策略
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ObserveMode {
+    /// 首次进入会话即生成观察并缓存（历史/压缩/非视觉模型都能用）
+    Always,
+    /// 当前轮直接发图，只有需要文本表示时才生成
+    Lazy,
+}
+
+/// 本地 OCR 配置。P0 只保留开关，具体引擎在 P2 接入
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OcrConfig {
+    pub enabled: bool,
+    /// none | onnx
+    pub engine: String,
+    /// 文本置信度达到该值才允许跳过 VLM
+    pub min_confidence: f32,
+}
+
+impl Default for OcrConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            engine: "none".to_string(),
+            min_confidence: 0.75,
+        }
+    }
+}
+
+/// 视觉输入配置（对应 [vision] 段）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VisionConfig {
+    /// 是否启用图片输入。关闭时附件入口隐藏、视觉工具不注册
+    pub enabled: bool,
+    /// 视觉模型：指向 models[].name；留空 = 活跃模型（前提 supports_vision）
+    pub model: String,
+    pub observe_mode: ObserveMode,
+    /// 送模型前缩放到的最长边
+    pub max_edge: u32,
+    /// 编码后字节上限
+    pub max_bytes: u64,
+    pub jpeg_quality: u8,
+    /// OpenAI 兼容的 image_url.detail：auto / low / high；留空则不传
+    pub detail: String,
+    pub timeout_secs: u64,
+    pub concurrency: usize,
+    /// VLM/OCR 缓存保留天数；0 = 不自动清理
+    pub cache_ttl_days: i64,
+    /// 首次向某个视觉模型发送图片前是否弹确认。
+    /// 属于前端策略，但随配置持久化，换机器/重装后仍然生效
+    pub confirm_before_send: bool,
+    pub ocr: OcrConfig,
+}
+
+impl Default for VisionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: String::new(),
+            observe_mode: ObserveMode::Always,
+            max_edge: 1568,
+            max_bytes: 4 * 1024 * 1024,
+            jpeg_quality: 85,
+            detail: "auto".to_string(),
+            timeout_secs: 60,
+            concurrency: 2,
+            cache_ttl_days: 30,
+            confirm_before_send: true,
+            ocr: OcrConfig::default(),
+        }
+    }
+}
+
+impl VisionConfig {
+    /// 归一化到可执行范围，避免配置里写 0 或离谱值把流水线弄坏
+    pub fn normalized(&self) -> Self {
+        let mut cfg = self.clone();
+        cfg.max_edge = cfg.max_edge.clamp(256, 8192);
+        cfg.max_bytes = cfg.max_bytes.clamp(64 * 1024, 32 * 1024 * 1024);
+        cfg.jpeg_quality = cfg.jpeg_quality.clamp(40, 95);
+        cfg.timeout_secs = cfg.timeout_secs.max(5);
+        cfg.concurrency = cfg.concurrency.clamp(1, 8);
+        cfg
     }
 }

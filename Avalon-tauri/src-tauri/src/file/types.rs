@@ -190,3 +190,24 @@ pub struct CleanupReport {
     pub removed_dirs: u64,
     pub freed_bytes: u64,
 }
+
+/// 可重建产物的缓存分类，对应 `file/cache/<name>/`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheKind {
+    /// 预览缩略图
+    Thumb,
+    /// 本地 OCR 结果
+    Ocr,
+    /// VLM 观察结果
+    Vlm,
+}
+
+impl CacheKind {
+    pub fn dir_name(self) -> &'static str {
+        match self {
+            Self::Thumb => "thumb",
+            Self::Ocr => "ocr",
+            Self::Vlm => "vlm",
+        }
+    }
+}

@@ -15,6 +15,7 @@ import {
   FeishuSettings,
   SandboxSettings,
   PathInput,
+  VisionSettings,
 } from '../../components/features/settings';
 import { getConfig, saveConfig, rebuildMemoryIndex } from '../../lib/settingsApi';
 import type {
@@ -58,6 +59,7 @@ const ZONES = [
 
 const TABS = [
   { value: 'model', label: '模型' },
+  { value: 'vision', label: '视觉' },
   { value: 'embedding', label: '向量化' },
   { value: 'session', label: '会话' },
   { value: 'tools', label: '工具' },
@@ -125,7 +127,10 @@ export function SettingsPage() {
 
   function addModel() {
     if (!config) return;
-    update('models', [...config.models, { name: '', url: '', key: '', modelname: '' }]);
+    update('models', [
+      ...config.models,
+      { name: '', url: '', key: '', modelname: '', supports_vision: false },
+    ]);
   }
 
   function updateModel(index: number, next: ModelConfig) {
@@ -304,6 +309,16 @@ export function SettingsPage() {
             </div>
           </Card>
         </>
+      )}
+
+      {/* 视觉：图片输入开关、视觉模型、预处理参数、外发确认 */}
+      {tab === 'vision' && (
+        <VisionSettings
+          config={config.vision}
+          models={config.models}
+          activeModel={config.active_model}
+          onChange={(next) => update('vision', next)}
+        />
       )}
 
       {/* 向量化：Embedding */}

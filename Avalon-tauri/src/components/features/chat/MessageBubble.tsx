@@ -1,4 +1,7 @@
-import type { ChatMessage } from '../../../types/chat';
+import { useEffect, useState } from 'react';
+import { openPath } from '@tauri-apps/plugin-opener';
+import type { ChatMessage, MessageAttachment } from '../../../types/chat';
+import { getThumbnailDataUrl, resolveFilePath } from '../../../lib/fileApi';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ActionStepItem } from './ActionStepItem';
 import { MarkdownContent } from './MarkdownContent';
@@ -6,6 +9,42 @@ import styles from './MessageBubble.module.css';
 
 export interface MessageBubbleProps {
   message: ChatMessage;
+}
+
+/** 单张图片附件：先取缩略图，点击用系统程序打开原图 */
+function AttachmentThumb({ attachment }: { attachment: MessageAttachment }) {
+  const [url, setUrl] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    getThumbnailDataUrl(attachment.path)
+      .then((u) => {
+        if (alive) setUrl(u);
+      })
+      .catch((e) => console.error('加载缩略图失败:', e));
+    return () => {
+      alive = false;
+    };
+  }, [attachment.path]);
+
+  const open = async () => {
+    try {
+      await openPath(await resolveFilePath(attachment.path));
+    } catch (e) {
+      console.error('打开图片失败:', e);
+    }
+  };
+
+  const name = attachment.original_name || '图片';
+  return (
+    <button type="button" className={styles.attachmentItem} onClick={open} title={`打开 ${name}`}>
+      {url ? (
+        <img className={styles.attachmentImage} src={url} alt={name} loading="lazy" />
+      ) : (
+        <span className={styles.attachmentFallback}>图片</span>
+      )}
+    </button>
+  );
 }
 
 export function MessageBubble({ message }: MessageBubbleProps) {
@@ -54,7 +93,14 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     return (
       <div className={rowClass}>
         <div className={styles.bubble}>
-          <p className={styles.text}>{message.content}</p>
+          {message.attachments && message.attachments.length > 0 && (
+            <div className={styles.attachmentGrid}>
+              {message.attachments.map((a) => (
+                <AttachmentThumb key={`${a.path}-${a.sha256}`} attachment={a} />
+              ))}
+            </div>
+          )}
+          {message.content && <p className={styles.text}>{message.content}</p>}
         </div>
       </div>
     );

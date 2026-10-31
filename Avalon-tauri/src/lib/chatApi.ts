@@ -6,6 +6,7 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
+  ChatAttachmentRef,
   ContextUsage,
   CurrentSession,
   EngineEvent,
@@ -79,13 +80,15 @@ export async function renameSession(channelName: string, id: string, title: stri
   await invoke('rename_session', { channelName, id, title });
 }
 
-/** 主对话：跑完整 ReAct，中间态经 onEvent 逐事件回调 */
+/** 主对话：跑完整 ReAct，中间态经 onEvent 逐事件回调。
+ *  attachments 只传后端相对路径；图片字节由后端读取并预处理。 */
 export async function chat(
   userInput: string,
   channelName: string,
+  attachments: ChatAttachmentRef[],
   onEvent: (ev: EngineEvent) => void,
 ): Promise<void> {
   const channel = new Channel<EngineEvent>();
   channel.onmessage = onEvent;
-  await invoke('chat', { userInput, channelName, onEvent: channel });
+  await invoke('chat', { userInput, channelName, attachments, onEvent: channel });
 }

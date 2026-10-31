@@ -4,9 +4,15 @@
 // 返回的 StoredFile.path 是相对 file_root 的路径，预览时再经 resolve_file_path
 // 换成绝对路径 —— 前端不持有、也不拼接文件根目录。
 
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 
-import type { CleanupReport, FileSource, StoredFile } from '../types/file';
+import type {
+  CleanupReport,
+  FileSource,
+  Observation,
+  StoredFile,
+  VisionStatus,
+} from '../types/file';
 
 export interface SaveAttachmentOptions {
   source?: FileSource;
@@ -49,9 +55,24 @@ export function resolveFilePath(relative: string): Promise<string> {
   return invoke<string>('resolve_file_path', { relative });
 }
 
-/** 相对路径 → WebView 可访问的 asset URL，用于图片预览 */
-export async function toFileUrl(relative: string): Promise<string> {
-  return convertFileSrc(await resolveFilePath(relative));
+/** 缩略图 → data URL，WebView 直接渲染；不依赖 Tauri asset 协议 */
+export function getThumbnailDataUrl(path: string): Promise<string> {
+  return invoke<string>('get_thumbnail_data_url', { path });
+}
+
+/** 当前视觉能力状态：前端据此决定是否显示附件入口 */
+export function visionStatus(): Promise<VisionStatus> {
+  return invoke<VisionStatus>('vision_status');
+}
+
+/** 对已落盘图片生成（或读取缓存的）观察文本 */
+export function analyzeImage(path: string): Promise<Observation> {
+  return invoke<Observation>('analyze_image', { path });
+}
+
+/** 取缩略图相对路径（必要时由后端生成），再经 toFileUrl 预览 */
+export function getThumbnail(path: string): Promise<string> {
+  return invoke<string>('get_thumbnail', { path });
 }
 
 /** 清理过期 temp / quarantine；不传 TTL 时后端用默认值 */

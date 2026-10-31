@@ -8,6 +8,35 @@ export type EmbeddingLoadMode = 'lazy' | 'eager';
 export type SearchMode = 'semantic' | 'keyword' | 'hybrid';
 export type VectorBackend = 'memory' | 'sqlite';
 export type FeishuSessionMode = 'isolated' | 'unified';
+export type ObserveMode = 'always' | 'lazy';
+
+/** 本地 OCR 配置，对应后端 [vision.ocr] */
+export interface OcrConfig {
+  enabled: boolean;
+  /** none | onnx */
+  engine: string;
+  /** 文本置信度达到该值才允许跳过 VLM */
+  min_confidence: number;
+}
+
+/** 视觉输入配置，对应后端 [vision] */
+export interface VisionConfig {
+  enabled: boolean;
+  /** 视觉模型，指向 models[].name；留空 = 活跃模型（前提 supports_vision） */
+  model: string;
+  observe_mode: ObserveMode;
+  max_edge: number;
+  max_bytes: number;
+  jpeg_quality: number;
+  /** OpenAI 兼容 image_url.detail：auto / low / high；留空则不传 */
+  detail: string;
+  timeout_secs: number;
+  concurrency: number;
+  cache_ttl_days: number;
+  /** 首次向某个视觉模型发送图片前弹确认；关闭后直接发送 */
+  confirm_before_send: boolean;
+  ocr: OcrConfig;
+}
 
 /** 飞书渠道配置。app_secret 敏感，可被环境变量 AVALON_FEISHU_APP_SECRET 覆盖 */
 export interface FeishuConfig {
@@ -63,6 +92,8 @@ export interface ModelConfig {
   url: string;
   key: string;
   modelname: string;
+  /** 是否支持图片输入。必须与提供商的真实能力一致 */
+  supports_vision: boolean;
 }
 
 /** 顶层配置：整体映射 Avalon-config.toml */
@@ -104,6 +135,7 @@ export interface AppConfig {
   feishu: FeishuConfig;
   search: SearchConfig;
   tools: ToolsConfig;
+  vision: VisionConfig;
 }
 
 /**

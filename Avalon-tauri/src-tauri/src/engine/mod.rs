@@ -24,6 +24,7 @@ use crate::session::{ContextUsage, LoadHistoryResult, SessionData, SessionMeta, 
 use crate::tool::ToolRegistry;
 use crate::usage::UsageStore;
 use crate::vector::{RebuildProgress, RebuildStats};
+use crate::vision::{ChatAttachment, VisionService};
 
 pub use events::EngineEvent;
 
@@ -40,6 +41,8 @@ pub struct UserInput<'a> {
     pub for_history: &'a str,
     /// 渠道来源元信息，随落盘的 user 消息保存；桌面端为 None
     pub meta: Option<serde_json::Value>,
+    /// 本轮图片附件（只含后端相对路径）。由 VisionService 转成图片字节或观察文本
+    pub attachments: Vec<ChatAttachment>,
 }
 
 impl<'a> UserInput<'a> {
@@ -49,6 +52,7 @@ impl<'a> UserInput<'a> {
             for_model: text,
             for_history: text,
             meta: None,
+            attachments: Vec::new(),
         }
     }
 }
@@ -61,6 +65,7 @@ pub struct Engine {
     tools: Arc<dyn ToolRegistry>,
     session: Arc<dyn SessionStore>,
     usage: Arc<UsageStore>,
+    vision: Arc<VisionService>,
     /// 按 channel 维度的取消标志（chat 运行时注册，stop_chat 置位中断流式循环）
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// 正在运行的 channel 集合（心跳调度前判忙，避免并发执行同一任务）
@@ -75,6 +80,7 @@ impl Engine {
         tools: Arc<dyn ToolRegistry>,
         session: Arc<dyn SessionStore>,
         usage: Arc<UsageStore>,
+        vision: Arc<VisionService>,
     ) -> Self {
         Self {
             config,
@@ -83,6 +89,7 @@ impl Engine {
             tools,
             session,
             usage,
+            vision,
             cancels: Mutex::new(HashMap::new()),
             busy: Mutex::new(HashSet::new()),
         }
@@ -120,6 +127,7 @@ impl Engine {
             self.tools.as_ref(),
             self.session.as_ref(),
             self.usage.as_ref(),
+            self.vision.as_ref(),
             &cancel,
             &mut on_event,
         )

@@ -6,5 +6,7 @@ export { FeishuSettings } from './FeishuSettings';
 export type { FeishuSettingsProps } from './FeishuSettings';
 export { SandboxSettings } from './SandboxSettings';
 export type { SandboxSettingsProps } from './SandboxSettings';
+export { VisionSettings } from './VisionSettings';
+export type { VisionSettingsProps } from './VisionSettings';
 export { PathInput, PathListInput } from './PathInput';
 export type { PathInputProps, PathListInputProps } from './PathInput';

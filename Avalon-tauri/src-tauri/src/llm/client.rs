@@ -151,6 +151,16 @@ impl LlmClient {
         Ok(result)
     }
 
+    /// 视觉层：非流式调用，messages 的 content 可以是 text + image_url 数组。
+    /// 优先 JSON 模式（观察结果要求结构化），失败或空内容时降级为普通模式。
+    pub async fn vision(&self, messages: &[Value]) -> Result<(String, TokenUsage)> {
+        match self.invoke(messages, true).await {
+            Ok((content, usage)) if !content.trim().is_empty() => Ok((content, usage)),
+            Ok(_) => self.invoke(messages, false).await,
+            Err(_) => self.invoke(messages, false).await,
+        }
+    }
+
     /// 发送请求并校验状态码，返回响应体。
     /// `streaming` 决定是否套「总超时」：非流式（compress / JSON 动作）要总超时防挂起；
     /// 流式不能套 —— 长思考/长回答会超过 timeout_secs，总超时会在流中间掐断连接。
