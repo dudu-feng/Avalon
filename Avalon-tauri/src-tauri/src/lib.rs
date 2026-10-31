@@ -7,6 +7,7 @@ mod commands;
 mod config;
 mod embedding;
 mod engine;
+mod file;
 mod llm;
 mod logging;
 mod prompt;
@@ -63,10 +64,29 @@ pub fn run() {
         boot_log.push((log::Level::Warn, format!("配置校验: {w}")));
     }
 
+    // v0.7 起 file_root 默认从 project_root/file 改为 data_root/file。
+    // 旧目录不自动搬家 —— 静默移动用户文件比保留原状更危险，只提示一次
+    if store.get().paths.file_root.as_os_str().is_empty() {
+        let cfg = store.get();
+        let legacy = cfg.legacy_file_root();
+        if legacy.is_dir() && legacy != cfg.file_root() {
+            boot_log.push((
+                log::Level::Warn,
+                format!(
+                    "检测到旧文件目录 {}（新目录为 {}）；未自动迁移，如需保留请手动移动",
+                    legacy.display(),
+                    cfg.file_root().display()
+                ),
+            ));
+        }
+    }
+
     // 3. 组装依赖链（决策甲：EmbedderHandle 贯穿 embedding→vector→session，load_mode 由配置驱动）
     let cfg = store.get();
     let handle = embedding::EmbedderHandle::new(cfg.clone());
     let llm = LlmState::new(cfg.llm.timeout_secs);
+    // 文件存储：根目录取自配置，所有落盘与路径解析都以它为边界
+    let file_store = Arc::new(file::FileStore::from_config(&cfg));
 
     let (vector_store, memory_index) = match vector::build(&cfg, handle.clone()) {
         Ok(v) => v,
@@ -154,6 +174,7 @@ pub fn run() {
         // 这个插件不给模型任何能力，它面向的是坐在电脑前的人
         .plugin(tauri_plugin_dialog::init())
         .manage(store)
+        .manage(file_store)
         .manage(llm)
         .manage(engine)
         .manage(usage_store)
@@ -169,6 +190,9 @@ pub fn run() {
             commands::validate_config,
             commands::get_config_path,
             commands::init_app,
+            commands::save_attachment,
+            commands::resolve_file_path,
+            commands::cleanup_files,
             commands::llm_compress,
             commands::chat,
             commands::stop_chat,

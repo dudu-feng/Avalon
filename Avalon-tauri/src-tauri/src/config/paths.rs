@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use chrono::NaiveDate;
 
 use super::types::AppConfig;
 
@@ -67,10 +68,13 @@ impl AppConfig {
         }
     }
 
-    /// 实际 file 根：配置项为空时按约定推导 project_root/file
+    /// 实际 file 根：配置项为空时按约定推导 data_root/file。
+    ///
+    /// 默认放在 data 下而不是与 data 平级，是为了备份/迁移时只需处理一个根目录，
+    /// 不会漏掉上传文件与图片。
     pub fn file_root(&self) -> PathBuf {
         if self.paths.file_root.as_os_str().is_empty() {
-            default_project_root().join("file")
+            self.data_root().join("file")
         } else {
             self.paths.file_root.clone()
         }
@@ -168,12 +172,56 @@ impl AppConfig {
     }
 
     // —— file 相关 ——
+    //
+    // 布局见 doc/v0.7/02-file-storage.md：
+    //   file/YYYY-MM-DD/           普通文件
+    //   file/image/YYYY-MM-DD/     图片
+    //   file/temp/                 中间态，随时可删
+    //   file/cache/                可重建产物（缩略图/OCR/VLM）
+    //   file/quarantine/           非法文件隔离区
 
     pub fn file_path(&self) -> PathBuf {
         self.file_root()
     }
 
+    /// 图片根：固定为 file_root/image，不单独配置 ——
+    /// 「图片在 file 下」这条约束不能被配置项打破
+    pub fn image_root(&self) -> PathBuf {
+        self.file_root().join("image")
+    }
+
+    /// 旧版默认文件根（v0.6 及以前）：project_root/file。
+    /// 只用于启动时提示迁移，不再参与任何写入
+    pub fn legacy_file_root(&self) -> PathBuf {
+        default_project_root().join("file")
+    }
+
     pub fn temp_file_path(&self) -> PathBuf {
         self.file_root().join("temp")
     }
+
+    /// 可重建产物的缓存根
+    pub fn file_cache_path(&self) -> PathBuf {
+        self.file_root().join("cache")
+    }
+
+    /// 隔离区根
+    pub fn file_quarantine_path(&self) -> PathBuf {
+        self.file_root().join("quarantine")
+    }
+
+    /// 普通文件的日期归档目录：file/YYYY-MM-DD
+    pub fn file_date_dir(&self, date: NaiveDate) -> PathBuf {
+        self.file_root().join(format_date(date))
+    }
+
+    /// 图片的日期归档目录：file/image/YYYY-MM-DD
+    pub fn image_date_dir(&self, date: NaiveDate) -> PathBuf {
+        self.image_root().join(format_date(date))
+    }
+}
+
+/// 日期目录统一用本地日期格式，避免 UTC 跨日把晚上的文件落到第二天
+fn format_date(date: NaiveDate) -> String {
+    date.format("%Y-%m-%d").to_string()
 }

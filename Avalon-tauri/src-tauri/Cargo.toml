@@ -51,6 +51,12 @@ tokenizers = { version = "0.23.1", default-features = false, features = ["onig"]
 bincode = "1.3"
 chrono = "0.4"
 tauri-plugin-dialog = "2.7.3"
+# 文件存储：内容嗅探、扩展名推导、内容哈希、附件 base64 传输
+infer = "0.19"
+mime_guess = "2"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

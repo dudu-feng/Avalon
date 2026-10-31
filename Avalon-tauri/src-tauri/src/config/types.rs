@@ -56,7 +56,7 @@ impl AppConfig {
 pub struct PathsConfig {
     /// 共享数据根目录（会话记忆/向量库/模型）。空串 = 按约定推导 project_root/data
     pub data_root: PathBuf,
-    /// 文件存放目录（临时文件等）。空串 = 按约定推导 project_root/file
+    /// 文件存放目录（普通文件/临时文件）。空串 = data_root/file；图片在其 image 子目录
     pub file_root: PathBuf,
 }
 

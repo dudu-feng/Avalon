@@ -13,7 +13,8 @@ active_model = "deepseek"
 # 共享数据根目录（会话记忆/向量库/模型）。留空 = 项目根下的 data/
 # 提示：Windows 绝对路径请用正斜杠（f:/Avalon/data），反斜杠在 TOML 中是转义符
 data_root = ""
-# 文件存放目录（临时文件等）。留空 = 项目根下的 file/
+# 文件存放目录（普通文件/临时文件）。留空 = data_root/file
+# 普通文件按 file_root/YYYY-MM-DD/ 归档，图片按 file_root/image/YYYY-MM-DD/ 归档
 file_root = ""
 
 # ============================================================
