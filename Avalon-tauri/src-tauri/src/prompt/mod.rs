@@ -23,6 +23,8 @@ pub struct PromptAssembler {
     registry: Arc<SoulRegistry>,
     /// 技能注册表（None = 不注入技能清单）
     skills: Option<Arc<SkillRegistry>>,
+    /// 是否注入通讯录使用规则（通讯录工具未启用时保持关闭）
+    contacts: bool,
     /// None = 尚未加载；Some = 已缓存的注入片段列表（灵魂条目，不含动态技能清单）
     cache: RwLock<Option<Vec<String>>>,
 }
@@ -33,6 +35,7 @@ impl PromptAssembler {
         Self {
             registry,
             skills: None,
+            contacts: false,
             cache: RwLock::new(None),
         }
     }
@@ -40,6 +43,12 @@ impl PromptAssembler {
     /// 注入技能注册表，启用「可用技能」清单注入
     pub fn with_skills(mut self, skills: Arc<SkillRegistry>) -> Self {
         self.skills = Some(skills);
+        self
+    }
+
+    /// 启用通讯录使用规则（与 ToolSet::with_contacts 同步开启）
+    pub fn with_contacts_guidance(mut self) -> Self {
+        self.contacts = true;
         self
     }
 
@@ -71,6 +80,9 @@ impl PromptAssembler {
                 }
             }
         }
+        if self.contacts {
+            files.push(render_contacts_section());
+        }
         Ok(assemble_chat_system_prompt(&files, session_context))
     }
 }
@@ -82,6 +94,22 @@ fn render_skills_section(skills: &[Skill]) -> String {
         s.push_str(&format!("- {}: {}\n", sk.name, sk.description));
     }
     s.trim_end().to_string()
+}
+
+/// 渲染通讯录使用规则。通讯录是智能体主动维护的长期认知，不是消息日志
+fn render_contacts_section() -> String {
+    [
+        "=====通讯录使用规则=====",
+        "- 通讯录只记录长期认识的用户，字段只有 id、name、画像；用户说过的话在会话历史里，不重复记。",
+        "- 外部渠道消息的来源标记里有 sender_id（如 feishu:ou_xxx / qq:xxx），可直接作为该用户的规范 id。",
+        "- 第一次遇到值得长期记住的用户，调用 record_user；已经有记录就调用 update_user 补充或修正。",
+        "- 需要确认某个用户是谁时，先 get_user；没有记录就承认不认识，不要编造身份。",
+        "- 只有对方明确透露身份、偏好、关注点，或纠正先前信息时才更新；不要每轮都写，不记寒暄和一次性内容。",
+        "- 画像只写对后续协作有用的信息；不记录密码、密钥、证件号等敏感内容，也不推断敏感身份。",
+        "- profile 是整体替换：更新前先 get_user，保留仍然有效的旧内容。",
+        "- 除非主人明确要求，不要主动罗列通讯录或他人的画像。",
+    ]
+    .join("\n")
 }
 
 /// 纯函数：文件列表 + 会话上下文 → 完整 system prompt（工具走原生 tools 参数，不再写进提示词）

@@ -25,3 +25,23 @@ export async function getFeishuStatus(): Promise<ChannelStatus> {
 export async function testFeishuConnection(): Promise<void> {
   return invoke<void>('feishu_test_connection');
 }
+
+/** 启动 QQ 渠道。已在运行则先停后启 */
+export async function startQq(): Promise<void> {
+  return invoke<void>('qq_start');
+}
+
+/** 停止 QQ 渠道 */
+export async function stopQq(): Promise<void> {
+  return invoke<void>('qq_stop');
+}
+
+/** 查询 QQ 渠道当前状态 */
+export async function getQqStatus(): Promise<ChannelStatus> {
+  return invoke<ChannelStatus>('qq_status');
+}
+
+/** 测试 QQ 凭证：取一次 token 与网关地址，不建立长连接 */
+export async function testQqConnection(): Promise<void> {
+  return invoke<void>('qq_test_connection');
+}

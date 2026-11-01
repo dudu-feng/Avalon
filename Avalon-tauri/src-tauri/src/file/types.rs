@@ -83,6 +83,8 @@ pub enum FileSource {
     Upload,
     /// 飞书渠道下载
     Feishu,
+    /// QQ 渠道下载
+    Qq,
     /// Agent 生成（绘图、表情包、桌宠素材）
     Generated,
     /// Agent 从网络下载
@@ -99,6 +101,7 @@ impl FileSource {
         match self {
             Self::Upload => "up",
             Self::Feishu => "fs",
+            Self::Qq => "qq",
             Self::Generated => "gen",
             Self::Web => "web",
             Self::Clipboard => "clip",
@@ -112,6 +115,7 @@ impl FileSource {
         match value.trim().to_ascii_lowercase().as_str() {
             "upload" | "up" => Some(Self::Upload),
             "feishu" | "fs" => Some(Self::Feishu),
+            "qq" => Some(Self::Qq),
             "generated" | "gen" => Some(Self::Generated),
             "web" => Some(Self::Web),
             "clipboard" | "clip" => Some(Self::Clipboard),

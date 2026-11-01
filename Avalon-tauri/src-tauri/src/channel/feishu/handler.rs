@@ -7,19 +7,18 @@
 // 之所以要自己去重：ws.rs 是「收到就 ACK」，但网络抖动、服务端重投都可能让同一个
 // event_id 到达两次，没有去重就会把同一句话跑两遍 ReAct。
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
-use tokio::sync::Mutex as AsyncMutex;
 
 use super::api::FeishuApi;
 use super::reaction::{ReactionGate, ReactionTracker};
 use super::stream;
+use crate::channel::common::{sanitize_channel, Dedup, PendingImages, SlotRegistry, MAX_WAITING};
 use crate::config::{ConfigStore, FeishuConfig, FeishuSessionMode};
 use crate::engine::{Engine, EngineEvent, UserInput};
 use crate::file::{FileSource, SaveRequest};
@@ -29,103 +28,12 @@ use crate::vision::ChatAttachment;
 const DEDUP_TTL: Duration = Duration::from_secs(600);
 /// 去重表容量上限，超出后清理最旧的一半，防止长期运行内存无限增长
 const DEDUP_CAPACITY: usize = 1024;
-/// 单个会话最多允许多少条消息排队等待。超出直接告知用户，避免无限积压
-const MAX_WAITING: usize = 3;
-/// 已接收但还没等到用户文字说明的图片保留时长。
-/// 超过后丢弃，避免很久之后的一句文字误关联旧图
-const PENDING_IMAGE_TTL: Duration = Duration::from_secs(600);
 
 /// 统一模式下所有飞书消息共用的会话名。
 /// 刻意避开裸 "feishu" —— 那是 Python 版遗留会话文件的名字，两边的
 /// 消息数组字段名不同（Python 是 session，Rust 是 messages），
 /// 复用会让旧数据在下次写回时被静默清空。
 const UNIFIED_CHANNEL: &str = "feishu_unified";
-
-/// 每个会话一把异步锁，保证同一会话内的消息严格串行。
-///
-/// 统一模式下所有聊天共享一个会话文件，并发处理会互相覆盖（丢更新）——
-/// Python 版为此用了全局 FIFO 队列。这里用 per-channel 锁达到同样效果，
-/// 且隔离模式下不同聊天仍可并发，不需要两套代码。
-struct ChannelSlot {
-    lock: AsyncMutex<()>,
-    waiting: AtomicUsize,
-}
-
-/// 已落盘、等待与下一条文字消息一起处理的图片。
-/// 飞书的图片与文字是两条独立消息，不能收到图片就立刻调用视觉模型
-struct PendingImage {
-    path: String,
-    received_at: Instant,
-}
-
-/// 待合并图片队列，按会话 key 分组。
-///
-/// 抽成独立结构而不是散在 handler 里的 HashMap：过期清理与「连发多图只问
-/// 一次」的判定都能直接测，不用拉起 API 与 engine
-#[derive(Default)]
-struct PendingImages {
-    map: HashMap<String, Vec<PendingImage>>,
-}
-
-impl PendingImages {
-    /// 存入一张图片，返回本次是否需要发送询问文本。
-    /// 该会话此前没有待处理图片时为 true —— 连发多张只问一次
-    fn push(&mut self, channel: String, path: String, now: Instant) -> bool {
-        // 顺手清理所有会话的过期项，避免长期运行内存缓慢增长
-        self.map.retain(|_, list| {
-            list.retain(|p| now.duration_since(p.received_at) < PENDING_IMAGE_TTL);
-            !list.is_empty()
-        });
-        let list = self.map.entry(channel).or_default();
-        let ask = list.is_empty();
-        list.push(PendingImage {
-            path,
-            received_at: now,
-        });
-        ask
-    }
-
-    /// 取走某会话的图片；过期项直接丢弃
-    fn take(&mut self, channel: &str, now: Instant) -> Vec<String> {
-        self.map
-            .remove(channel)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|p| now.duration_since(p.received_at) < PENDING_IMAGE_TTL)
-            .map(|p| p.path)
-            .collect()
-    }
-}
-
-/// event_id 去重表
-struct Dedup {
-    seen: HashMap<String, Instant>,
-}
-
-impl Dedup {
-    fn new() -> Self {
-        Self {
-            seen: HashMap::new(),
-        }
-    }
-
-    /// 首次出现返回 true；重复返回 false
-    fn accept(&mut self, id: &str) -> bool {
-        let now = Instant::now();
-        self.seen.retain(|_, t| now.duration_since(*t) < DEDUP_TTL);
-
-        if self.seen.len() >= DEDUP_CAPACITY {
-            // TTL 没来得及清理时的兜底：按时间排序砍掉较旧的一半
-            let mut entries: Vec<_> = self.seen.iter().map(|(k, v)| (k.clone(), *v)).collect();
-            entries.sort_by_key(|(_, t)| *t);
-            for (k, _) in entries.into_iter().take(DEDUP_CAPACITY / 2) {
-                self.seen.remove(&k);
-            }
-        }
-
-        self.seen.insert(id.to_string(), now).is_none()
-    }
-}
 
 /// 一条待处理的飞书消息，已从事件 JSON 中提取好
 struct IncomingMessage {
@@ -170,18 +78,20 @@ impl IncomingMessage {
 
     /// 落盘用的结构化来源信息，对齐 Python 版 _build_meta。
     ///
-    /// 只存 open_id 不查通讯录 —— 姓名交给后续的飞书工具按需查询。
+    /// 只存 open_id 不查通讯录 —— 姓名交给通讯录工具按需维护。
+    /// sender_id 是带渠道前缀的规范 id（feishu:ou_xxx），供通讯录工具判断
+    /// 「当前是谁」；sender 保留裸 open_id 兼容旧会话。
     ///
     /// 这份 meta 会随每条历史消息进 system prompt，所以恒定值一律不存：
-    /// is_bot 恒为 false（parse_message 已过滤非真人消息）；渠道名也不存 ——
-    /// id 的 oc_ / om_ / ou_ 前缀本身就标明了来源，真接入第二个渠道时
-    /// 那边自有自己的 meta 结构，不靠这个字段区分。
+    /// is_bot 恒为 false（parse_message 已过滤非真人消息）；渠道名不单独存 ——
+    /// sender_id 的前缀已经标明了来源。
     fn meta(&self) -> Value {
         json!({
             "message_id": self.message_id,
             "chat_id": self.chat_id,
             "chat_type": self.chat_type,
             "sender": self.sender_open_id,
+            "sender_id": format!("feishu:{}", self.sender_open_id),
             "content_type": self.message_type,
         })
     }
@@ -199,21 +109,8 @@ impl IncomingMessage {
         } else {
             "飞书私聊"
         };
-        format!("[{scene} | {}]\n{}", self.sender_open_id, text)
+        format!("[{scene} | feishu:{}]\n{}", self.sender_open_id, text)
     }
-}
-
-/// channel 名会当作文件名使用，只保留安全字符
-fn sanitize_channel(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 pub struct MessageHandler {
@@ -226,7 +123,7 @@ pub struct MessageHandler {
     store: ConfigStore,
     dedup: Mutex<Dedup>,
     /// 每会话一把串行锁
-    slots: Mutex<HashMap<String, Arc<ChannelSlot>>>,
+    slots: SlotRegistry,
     /// 等待用户文字说明的图片，按会话 key 分组
     pending_images: Mutex<PendingImages>,
     /// 表情能力的熔断开关，跨消息共享
@@ -247,8 +144,8 @@ impl MessageHandler {
             config,
             bot_open_id,
             store,
-            dedup: Mutex::new(Dedup::new()),
-            slots: Mutex::new(HashMap::new()),
+            dedup: Mutex::new(Dedup::new(DEDUP_TTL, DEDUP_CAPACITY)),
+            slots: SlotRegistry::new(),
             pending_images: Mutex::new(PendingImages::default()),
             reactions: ReactionGate::new(),
         }
@@ -282,18 +179,8 @@ impl MessageHandler {
     }
 
     /// 取（或新建）某会话的串行锁
-    fn slot(&self, channel: &str) -> Arc<ChannelSlot> {
-        self.slots
-            .lock()
-            .unwrap()
-            .entry(channel.to_string())
-            .or_insert_with(|| {
-                Arc::new(ChannelSlot {
-                    lock: AsyncMutex::new(()),
-                    waiting: AtomicUsize::new(0),
-                })
-            })
-            .clone()
+    fn slot(&self, channel: &str) -> Arc<crate::channel::common::ChannelSlot> {
+        self.slots.slot(channel)
     }
 
     /// 处理一条原始事件。内部吞掉所有错误，只打日志 —— 单条消息失败不该影响长连接
@@ -438,7 +325,10 @@ impl MessageHandler {
             // 表情打不上（没权限）才退回发文本，否则用户就完全没有反馈了
             if !mark.set(&cfg.rejected_reaction).await {
                 self.api
-                    .send_text(&msg.chat_id, "我这边排队的消息有点多，等我忙完这几条再来吧。")
+                    .send_text(
+                        &msg.chat_id,
+                        "我这边排队的消息有点多，等我忙完这几条再来吧。",
+                    )
                     .await?;
             }
             return Ok(());
@@ -533,11 +423,8 @@ impl MessageHandler {
 
         // on_event 是同步闭包，里面不能 await，所以所有推送都挪到 pump 任务里
         let (tx, rx) = mpsc::unbounded_channel::<EngineEvent>();
-        let pump = tauri::async_runtime::spawn(stream::pump(
-            self.api.clone(),
-            msg.chat_id.clone(),
-            rx,
-        ));
+        let pump =
+            tauri::async_runtime::spawn(stream::pump(self.api.clone(), msg.chat_id.clone(), rx));
 
         let run_result = self
             .engine
@@ -578,7 +465,6 @@ impl MessageHandler {
         Ok(())
     }
 
-
     /// 从事件 JSON 中提取消息要素
     fn parse_message(&self, event: &Value) -> Option<IncomingMessage> {
         let message = event.pointer("/event/message")?;
@@ -616,7 +502,10 @@ impl MessageHandler {
             .to_string();
 
         // content 是「JSON 的字符串形式」，要二次解析
-        let raw_content = message.get("content").and_then(Value::as_str).unwrap_or("{}");
+        let raw_content = message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("{}");
         let content: Value = serde_json::from_str(raw_content).unwrap_or(Value::Null);
         let mut text = content
             .get("text")
@@ -668,15 +557,25 @@ impl MessageHandler {
 #[cfg(test)]
 mod pending_tests {
     use super::*;
+    use crate::channel::common::pending::PENDING_IMAGE_TTL;
 
     #[test]
     fn multiple_images_in_one_channel_ask_once() {
         let mut pending = PendingImages::default();
         let now = Instant::now();
 
-        assert!(pending.push("chat-a".into(), "1.png".into(), now), "首张应询问");
-        assert!(!pending.push("chat-a".into(), "2.png".into(), now), "连发第二张不再询问");
-        assert!(pending.push("chat-b".into(), "3.png".into(), now), "不同会话各自询问");
+        assert!(
+            pending.push("chat-a".into(), "1.png".into(), now),
+            "首张应询问"
+        );
+        assert!(
+            !pending.push("chat-a".into(), "2.png".into(), now),
+            "连发第二张不再询问"
+        );
+        assert!(
+            pending.push("chat-b".into(), "3.png".into(), now),
+            "不同会话各自询问"
+        );
 
         assert_eq!(pending.take("chat-a", now), vec!["1.png", "2.png"]);
         assert!(pending.take("chat-a", now).is_empty(), "取走后应清空");

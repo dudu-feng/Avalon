@@ -111,6 +111,34 @@ failed_reaction = "ERROR"                 # 处理失败
 rejected_reaction = "Sigh"                # 积压超限，本条不处理
 
 # ============================================================
+#  QQ 渠道（QQ 开放平台官方机器人 + WebSocket 长连接）
+#  个人主体只能加入自己是群主/管理员的群，私聊需添加开发体验用户。
+#  OneBot 11（NapCat 等）仅预留配置，默认不实现：非官方协议，存在封号风险。
+# ============================================================
+[qq]
+enabled = false                           # 开关，关闭时启动不建立任何连接
+backend = "official"                      # official（已实现）| onebot（仅预留，未实现）
+session_mode = "isolated"                 # isolated = 每群/私聊独立；unified = 全部汇入一个会话
+group_require_mention = true              # 群聊只响应 @ 机器人的消息
+allow_users = []                          # openid 白名单，留空 = 不限制
+owner_open_id = ""                        # 主人 openid，qq_notify_owner 的收件人；留空则由第一个私聊用户自动填充
+image_ack_text = "已收到图片，请问需要我做什么？可以直接回复你的问题，我会结合这张图回答。"
+
+[qq.official]
+app_id = ""                               # 开放平台 AppID
+app_secret = ""                           # 敏感（支持环境变量 AVALON_QQ_APP_SECRET 覆盖）
+sandbox = true                            # true = sandbox.api.sgroup.qq.com；false = api.bot.qq.com
+intents = 33554432                        # GROUP_AND_C2C_EVENT = 1 << 25
+stream_c2c = true                         # 单聊默认原生流式；未开通能力时自动退回非流式
+timeout_secs = 30
+
+[qq.onebot]
+# 实验性预留：默认不实现，设置页不提供可用输入
+ws_url = "ws://127.0.0.1:3001"
+access_token = ""                         # 支持环境变量 AVALON_QQ_ONEBOT_TOKEN 覆盖
+self_id = 0
+
+# ============================================================
 #  联网搜索（AnySearch）
 #  开启后模型可主动搜索网页、读取网页正文。注意查询词会发往第三方服务。
 # ============================================================
@@ -240,6 +268,23 @@ pub fn validate(config: &AppConfig) -> Vec<String> {
         }
     }
 
+    // 0.1 QQ 渠道：OneBot 只有配置结构、没有实现，选了就必须明确告知
+    if config.qq.enabled {
+        if config.qq.backend == QqBackend::Onebot {
+            warnings.push(
+                "QQ 渠道选择了 onebot 后端，但该后端尚未实现；请改用 official，或先停用 QQ 渠道"
+                    .to_string(),
+            );
+        } else {
+            if config.qq.official.app_id.is_empty() {
+                warnings.push("QQ 渠道已启用但 AppID 为空".to_string());
+            }
+            if config.qq.official.app_secret.is_empty() {
+                warnings.push("QQ 渠道已启用但 AppSecret 为空".to_string());
+            }
+        }
+    }
+
     // 0.5 工具沙箱：两条都只是提醒，不阻断启动 —— 用户可能就是想临时关掉某项。
     //     显式配成空（禁用）不告警，那是明确的意图；配了但不生效才需要说
     for root in config.workspace_roots() {
@@ -315,13 +360,17 @@ pub fn validate(config: &AppConfig) -> Vec<String> {
                 ));
             }
         } else {
-            warnings.push(format!(
-                "视觉模型 '{}' 不在模型列表中",
-                config.vision.model
-            ));
+            warnings.push(format!("视觉模型 '{}' 不在模型列表中", config.vision.model));
         }
         if config.vision.ocr.enabled {
-            match config.vision.ocr.engine.trim().to_ascii_lowercase().as_str() {
+            match config
+                .vision
+                .ocr
+                .engine
+                .trim()
+                .to_ascii_lowercase()
+                .as_str()
+            {
                 "none" | "" => warnings.push("视觉 OCR 已启用但 engine = none".to_string()),
                 "onnx" => {
                     // 模型是外部资产，缺失时工具不会注册；启动时就提示，免得调用时才报错。
@@ -396,13 +445,17 @@ pub(crate) fn migrate_legacy_llm(content: &str, config: &mut AppConfig) -> Resul
 
     #[derive(Deserialize)]
     struct LegacyLlm {
-        #[serde(default)] api_key: String,
-        #[serde(default)] model: String,
-        #[serde(default)] base_url: String,
+        #[serde(default)]
+        api_key: String,
+        #[serde(default)]
+        model: String,
+        #[serde(default)]
+        base_url: String,
     }
     #[derive(Deserialize)]
     struct LegacyConfig {
-        #[serde(default)] llm: Option<LegacyLlm>,
+        #[serde(default)]
+        llm: Option<LegacyLlm>,
     }
 
     let Ok(legacy) = toml::from_str::<LegacyConfig>(content) else {
@@ -429,7 +482,11 @@ fn apply_env_overrides(config: &mut AppConfig) {
     if let Ok(v) = std::env::var("AVALON_LLM_API_KEY") {
         if !v.is_empty() {
             // 覆盖活跃模型的 key；无活跃则覆盖第一个
-            if let Some(model) = config.models.iter_mut().find(|m| m.name == config.active_model) {
+            if let Some(model) = config
+                .models
+                .iter_mut()
+                .find(|m| m.name == config.active_model)
+            {
                 model.key = v;
             } else if let Some(first) = config.models.first_mut() {
                 first.key = v;
@@ -440,6 +497,18 @@ fn apply_env_overrides(config: &mut AppConfig) {
     if let Ok(v) = std::env::var("AVALON_FEISHU_APP_SECRET") {
         if !v.is_empty() {
             config.feishu.app_secret = v;
+        }
+    }
+
+    if let Ok(v) = std::env::var("AVALON_QQ_APP_SECRET") {
+        if !v.is_empty() {
+            config.qq.official.app_secret = v;
+        }
+    }
+
+    if let Ok(v) = std::env::var("AVALON_QQ_ONEBOT_TOKEN") {
+        if !v.is_empty() {
+            config.qq.onebot.access_token = v;
         }
     }
 

@@ -104,6 +104,12 @@ impl AppConfig {
         self.data_root().join("memory/session/index.json")
     }
 
+    /// 渠道通讯录：data_root/channel/contacts.json。
+    /// 与 memory 平级 —— 通讯录是「认识谁」的长期数据，不属于会话生命周期
+    pub fn channel_contacts_path(&self) -> PathBuf {
+        self.data_root().join("channel/contacts.json")
+    }
+
     pub fn vector_db_path(&self) -> PathBuf {
         self.data_root().join("vector/vector_db")
     }

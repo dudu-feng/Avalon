@@ -96,6 +96,34 @@ failed_reaction = "ERROR"                 # 处理失败
 rejected_reaction = "Sigh"                # 积压超限，本条不处理
 
 # ============================================================
+#  QQ 渠道（QQ 开放平台官方机器人 + WebSocket 长连接）
+#  个人主体只能加入自己是群主/管理员的群，私聊需添加开发体验用户。
+#  OneBot 11（NapCat 等）仅预留配置，默认不实现：非官方协议，存在封号风险。
+# ============================================================
+[qq]
+enabled = false                           # 开关，关闭时启动不建立任何连接
+backend = "official"                      # official（已实现）| onebot（仅预留，未实现）
+session_mode = "isolated"                 # isolated = 每群/私聊独立；unified = 全部汇入一个会话
+group_require_mention = true              # 群聊只响应 @ 机器人的消息
+allow_users = []                          # openid 白名单，留空 = 不限制
+owner_open_id = ""                        # 主人 openid，qq_notify_owner 的收件人；留空则由第一个私聊用户自动填充
+image_ack_text = "已收到图片，请问需要我做什么？可以直接回复你的问题，我会结合这张图回答。"
+
+[qq.official]
+app_id = ""                               # 开放平台 AppID
+app_secret = ""                           # 敏感（支持环境变量 AVALON_QQ_APP_SECRET 覆盖）
+sandbox = true                            # true = sandbox.api.sgroup.qq.com；false = api.bot.qq.com
+intents = 33554432                        # GROUP_AND_C2C_EVENT = 1 << 25
+stream_c2c = true                         # 单聊默认原生流式；未开通能力时自动退回非流式
+timeout_secs = 30
+
+[qq.onebot]
+# 实验性预留：默认不实现，设置页不提供可用输入
+ws_url = "ws://127.0.0.1:3001"
+access_token = ""                         # 支持环境变量 AVALON_QQ_ONEBOT_TOKEN 覆盖
+self_id = 0
+
+# ============================================================
 #  联网搜索（AnySearch）
 #  开启后模型可主动搜索网页、读取网页正文。注意查询词会发往第三方服务。
 # ============================================================

@@ -56,7 +56,10 @@ pub fn run() {
         if let Err(e) = std::fs::create_dir_all(&ws) {
             boot_log.push((
                 log::Level::Warn,
-                format!("创建工作区目录失败（文件工具将不可用）: {} - {e}", ws.display()),
+                format!(
+                    "创建工作区目录失败（文件工具将不可用）: {} - {e}",
+                    ws.display()
+                ),
             ));
         }
     }
@@ -116,7 +119,9 @@ pub fn run() {
     let skill_registry: Arc<skill::SkillRegistry> =
         Arc::new(skill::SkillRegistry::new(cfg.skills_dir()));
     let prompt_asm: Arc<prompt::PromptAssembler> = Arc::new(
-        prompt::PromptAssembler::new(soul_registry.clone()).with_skills(skill_registry.clone()),
+        prompt::PromptAssembler::new(soul_registry.clone())
+            .with_skills(skill_registry.clone())
+            .with_contacts_guidance(),
     );
     let usage_store: Arc<usage::UsageStore> = Arc::new(usage::UsageStore::new(cfg.usage_path()));
     // OCR 引擎只构造句柄，模型在首次 ocr_image 调用时才加载（启动不占内存）
@@ -131,14 +136,23 @@ pub fn run() {
     ));
     let task_store: Arc<scheduler::TaskStore> =
         Arc::new(scheduler::TaskStore::new(cfg.scheduler_path()));
+    // 渠道通讯录：只记录智能体主动登记的用户（id / name / profile）。
+    // 与消息流程解耦，渠道 handler 不写它
+    let contact_store: Arc<channel::contact::ContactStore> = Arc::new(
+        channel::contact::ContactStore::new(cfg.channel_contacts_path()),
+    );
     // 飞书发送句柄。必须先于 ToolSet 创建 —— 工具层拿的是这个 Arc，
     // 渠道启动时才往里填 api。空句柄下工具会如实回答「渠道未运行」
     let feishu_handle = Arc::new(channel::FeishuHandle::new());
+    let qq_handle = Arc::new(channel::QqHandle::new());
     let mut tool_set = tool::ToolSet::new()
         .with_memory(memory_index)
+        .with_session(session_store.clone())
         .with_config(store.clone())
+        .with_contacts(contact_store.clone())
         .with_scheduler(task_store.clone())
         .with_feishu(feishu_handle.clone())
+        .with_qq(qq_handle.clone())
         .with_soul(soul_registry.clone())
         .with_skill(skill_registry.clone())
         .with_prompt(prompt_asm.clone())
@@ -166,10 +180,15 @@ pub fn run() {
     let scheduler_store = task_store.clone();
 
     // 渠道对接层：与 scheduler 一样，拿 engine 句柄在后台驱动 ReAct
-    let channels = Arc::new(channel::ChannelManager::new(feishu_handle, store.clone()));
+    let channels = Arc::new(channel::ChannelManager::new(
+        feishu_handle,
+        qq_handle,
+        store.clone(),
+    ));
     let channel_engine = engine.clone();
     let channel_manager = channels.clone();
     let feishu_cfg = cfg.feishu.clone();
+    let qq_cfg = cfg.qq.clone();
 
     // 4. 构建 Tauri 应用
     tauri::Builder::default()
@@ -194,6 +213,7 @@ pub fn run() {
         .manage(usage_store)
         .manage(vision_service)
         .manage(task_store)
+        .manage(contact_store)
         .manage(soul_registry)
         .manage(skill_registry)
         .manage(prompt_asm)
@@ -239,6 +259,13 @@ pub fn run() {
             commands::feishu_stop,
             commands::feishu_status,
             commands::feishu_test_connection,
+            commands::qq_start,
+            commands::qq_stop,
+            commands::qq_status,
+            commands::qq_test_connection,
+            commands::list_contacts,
+            commands::update_contact,
+            commands::delete_contact,
             commands::list_soul_entries,
             commands::get_soul_entry,
             commands::create_soul_entry,
@@ -277,20 +304,24 @@ pub fn run() {
                 });
             }
             // 启动定时任务心跳循环（30s tick，静默执行 + 全局事件通知）
-            let scheduler = scheduler::Scheduler::new(
-                scheduler_engine,
-                scheduler_store,
-                app.handle().clone(),
-            );
+            let scheduler =
+                scheduler::Scheduler::new(scheduler_engine, scheduler_store, app.handle().clone());
             tauri::async_runtime::spawn(async move {
                 scheduler.run_loop(std::time::Duration::from_secs(30)).await;
             });
 
-            // 飞书渠道：配置开启且凭证齐全才自启，否则静默跳过
+            // 渠道自启：配置开启且凭证齐全才连，否则静默跳过。
+            // 两个渠道互相独立，一个失败不影响另一个
             if feishu_cfg.is_ready() {
-                match channel_manager.start(feishu_cfg, channel_engine) {
+                match channel_manager.start_feishu(feishu_cfg, channel_engine.clone()) {
                     Ok(()) => log::info!(target: "feishu", "渠道已随应用自启"),
                     Err(e) => log::error!(target: "feishu", "渠道自启失败: {e}"),
+                }
+            }
+            if qq_cfg.is_ready() {
+                match channel_manager.start_qq(qq_cfg, channel_engine) {
+                    Ok(()) => log::info!(target: "qq", "渠道已随应用自启"),
+                    Err(e) => log::error!(target: "qq", "渠道自启失败: {e}"),
                 }
             }
 

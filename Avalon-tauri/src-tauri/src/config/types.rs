@@ -31,6 +31,9 @@ pub struct AppConfig {
     /// 飞书渠道配置（新增段，老配置文件缺失时取默认值）
     #[serde(default)]
     pub feishu: FeishuConfig,
+    /// QQ 渠道配置（新增段，老配置文件缺失时取默认值）
+    #[serde(default)]
+    pub qq: QqConfig,
     /// 联网搜索配置（新增段，老配置文件缺失时取默认值）
     #[serde(default)]
     pub search: SearchConfig,
@@ -250,6 +253,147 @@ impl FeishuConfig {
     }
 }
 
+/// QQ 渠道的后端。OneBot 11 只预留配置结构，默认不实现
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QqBackend {
+    /// QQ 开放平台官方机器人（唯一的正式实现）
+    Official,
+    /// OneBot 11 协议端（NapCat 等）。非官方、封号风险，代码未实现
+    Onebot,
+}
+
+/// QQ 会话隔离粒度，语义与飞书一致
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QqSessionMode {
+    /// 每个群 / 私聊独立上下文
+    Isolated,
+    /// 全部 QQ 消息汇入同一个会话
+    Unified,
+}
+
+/// QQ 官方机器人配置，对应 [qq.official]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QqOfficialConfig {
+    /// 开放平台 AppID
+    pub app_id: String,
+    /// AppSecret（敏感，支持环境变量 AVALON_QQ_APP_SECRET 覆盖）
+    pub app_secret: String,
+    /// 沙箱环境。true = sandbox.api.sgroup.qq.com
+    pub sandbox: bool,
+    /// 订阅的 intents。群聊 + 单聊消息 = GROUP_AND_C2C_EVENT = 1 << 25
+    pub intents: i64,
+    /// C2C 是否尝试原生流式；群聊始终非流式。false 仅用于排障
+    pub stream_c2c: bool,
+    /// HTTP 请求超时秒数
+    pub timeout_secs: u64,
+}
+
+impl Default for QqOfficialConfig {
+    fn default() -> Self {
+        Self {
+            app_id: String::new(),
+            app_secret: String::new(),
+            sandbox: true,
+            intents: 1 << 25,
+            stream_c2c: true,
+            timeout_secs: 30,
+        }
+    }
+}
+
+impl QqOfficialConfig {
+    /// 正式环境域名。官方 2026-08 起统一到 api.bot.qq.com；
+    /// 旧域名 api.sgroup.qq.com 仍被大量客户端使用，这里按最新公告取新域名
+    pub fn api_base(&self) -> &'static str {
+        if self.sandbox {
+            "https://sandbox.api.sgroup.qq.com"
+        } else {
+            "https://api.bot.qq.com"
+        }
+    }
+
+    /// 取 token 的端点与 API 域名不同，沙箱/正式共用
+    pub fn token_url(&self) -> &'static str {
+        "https://bots.qq.com/app/getAppAccessToken"
+    }
+
+    /// intents 为 0 时退回群聊 + 单聊事件，避免写错一个数字后什么都不收
+    pub fn effective_intents(&self) -> i64 {
+        if self.intents <= 0 {
+            1 << 25
+        } else {
+            self.intents
+        }
+    }
+}
+
+/// OneBot 11 配置，对应 [qq.onebot]。
+/// 仅预留结构：不实现代码、设置页标注未支持，避免把非官方路径做成默认能力
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QqOnebotConfig {
+    /// NapCat 等协议端的正向 WebSocket 地址
+    pub ws_url: String,
+    /// 协议端 access_token（敏感，支持 AVALON_QQ_ONEBOT_TOKEN 覆盖）
+    pub access_token: String,
+    /// 机器人 QQ 号，用于判断 at 段
+    pub self_id: i64,
+}
+
+/// QQ 渠道配置，对应 [qq]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QqConfig {
+    /// 是否启用。关闭时应用启动不建立任何连接
+    pub enabled: bool,
+    /// 后端。official 是唯一实现的路径
+    pub backend: QqBackend,
+    /// 会话隔离粒度
+    pub session_mode: QqSessionMode,
+    /// 群聊是否只响应 @ 机器人的消息。全量群消息模式下尤其重要
+    pub group_require_mention: bool,
+    /// 允许对话的用户 openid 白名单，空列表 = 不限制
+    pub allow_users: Vec<String>,
+    /// 主人 openid，qq_notify_owner 的收件人；留空时由第一个私聊用户自动填充
+    pub owner_open_id: String,
+    /// 收到纯图片消息后、等用户说明意图前发送的询问文本。
+    /// 留空 = 不询问，图片立即交给模型处理
+    pub image_ack_text: String,
+    pub official: QqOfficialConfig,
+    pub onebot: QqOnebotConfig,
+}
+
+impl Default for QqConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: QqBackend::Official,
+            session_mode: QqSessionMode::Isolated,
+            group_require_mention: true,
+            allow_users: Vec::new(),
+            owner_open_id: String::new(),
+            image_ack_text:
+                "已收到图片，请问需要我做什么？可以直接回复你的问题，我会结合这张图回答。"
+                    .to_string(),
+            official: QqOfficialConfig::default(),
+            onebot: QqOnebotConfig::default(),
+        }
+    }
+}
+
+impl QqConfig {
+    /// 是否具备启动条件：开关打开、选的是官方后端且凭证齐全
+    pub fn is_ready(&self) -> bool {
+        self.enabled
+            && self.backend == QqBackend::Official
+            && !self.official.app_id.is_empty()
+            && !self.official.app_secret.is_empty()
+    }
+}
+
 /// Agent 基础工具（文件 / 终端）的沙箱配置。
 ///
 /// 两条边界对所有来源统一生效 —— 不按渠道分档。桌面端的模型同样会被
@@ -285,10 +429,17 @@ impl Default for ToolsConfig {
             // 且功能已被 read_file 覆盖）与 git（-c core.pager 是任意命令执行）。
             // dir / type 不在列表里不是遗漏 —— 它们是 cmd 内建，没有对应 exe
             shell_allowlist: if cfg!(windows) {
-                ["where", "ping", "ipconfig", "tasklist", "systeminfo", "hostname"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect()
+                [
+                    "where",
+                    "ping",
+                    "ipconfig",
+                    "tasklist",
+                    "systeminfo",
+                    "hostname",
+                ]
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
             } else {
                 ["ls", "ping", "ps", "uname", "hostname", "df"]
                     .iter()

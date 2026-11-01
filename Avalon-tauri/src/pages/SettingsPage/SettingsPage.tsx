@@ -13,6 +13,8 @@ import {
 import {
   ModelCard,
   FeishuSettings,
+  QqSettings,
+  ContactsSettings,
   SandboxSettings,
   PathInput,
   VisionSettings,
@@ -491,13 +493,21 @@ export function SettingsPage() {
         </Card>
       )}
 
-      {/* 渠道：飞书对接配置与连接控制 */}
+      {/* 渠道：飞书 / QQ 对接配置与连接控制 */}
       {tab === 'channel' && (
-        <FeishuSettings
-          config={config.feishu}
-          onChange={(next) => update('feishu', next)}
-          dirty={dirty}
-        />
+        <>
+          <FeishuSettings
+            config={config.feishu}
+            onChange={(next) => update('feishu', next)}
+            dirty={dirty}
+          />
+          <QqSettings
+            config={config.qq}
+            onChange={(next) => update('qq', next)}
+            dirty={dirty}
+          />
+          <ContactsSettings />
+        </>
       )}
 
       {/* 存储：向量库 + 路径 + 维护 */}

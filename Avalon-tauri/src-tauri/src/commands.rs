@@ -9,7 +9,8 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::channel::{ChannelManager, ChannelStatus};
+use crate::channel::contact::{Contact, ContactStore};
+use crate::channel::{ChannelKind, ChannelManager, ChannelStatus};
 use crate::config::{AppConfig, ConfigStore};
 use crate::engine::{Engine, EngineEvent};
 use crate::file::{
@@ -18,10 +19,10 @@ use crate::file::{
 };
 use crate::llm::{CompressResult, LlmState};
 use crate::prompt::{build_compress_prompt, PromptAssembler};
-use crate::soul::{EntryCategory, SoulEntry, SoulEntryDetail, SoulRegistry};
-use crate::skill::{Skill, SkillDetail, SkillRegistry};
 use crate::scheduler::{parse_schedule, ScheduledTask, TaskSource, TaskStore};
 use crate::session::{ContextUsage, LoadHistoryResult, SessionData, SessionMeta};
+use crate::skill::{Skill, SkillDetail, SkillRegistry};
+use crate::soul::{EntryCategory, SoulEntry, SoulEntryDetail, SoulRegistry};
 use crate::usage::{DailyUsageRow, UsageStore};
 use crate::vector::{RebuildProgress, RebuildStats};
 use crate::vision::{ChatAttachment, Observation, VisionCapability, VisionService};
@@ -36,7 +37,10 @@ pub fn get_config(store: State<'_, ConfigStore>) -> Result<AppConfig, String> {
 
 /// 切换活跃模型（校验存在后写回配置），返回校验警告列表
 #[tauri::command]
-pub fn set_active_model(name: String, store: State<'_, ConfigStore>) -> Result<Vec<String>, String> {
+pub fn set_active_model(
+    name: String,
+    store: State<'_, ConfigStore>,
+) -> Result<Vec<String>, String> {
     store.set_active_model(&name).map_err(|e| e.to_string())
 }
 
@@ -102,8 +106,7 @@ pub async fn save_attachment(
     message_id: Option<String>,
     store: State<'_, Arc<FileStore>>,
 ) -> Result<StoredFile, String> {
-    let source = FileSource::parse(&source)
-        .ok_or_else(|| format!("未知的文件来源: {source}"))?;
+    let source = FileSource::parse(&source).ok_or_else(|| format!("未知的文件来源: {source}"))?;
 
     // 先按 base64 长度预检：超限直接拒绝，不必解码一份 50MB 的字节
     if data_base64.len() as u64 > MAX_FILE_BYTES.saturating_mul(4) / 3 + 16 {
@@ -228,7 +231,9 @@ pub async fn llm_compress(
     llm: State<'_, LlmState>,
 ) -> Result<CompressResult, String> {
     let cfg = config.get();
-    let model = cfg.active_model_config().cloned()
+    let model = cfg
+        .active_model_config()
+        .cloned()
         .ok_or_else(|| "未配置活跃模型（active_model 无效）".to_string())?;
     let client = llm.client(model, cfg.llm.clone());
     let (system, user) = build_compress_prompt(&session_data);
@@ -275,7 +280,9 @@ pub fn stop_chat(channel_name: String, engine: State<'_, Arc<Engine>>) -> Result
 /// 初始化会话（channel 维度）：active 复用 / 否则新建
 #[tauri::command]
 pub fn init_session(channel_name: String, engine: State<'_, Arc<Engine>>) -> Result<(), String> {
-    engine.init_session(&channel_name).map_err(|e| e.to_string())
+    engine
+        .init_session(&channel_name)
+        .map_err(|e| e.to_string())
 }
 
 /// 新建会话：归档当前（若非空），创建新的 active 会话，返回新会话完整数据
@@ -296,7 +303,9 @@ pub fn get_current_session(
     channel_name: String,
     engine: State<'_, Arc<Engine>>,
 ) -> Result<SessionData, String> {
-    engine.get_current_session(&channel_name).map_err(|e| e.to_string())
+    engine
+        .get_current_session(&channel_name)
+        .map_err(|e| e.to_string())
 }
 
 /// 读取当前会话上下文用量（最大输入 token vs 压缩阈值，供前端圆形进度条展示）
@@ -305,7 +314,9 @@ pub fn get_context_usage(
     channel_name: String,
     engine: State<'_, Arc<Engine>>,
 ) -> Result<ContextUsage, String> {
-    engine.get_context_usage(&channel_name).map_err(|e| e.to_string())
+    engine
+        .get_context_usage(&channel_name)
+        .map_err(|e| e.to_string())
 }
 
 /// 归档当前会话（压缩 + 移入 history）
@@ -338,7 +349,9 @@ pub fn list_sessions(
     channel_name: String,
     engine: State<'_, Arc<Engine>>,
 ) -> Result<Vec<SessionMeta>, String> {
-    engine.list_sessions(&channel_name).map_err(|e| e.to_string())
+    engine
+        .list_sessions(&channel_name)
+        .map_err(|e| e.to_string())
 }
 
 /// 切换会话：归档当前（若非空），将目标历史会话设为 active 并返回其完整数据
@@ -561,7 +574,9 @@ pub fn create_scheduled_task(
 
 /// 列出全部定时任务（创建时间倒序）
 #[tauri::command]
-pub fn list_scheduled_tasks(store: State<'_, Arc<TaskStore>>) -> Result<Vec<ScheduledTask>, String> {
+pub fn list_scheduled_tasks(
+    store: State<'_, Arc<TaskStore>>,
+) -> Result<Vec<ScheduledTask>, String> {
     Ok(store.list())
 }
 
@@ -612,7 +627,7 @@ pub fn get_unread_task_count(store: State<'_, Arc<TaskStore>>) -> Result<usize, 
     Ok(store.unread_count())
 }
 
-// ============ 渠道对接（飞书） ============
+// ============ 渠道对接（飞书 / QQ） ============
 
 /// 启动飞书渠道。读取最新配置，已在运行则先停后启（改完配置直接调它即可生效）
 #[tauri::command]
@@ -621,20 +636,71 @@ pub fn feishu_start(
     config: State<'_, ConfigStore>,
     engine: State<'_, Arc<Engine>>,
 ) -> Result<(), String> {
-    channels.start(config.get().feishu, engine.inner().clone())
+    channels.start_feishu(config.get().feishu, engine.inner().clone())
 }
 
 /// 停止飞书渠道
 #[tauri::command]
 pub fn feishu_stop(channels: State<'_, Arc<ChannelManager>>) -> Result<(), String> {
-    channels.stop();
+    channels.stop(ChannelKind::Feishu);
     Ok(())
 }
 
 /// 查询飞书渠道当前状态
 #[tauri::command]
 pub fn feishu_status(channels: State<'_, Arc<ChannelManager>>) -> Result<ChannelStatus, String> {
-    Ok(channels.status())
+    Ok(channels.status(ChannelKind::Feishu))
+}
+
+/// 启动 QQ 渠道。读取最新配置，已在运行则先停后启
+#[tauri::command]
+pub fn qq_start(
+    channels: State<'_, Arc<ChannelManager>>,
+    config: State<'_, ConfigStore>,
+    engine: State<'_, Arc<Engine>>,
+) -> Result<(), String> {
+    channels.start_qq(config.get().qq, engine.inner().clone())
+}
+
+/// 停止 QQ 渠道
+#[tauri::command]
+pub fn qq_stop(channels: State<'_, Arc<ChannelManager>>) -> Result<(), String> {
+    channels.stop(ChannelKind::Qq);
+    Ok(())
+}
+
+/// 查询 QQ 渠道当前状态
+#[tauri::command]
+pub fn qq_status(channels: State<'_, Arc<ChannelManager>>) -> Result<ChannelStatus, String> {
+    Ok(channels.status(ChannelKind::Qq))
+}
+
+/// 测试 QQ 凭证：取一次 token 和网关地址，不建立长连接
+#[tauri::command]
+pub async fn qq_test_connection(
+    channels: State<'_, Arc<ChannelManager>>,
+    config: State<'_, ConfigStore>,
+) -> Result<(), String> {
+    let cfg = config.get().qq;
+    if cfg.official.app_id.is_empty() || cfg.official.app_secret.is_empty() {
+        return Err("请先填写 AppID 与 AppSecret".to_string());
+    }
+
+    let token = Arc::new(crate::channel::qq::official::TokenProvider::new(
+        channels.http().clone(),
+        cfg.official.token_url(),
+        &cfg.official.app_id,
+        &cfg.official.app_secret,
+    ));
+    let api = crate::channel::qq::official::QqApi::new(
+        channels.http().clone(),
+        cfg.official.api_base(),
+        token,
+    );
+
+    crate::channel::qq::official::test_credentials(&api)
+        .await
+        .map_err(|e| format!("{e:#}"))
 }
 
 /// 测试凭证：只做一次端点协商，不建立长连接，也不影响正在运行的渠道
@@ -656,4 +722,46 @@ pub async fn feishu_test_connection(
     )
     .await
     .map_err(|e| format!("{e:#}"))
+}
+
+// ============ 渠道通讯录 ============
+
+/// 通讯录列表：total 是全量人数，users 是本次匹配结果
+#[derive(serde::Serialize)]
+pub struct ContactList {
+    pub total: usize,
+    pub users: Vec<Contact>,
+}
+
+/// 列出通讯录（前端主人管理页用）。query 对 id / name / profile 模糊匹配
+#[tauri::command]
+pub fn list_contacts(
+    query: Option<String>,
+    limit: Option<usize>,
+    contacts: State<'_, Arc<ContactStore>>,
+) -> Result<ContactList, String> {
+    let limit = limit.unwrap_or(200).clamp(1, 1000);
+    Ok(ContactList {
+        total: contacts.len(),
+        users: contacts.list(query.as_deref(), limit),
+    })
+}
+
+/// 更新通讯录条目。profile 是整体替换；name / profile 至少提供一个
+#[tauri::command]
+pub fn update_contact(
+    id: String,
+    name: Option<String>,
+    profile: Option<String>,
+    contacts: State<'_, Arc<ContactStore>>,
+) -> Result<Contact, String> {
+    contacts
+        .update(&id, name.as_deref(), profile.as_deref())
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// 删除通讯录条目。只供前端主人管理，智能体工具没有删除权限
+#[tauri::command]
+pub fn delete_contact(id: String, contacts: State<'_, Arc<ContactStore>>) -> Result<(), String> {
+    contacts.delete(&id).map_err(|e| format!("{e:#}"))
 }

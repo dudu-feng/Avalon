@@ -5,6 +5,7 @@
 
 #![allow(dead_code)] // session 模块供未来 engine/tool 引用，当前无调用方，接入后移除
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -351,6 +352,93 @@ impl FileSessionStore {
         Ok((Some(n), messages, has_earlier))
     }
 
+    /// 按 id 找到会话：优先 current（活跃副本比 history index 新），否则 history index
+    fn locate_session(&self, id: &str) -> Result<SessionData> {
+        let current = self.session_path().join("current");
+        if current.is_dir() {
+            for entry in std::fs::read_dir(&current).with_context(|| "读取 current 目录失败")? {
+                let path = entry.context("读取 current 条目失败")?.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                if let Ok(data) = self.read_session_file(&path) {
+                    if data.id == id {
+                        return Ok(data);
+                    }
+                }
+            }
+        }
+
+        let index = self.history_dir().join(id).join("index.json");
+        if index.is_file() {
+            return self.read_session_file(&index);
+        }
+        Err(anyhow::anyhow!("会话 '{id}' 不存在"))
+    }
+
+    /// raw 目录里所有普通压缩块编号（忽略 merged_ 摘要），升序
+    fn raw_chunk_nums(&self, id: &str) -> Result<Vec<u64>> {
+        let raw_dir = self.history_dir().join(id).join("raw");
+        if !raw_dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut nums = Vec::new();
+        for entry in std::fs::read_dir(&raw_dir).with_context(|| "读取 raw 目录失败")? {
+            let path = entry.context("读取 raw 条目失败")?.path();
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if let Ok(n) = stem.parse::<u64>() {
+                nums.push(n);
+            }
+        }
+        nums.sort_unstable();
+        Ok(nums)
+    }
+
+    /// 全部会话元信息：history 存档 + current 活跃，按 id 倒序去重
+    fn all_session_metas(&self) -> Result<Vec<SessionMeta>> {
+        let mut by_id: HashMap<String, SessionMeta> = HashMap::new();
+
+        let history = self.history_dir();
+        if history.is_dir() {
+            for entry in std::fs::read_dir(&history).with_context(|| "读取 history 目录失败")? {
+                let dir = entry.context("读取 history 条目失败")?.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                let index = dir.join("index.json");
+                if !index.is_file() {
+                    continue;
+                }
+                if let Ok(data) = self.read_session_file(&index) {
+                    if !data.id.is_empty() {
+                        by_id.insert(data.id.clone(), meta_from(&data));
+                    }
+                }
+            }
+        }
+
+        let current = self.session_path().join("current");
+        if current.is_dir() {
+            for entry in std::fs::read_dir(&current).with_context(|| "读取 current 目录失败")? {
+                let path = entry.context("读取 current 条目失败")?.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                if let Ok(data) = self.read_session_file(&path) {
+                    if data.status == SessionStatus::Active && !data.id.is_empty() {
+                        by_id.insert(data.id.clone(), meta_from(&data));
+                    }
+                }
+            }
+        }
+
+        let mut out: Vec<SessionMeta> = by_id.into_values().collect();
+        out.sort_by(|a, b| b.id.cmp(&a.id));
+        Ok(out)
+    }
+
     // ============ 重建索引 ============
 
     /// 重建向量索引：清空 + 先收集候选文件 → 逐个处理并上报进度
@@ -650,6 +738,26 @@ impl SessionStore for FileSessionStore {
     ) -> Result<LoadHistoryResult> {
         let (chunk, messages, has_earlier) = self.load_history_chunk(id, before_chunk)?;
         Ok(LoadHistoryResult { chunk, messages, has_earlier })
+    }
+
+    fn list_all_sessions(&self) -> Result<Vec<SessionMeta>> {
+        self.all_session_metas()
+    }
+
+    fn read_session_raw_messages(&self, id: &str) -> Result<Vec<Message>> {
+        let data = self.locate_session(id)?;
+        let mut messages = Vec::new();
+        for n in self.raw_chunk_nums(id)? {
+            let path = self.history_dir().join(id).join("raw").join(format!("{n}.json"));
+            let content = std::fs::read_to_string(&path)
+                .with_context(|| format!("读取 raw 文件失败: {}", path.display()))?;
+            let chunk: Vec<Message> = serde_json::from_str(&content)
+                .with_context(|| format!("解析 raw 文件失败: {}", path.display()))?;
+            messages.extend(chunk);
+        }
+        // raw 块是压缩前的历史，data.messages 是尚未压缩的尾部
+        messages.extend(data.messages);
+        Ok(messages)
     }
 
     fn delete_session(&self, id: &str) -> Result<()> {

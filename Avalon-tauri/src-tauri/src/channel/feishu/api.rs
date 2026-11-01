@@ -18,10 +18,74 @@ fn is_token_error(code: i64) -> bool {
     matches!(code, 99991661 | 99991663 | 99991664 | 99991668)
 }
 
+/// 把常见飞书业务错误码翻译成可操作提示。
+///
+/// 这里只覆盖发送消息最常撞上的几个码；未知码不猜测，原样保留给模型与用户，
+/// 避免把「可能的原因」说成「确定的原因」。返回的是给人看的下一步动作，
+/// 不是错误码的官方定义。
+pub fn error_hint(raw: &str) -> Option<&'static str> {
+    const CODES: &[(&str, &str)] = &[
+        (
+            "code=230001",
+            "请求参数不合法：确认 owner_open_id 是当前应用的 open_id（ou_ 开头），\
+             且没有把用户 id 当成会话 id 使用",
+        ),
+        (
+            "code=230002",
+            "机器人不在目标会话中：群聊场景需要先把机器人拉进群",
+        ),
+        (
+            "code=230006",
+            "机器人能力未开启或被停用：到飞书开放平台检查机器人能力与版本发布状态",
+        ),
+        (
+            "code=230012",
+            "消息内容超过飞书长度限制：把长文拆成多条，或精简后再发",
+        ),
+        (
+            "code=230013",
+            "用户不在机器人可用范围内：在开放平台「应用可用范围」里加入该用户",
+        ),
+        (
+            "code=230014",
+            "触发飞书发送频率限制：降低发送频率，或把多条合并成一条",
+        ),
+        (
+            "code=230025",
+            "接收者不存在或 receive_id 无效：open_id 按应用隔离，\
+             更换 AppID 后需要让用户重新私聊机器人以获取新的 open_id",
+        ),
+        (
+            "code=99991661",
+            "应用凭证失效且刷新未成功：检查 App ID / App Secret 是否与当前应用一致",
+        ),
+        (
+            "code=99991663",
+            "应用凭证失效且刷新未成功：检查 App ID / App Secret 是否与当前应用一致",
+        ),
+        (
+            "code=99991664",
+            "应用凭证失效且刷新未成功：检查 App ID / App Secret 是否与当前应用一致",
+        ),
+        (
+            "code=99991668",
+            "应用凭证失效且刷新未成功：检查 App ID / App Secret 是否与当前应用一致",
+        ),
+    ];
+
+    CODES
+        .iter()
+        .find_map(|(code, hint)| raw.contains(code).then_some(*hint))
+}
+
 /// 取正文首行前若干字符作为卡片摘要，供会话列表预览
 fn summarize(text: &str) -> String {
     const MAX: usize = 40;
-    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    let line = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
     if line.chars().count() > MAX {
         format!("{}…", line.chars().take(MAX).collect::<String>())
     } else {
@@ -52,6 +116,19 @@ impl Target {
             Target::Chat(id) | Target::User(id) => id,
         }
     }
+}
+
+/// 内联卡片的 content 字符串。
+///
+/// 飞书要求 content 是「JSON 的字符串形式」而不是嵌套对象，所以这里统一编码；
+/// 普通发送与回复共用同一份卡片结构，避免两处 summary 文案慢慢走样。
+fn markdown_card_content(text: &str) -> Result<String> {
+    let card = json!({
+        "schema": "2.0",
+        "config": { "summary": { "content": summarize(text) } },
+        "body": { "elements": [{ "tag": "markdown", "content": text }] },
+    });
+    serde_json::to_string(&card).context("序列化正文卡片失败")
 }
 
 #[derive(Clone)]
@@ -99,10 +176,18 @@ impl FeishuApi {
 
     /// 发送纯文本到会话，返回 message_id
     pub async fn send_text(&self, chat_id: &str, text: &str) -> Result<String> {
-        let content = serde_json::to_string(&json!({ "text": text }))
-            .context("序列化文本消息内容失败")?;
-        self.send_message(&Target::Chat(chat_id.to_string()), "text", &content)
+        self.send_text_to(&Target::Chat(chat_id.to_string()), text)
             .await
+    }
+
+    /// 发送纯文本到任意目标（会话或用户），返回 message_id。
+    ///
+    /// 这是卡片发送失败时的兜底路径：text 消息不渲染 markdown，但送达率
+    /// 比 interactive 卡片高，适合「内容能不能改天再看，先把话带到」的通知。
+    pub async fn send_text_to(&self, target: &Target, text: &str) -> Result<String> {
+        let content =
+            serde_json::to_string(&json!({ "text": text })).context("序列化文本消息内容失败")?;
+        self.send_message(target, "text", &content).await
     }
 
     /// 以内联卡片发一段 markdown 正文到会话，返回 message_id
@@ -118,13 +203,49 @@ impl FeishuApi {
     /// `**粗体**`、列表、代码块都会原样露出来。
     /// summary 决定会话列表里的预览文案，不设的话那里只会显示「[卡片]」。
     pub async fn send_markdown_to(&self, target: &Target, text: &str) -> Result<String> {
-        let card = json!({
-            "schema": "2.0",
-            "config": { "summary": { "content": summarize(text) } },
-            "body": { "elements": [{ "tag": "markdown", "content": text }] },
-        });
-        let content = serde_json::to_string(&card).context("序列化正文卡片失败")?;
+        let content = markdown_card_content(text)?;
         self.send_message(target, "interactive", &content).await
+    }
+
+    /// 回复某条消息，返回新 message_id。
+    ///
+    /// 飞书的「回复」与普通发送是两个端点：引用关系由 URL 里的 message_id 决定，
+    /// body 里不需要 receive_id。卡片与纯文本都支持回复，降级时沿用同一个锚点。
+    async fn reply_message(
+        &self,
+        message_id: &str,
+        msg_type: &str,
+        content: &str,
+    ) -> Result<String> {
+        let data = self
+            .post(
+                &format!("/open-apis/im/v1/messages/{message_id}/reply"),
+                &json!({
+                    "msg_type": msg_type,
+                    "content": content,
+                }),
+            )
+            .await?;
+
+        Ok(data
+            .get("message_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string())
+    }
+
+    /// 以内联卡片回复指定消息，返回 message_id
+    pub async fn reply_markdown_to(&self, message_id: &str, text: &str) -> Result<String> {
+        let content = markdown_card_content(text)?;
+        self.reply_message(message_id, "interactive", &content)
+            .await
+    }
+
+    /// 以纯文本回复指定消息，返回 message_id。卡片被权限拦住时的兜底路径
+    pub async fn reply_text_to(&self, message_id: &str, text: &str) -> Result<String> {
+        let content =
+            serde_json::to_string(&json!({ "text": text })).context("序列化文本回复内容失败")?;
+        self.reply_message(message_id, "text", &content).await
     }
 
     /// 下载消息里的图片资源。
@@ -162,10 +283,7 @@ impl FeishuApi {
             if status.is_success() && !content_type.contains("application/json") {
                 if let Some(len) = resp.content_length() {
                     if len > MAX_DOWNLOAD {
-                        bail!(
-                            "飞书图片超过上限 {} MB",
-                            MAX_DOWNLOAD / 1024 / 1024
-                        );
+                        bail!("飞书图片超过上限 {} MB", MAX_DOWNLOAD / 1024 / 1024);
                     }
                 }
                 let bytes = resp
@@ -176,10 +294,7 @@ impl FeishuApi {
                     bail!("飞书返回空图片: {path}");
                 }
                 if bytes.len() as u64 > MAX_DOWNLOAD {
-                    bail!(
-                        "飞书图片超过上限 {} MB",
-                        MAX_DOWNLOAD / 1024 / 1024
-                    );
+                    bail!("飞书图片超过上限 {} MB", MAX_DOWNLOAD / 1024 / 1024);
                 }
                 return Ok(bytes.to_vec());
             }
@@ -403,5 +518,32 @@ impl FeishuApi {
         }
 
         bail!("飞书接口 {path} 调用失败：{last_err}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 常见发送错误码有可操作提示() {
+        let err = "飞书接口 /open-apis/im/v1/messages 调用失败：code=230013 msg=user not in scope (HTTP 400)";
+        let hint = error_hint(err).expect("应命中 230013");
+        assert!(hint.contains("可用范围"));
+    }
+
+    #[test]
+    fn 未知错误码不猜测() {
+        assert!(error_hint("code=230099 msg=whatever").is_none());
+        assert!(error_hint("请求超时").is_none());
+    }
+
+    #[test]
+    fn 卡片与纯文本使用同一目标类型() {
+        let user = Target::User("ou_x".into());
+        assert_eq!(user.id_type(), "open_id");
+        assert_eq!(user.id(), "ou_x");
+        let chat = Target::Chat("oc_x".into());
+        assert_eq!(chat.id_type(), "chat_id");
     }
 }

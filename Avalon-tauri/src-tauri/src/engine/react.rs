@@ -17,7 +17,7 @@ use crate::llm::{ChatResult, LlmState, StreamEvent, TokenUsage};
 use crate::prompt::PromptAssembler;
 use crate::session::store::max_input_tokens;
 use crate::session::{Message, SessionStore};
-use crate::tool::ToolRegistry;
+use crate::tool::{ToolContext, ToolRegistry};
 use crate::usage::UsageStore;
 use crate::vision::{Attachment, VisionService};
 
@@ -45,7 +45,10 @@ pub(crate) async fn run_loop<F>(
 where
     F: FnMut(EngineEvent) + Send,
 {
-    let tools_schema = tools.get_tools_schema();
+    // 工具上下文只回答「当前是谁、在哪个渠道说话」，不参与消息路由。
+    // 必须在 input.meta 被 take 之前构建；桌面/后台任务没有 meta，按主人处理。
+    let tool_ctx = ToolContext::from_input(channel, input.meta.as_ref(), config);
+    let tools_schema = tools.get_tools_schema(&tool_ctx);
     let session_context = session.get_context_for_prompt(channel)?;
     let mut system_prompt = prompt.assemble_chat_prompt(&session_context)?;
     let cfg = config.get();
@@ -165,7 +168,7 @@ where
                 tool_name: tc.name.clone(),
                 arguments: tc.arguments.clone(),
             });
-            let out = tools.invoke_tool(&tc.name, &tc.arguments).await;
+            let out = tools.invoke_tool(&tool_ctx, &tc.name, &tc.arguments).await;
             let success = !tool_failed(&out);
             let summary = summarize(&out);
             on_event(EngineEvent::ToolResult {
@@ -284,6 +287,8 @@ pub(crate) fn tool_failed(result: &str) -> bool {
         "执行命令超时",
         "记忆检索失败",
         "记忆检索未配置",
+        "通讯录",
+        "权限不足",
         "未找到工具",
         "灵魂条目",
         "技能",

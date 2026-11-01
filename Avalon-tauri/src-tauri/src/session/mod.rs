@@ -56,6 +56,11 @@ pub trait SessionStore: Send + Sync {
         id: &str,
         before_chunk: Option<u64>,
     ) -> Result<LoadHistoryResult>;
+    /// 列出全部会话（跨渠道，含活跃与归档），供智能体的会话历史工具使用
+    fn list_all_sessions(&self) -> Result<Vec<SessionMeta>>;
+    /// 读取会话的原始消息：所有 raw 压缩块 + 尚未压缩的 messages，按时间顺序合并。
+    /// 与记忆检索返回的压缩摘要不同，这里给的是原文
+    fn read_session_raw_messages(&self, id: &str) -> Result<Vec<Message>>;
     /// 删除归档会话（目录 + 向量库该会话 chunk 一并清理）
     fn delete_session(&self, id: &str) -> Result<()>;
     /// 重命名会话标题（活跃或归档均可）

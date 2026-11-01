@@ -8,6 +8,8 @@ export type EmbeddingLoadMode = 'lazy' | 'eager';
 export type SearchMode = 'semantic' | 'keyword' | 'hybrid';
 export type VectorBackend = 'memory' | 'sqlite';
 export type FeishuSessionMode = 'isolated' | 'unified';
+export type QqBackend = 'official' | 'onebot';
+export type QqSessionMode = 'isolated' | 'unified';
 export type ObserveMode = 'always' | 'lazy';
 
 /** 本地 OCR 配置，对应后端 [vision.ocr] */
@@ -66,6 +68,45 @@ export interface FeishuConfig {
   done_reaction: string;
   failed_reaction: string;
   rejected_reaction: string;
+}
+
+/** QQ 开放平台官方机器人配置，对应 [qq.official] */
+export interface QqOfficialConfig {
+  app_id: string;
+  /** 敏感，可被环境变量 AVALON_QQ_APP_SECRET 覆盖 */
+  app_secret: string;
+  /** true = sandbox.api.sgroup.qq.com；false = api.bot.qq.com */
+  sandbox: boolean;
+  /** 群聊 + 单聊消息事件 = 1 << 25 = 33554432 */
+  intents: number;
+  /** C2C 是否尝试原生流式。群聊始终非流式；关闭仅用于排障 */
+  stream_c2c: boolean;
+  timeout_secs: number;
+}
+
+/** OneBot 11 预留配置。代码未实现，设置页只展示、不启用 */
+export interface QqOnebotConfig {
+  ws_url: string;
+  /** 敏感，可被环境变量 AVALON_QQ_ONEBOT_TOKEN 覆盖 */
+  access_token: string;
+  self_id: number;
+}
+
+/** QQ 渠道配置，对应后端 [qq] */
+export interface QqConfig {
+  enabled: boolean;
+  backend: QqBackend;
+  session_mode: QqSessionMode;
+  /** 群聊是否只响应 @ 机器人的消息 */
+  group_require_mention: boolean;
+  /** 允许对话的用户 openid 白名单，空数组 = 不限制 */
+  allow_users: string[];
+  /** 主人 openid，qq_notify_owner 的收件人；留空时由第一个私聊用户自动填充 */
+  owner_open_id: string;
+  /** 收到纯图片后、等用户说明意图前发送的询问文本；留空 = 立即处理 */
+  image_ack_text: string;
+  official: QqOfficialConfig;
+  onebot: QqOnebotConfig;
 }
 
 /**
@@ -144,6 +185,7 @@ export interface AppConfig {
     backend: VectorBackend;
   };
   feishu: FeishuConfig;
+  qq: QqConfig;
   search: SearchConfig;
   tools: ToolsConfig;
   vision: VisionConfig;

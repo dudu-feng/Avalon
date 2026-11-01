@@ -1,25 +1,45 @@
 // 渠道对接层
 //
-// 让 Engine 的能力不再局限于桌面窗口：外部渠道（当前是飞书）收到消息后，
-// 用与 scheduler 相同的方式驱动同一个 Engine —— 拿一个 channel 字符串跑 ReAct，
-// 区别只在于事件回调要把结果发回渠道，而不是丢弃或推给前端。
+// 让 Engine 的能力不再局限于桌面窗口：外部渠道收到消息后，用与 scheduler
+// 相同的方式驱动同一个 Engine。ChannelManager 只负责「每个渠道启停一个后台
+// 任务」这一层，与具体协议无关；协议细节在 feishu/ 与 qq/ 里。
 //
-// ChannelManager 只负责「启停一个后台任务」这一层，与具体协议无关。
-// 暂不抽 ChannelAdapter trait：只有一个实现的 trait 是负债，等接第二个渠道时共性才看得清。
+// 飞书与 QQ 各自维护独立的运行句柄与状态：一个挂了不影响另一个，
+// 托盘与设置页也分别展示。
 
+pub mod common;
+pub mod contact;
 pub mod feishu;
 pub mod handle;
+pub mod qq;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
-use crate::config::{ConfigStore, FeishuConfig};
+use crate::config::{ConfigStore, FeishuConfig, QqConfig};
 use crate::engine::Engine;
 
 pub use feishu::api::Target;
-pub use handle::FeishuHandle;
+pub use handle::{FeishuHandle, QqHandle};
+
+/// 渠道标识，用于命令参数与前端展示
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChannelKind {
+    Feishu,
+    Qq,
+}
+
+impl ChannelKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Feishu => "feishu",
+            Self::Qq => "qq",
+        }
+    }
+}
 
 /// 渠道运行状态，直接序列化给前端
 #[derive(Debug, Clone, Serialize)]
@@ -54,58 +74,94 @@ struct Running {
     task: tauri::async_runtime::JoinHandle<()>,
 }
 
-/// 渠道生命周期管理器。放进 Tauri State，由托盘菜单与前端命令驱动
-pub struct ChannelManager {
+/// 单个渠道的可变状态
+struct ChannelState {
     running: Mutex<Option<Running>>,
     status: Arc<Mutex<ChannelStatus>>,
+}
+
+impl ChannelState {
+    fn new(status: ChannelStatus) -> Self {
+        Self {
+            running: Mutex::new(None),
+            status: Arc::new(Mutex::new(status)),
+        }
+    }
+
+    fn set_status(&self, s: ChannelStatus) {
+        *self.status.lock().unwrap_or_else(|e| e.into_inner()) = s;
+    }
+
+    fn status(&self) -> ChannelStatus {
+        self.status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+}
+
+/// 渠道生命周期管理器。放进 Tauri State，由托盘菜单与前端命令驱动
+pub struct ChannelManager {
+    feishu: ChannelState,
+    qq: ChannelState,
     http: reqwest::Client,
-    /// 工具层共享的发送句柄。渠道跑起来时填入 api，停止时清空
+    /// 工具层共享的飞书发送句柄。渠道跑起来时填入 api，停止时清空
     handle: Arc<FeishuHandle>,
-    /// 配置句柄，只为把 ConfigStore 传给 handler 做 owner 自动填充
+    /// 工具层共享的 QQ 发送句柄，生命周期与飞书一致
+    qq_handle: Arc<QqHandle>,
+    /// 配置句柄，供 handler 做 owner 自动填充
     store: ConfigStore,
 }
 
 impl ChannelManager {
-    pub fn new(handle: Arc<FeishuHandle>, store: ConfigStore) -> Self {
-        // 长连接自己走 tokio-tungstenite，这个 client 只用于 REST 调用
+    pub fn new(handle: Arc<FeishuHandle>, qq_handle: Arc<QqHandle>, store: ConfigStore) -> Self {
+        // 长连接自己走 tokio-tungstenite，这个 client 只用于 REST 调用与凭证测试
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_default();
 
         Self {
-            running: Mutex::new(None),
-            status: Arc::new(Mutex::new(ChannelStatus::Disabled)),
+            feishu: ChannelState::new(ChannelStatus::Disabled),
+            qq: ChannelState::new(ChannelStatus::Disabled),
             http,
             handle,
+            qq_handle,
             store,
         }
     }
 
-    pub fn status(&self) -> ChannelStatus {
-        self.status.lock().unwrap().clone()
+    fn state(&self, kind: ChannelKind) -> &ChannelState {
+        match kind {
+            ChannelKind::Feishu => &self.feishu,
+            ChannelKind::Qq => &self.qq,
+        }
+    }
+
+    pub fn status(&self, kind: ChannelKind) -> ChannelStatus {
+        self.state(kind).status()
+    }
+
+    pub fn is_running(&self, kind: ChannelKind) -> bool {
+        self.state(kind).status().is_active()
     }
 
     pub fn http(&self) -> &reqwest::Client {
         &self.http
     }
 
-    pub fn is_running(&self) -> bool {
-        self.running.lock().unwrap().is_some()
-    }
-
     /// 启动飞书渠道。已在运行时先停掉旧的（配置改动后重启即走这条路）
-    pub fn start(&self, config: FeishuConfig, engine: Arc<Engine>) -> Result<(), String> {
+    pub fn start_feishu(&self, config: FeishuConfig, engine: Arc<Engine>) -> Result<(), String> {
         if !config.is_ready() {
-            *self.status.lock().unwrap() = ChannelStatus::Disabled;
+            self.feishu.set_status(ChannelStatus::Disabled);
             return Err("飞书渠道未启用或 app_id / app_secret 未填写".to_string());
         }
 
-        self.stop();
+        self.stop(ChannelKind::Feishu);
 
         let stop = Arc::new(AtomicBool::new(false));
-        let status = self.status.clone();
-        *status.lock().unwrap() = ChannelStatus::Connecting;
+        let status = self.feishu.status.clone();
+        self.feishu.set_status(ChannelStatus::Connecting);
 
         let http = self.http.clone();
         let task_stop = stop.clone();
@@ -115,20 +171,67 @@ impl ChannelManager {
             feishu::run(http, config, engine, task_stop, status, handle, store).await;
         });
 
-        *self.running.lock().unwrap() = Some(Running { stop, task });
+        *self
+            .feishu
+            .running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(Running { stop, task });
         Ok(())
     }
 
-    /// 停止渠道。先置标志让循环自己收尾，再 abort 兜住卡在 await 上的情况
-    pub fn stop(&self) {
-        let Some(running) = self.running.lock().unwrap().take() else {
+    /// 启动 QQ 渠道。同样先停旧的再起新的
+    pub fn start_qq(&self, config: QqConfig, engine: Arc<Engine>) -> Result<(), String> {
+        if !config.is_ready() {
+            self.qq.set_status(ChannelStatus::Disabled);
+            if config.enabled && config.backend == crate::config::QqBackend::Onebot {
+                return Err("QQ 渠道的 OneBot 后端尚未实现，请选择 official".to_string());
+            }
+            return Err("QQ 渠道未启用或 AppID / AppSecret 未填写".to_string());
+        }
+
+        self.stop(ChannelKind::Qq);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let status = self.qq.status.clone();
+        self.qq.set_status(ChannelStatus::Connecting);
+
+        let task_stop = stop.clone();
+        let store = self.store.clone();
+        let qq_handle = self.qq_handle.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            qq::run(config, engine, task_stop, status, store, qq_handle).await;
+        });
+
+        *self.qq.running.lock().unwrap_or_else(|e| e.into_inner()) = Some(Running { stop, task });
+        Ok(())
+    }
+
+    /// 停止指定渠道。先置标志让循环自己收尾，再 abort 兜住卡在 await 上的情况
+    pub fn stop(&self, kind: ChannelKind) {
+        let state = self.state(kind);
+        let Some(running) = state
+            .running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        else {
             return;
         };
         running.stop.store(true, Ordering::Relaxed);
         running.task.abort();
-        // 显式清空而不是只靠 run() 里的 drop guard：abort 后 guard 何时跑取决于
-        // 运行时调度，而这里返回后紧接着就可能有工具调用来问「在线吗」
-        self.handle.clear();
-        *self.status.lock().unwrap() = ChannelStatus::Stopped;
+
+        // abort 后 guard 何时跑取决于运行时调度，这里显式清空，
+        // 避免停止后紧接着的工具调用仍以为渠道在线
+        match kind {
+            ChannelKind::Feishu => self.handle.clear(),
+            ChannelKind::Qq => self.qq_handle.clear(),
+        }
+        state.set_status(ChannelStatus::Stopped);
+    }
+
+    /// 退出应用时停止全部渠道
+    pub fn stop_all(&self) {
+        self.stop(ChannelKind::Feishu);
+        self.stop(ChannelKind::Qq);
     }
 }
