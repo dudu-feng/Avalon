@@ -1,7 +1,8 @@
-// OCR 引擎实现：ort + PP-OCRv4（det + rec）
+// OCR 引擎实现：ort + PP-OCRv4（det + cls + rec）
 //
 // 只做水平/近水平文本。det 的后处理用「二值化 → 连通域 → 轴对齐外接矩形」
 // 代替 DB 的轮廓检测与透视变换，换取不引入 opencv 一类重依赖。
+// cls 逐文本行判断是否倒置，倒置的先旋转 180° 再送 rec。
 // 模型与字典的放置见 doc/v0.7/03-vision-module.md 10.6。
 //
 // 重资源全部在 OnnxOcr::load 里创建；调用方（OcrHandle）负责懒加载与卸载。
@@ -19,6 +20,7 @@ use ort::value::Tensor;
 use super::{OcrEngine, OcrLine, OcrResult, PreparedImage};
 
 pub const DET_MODEL_FILE: &str = "det.onnx";
+pub const CLS_MODEL_FILE: &str = "cls.onnx";
 pub const REC_MODEL_FILE: &str = "rec.onnx";
 pub const DICT_FILE: &str = "ppocr_keys_v1.txt";
 
@@ -34,6 +36,9 @@ const DET_BOX_THRESHOLD: f32 = 0.6;
 const DET_UNCLIP_RATIO: f32 = 1.5;
 /// 单图最多保留的文本框，防止极端图片把识别耗时拖到不可控
 const MAX_BOXES: usize = 200;
+/// cls 输入固定 48x192（PP-OCR 方向分类模型训练分辨率）
+const CLS_HEIGHT: u32 = 48;
+const CLS_WIDTH: u32 = 192;
 /// rec 输入固定高度
 const REC_HEIGHT: u32 = 48;
 /// rec 输入宽度范围；过宽会显著增加耗时
@@ -54,14 +59,18 @@ pub struct OnnxOcr {
     _env: Environment,
     /// Session::run 需要 &mut self，用 Mutex 串行化同一引擎的推理
     det: Mutex<Session>,
+    /// 方向分类器。use_angle_cls=false 或模型缺失时为 None
+    cls: Option<Mutex<Session>>,
     rec: Mutex<Session>,
+    /// 判定倒置的概率阈值
+    cls_threshold: f32,
     /// 识别字符表，不含 blank 与末尾空格
     dict: Vec<String>,
 }
 
 impl OnnxOcr {
-    /// 从模型目录加载 det/rec。调用方负责在 spawn_blocking 里执行
-    pub fn load(dir: &Path) -> Result<Self> {
+    /// 从模型目录加载 det/rec，按需加载 cls。调用方负责在 spawn_blocking 里执行
+    pub fn load(dir: &Path, use_angle_cls: bool, cls_threshold: f32) -> Result<Self> {
         let det_path = dir.join(DET_MODEL_FILE);
         let rec_path = dir.join(REC_MODEL_FILE);
         for path in [&det_path, &rec_path] {
@@ -76,6 +85,24 @@ impl OnnxOcr {
             .map_err(|e| anyhow!("初始化 ONNX Runtime 失败: {e}"))?;
         let det = build_session(&env, &det_path)?;
         let rec = build_session(&env, &rec_path)?;
+
+        // 方向分类是增强项：配置要了但文件缺失时降级，不让整个 OCR 不可用。
+        // 文件存在却加载失败则视为真实错误，直接报出来
+        let cls = if use_angle_cls {
+            let cls_path = dir.join(CLS_MODEL_FILE);
+            if cls_path.is_file() {
+                Some(Mutex::new(build_session(&env, &cls_path)?))
+            } else {
+                log::warn!(
+                    target: "vision",
+                    "OCR 方向分类模型缺失，倒置文本将不做校正: {}",
+                    cls_path.display()
+                );
+                None
+            }
+        } else {
+            None
+        };
 
         // RapidOCR 导出的 rec 模型把字符表放在 custom metadata 里，优先用它；
         // 其他导出可能没有，回退到同目录的 ppocr_keys_v1.txt
@@ -102,7 +129,9 @@ impl OnnxOcr {
         Ok(Self {
             _env: env,
             det: Mutex::new(det),
+            cls,
             rec: Mutex::new(rec),
+            cls_threshold,
             dict,
         })
     }
@@ -147,9 +176,51 @@ impl OnnxOcr {
         ))
     }
 
-    fn recognize_box(&self, image: &RgbImage, b: OcrBox) -> Result<Option<OcrLine>> {
+    /// 文本行是否整体倒置（180°）。cls 未启用时永远返回 false
+    fn is_upside_down(&self, image: &RgbImage) -> Result<bool> {
+        let Some(cls) = &self.cls else {
+            return Ok(false);
+        };
+
+        let input = cls_input(image);
+        let tensor = Tensor::from_array((
+            vec![1i64, 3, CLS_HEIGHT as i64, CLS_WIDTH as i64],
+            input,
+        ))
+        .map_err(|e| anyhow!("构建 cls 输入张量失败: {e}"))?;
+
+        let mut session = cls
+            .lock()
+            .map_err(|_| anyhow!("OCR cls 会话锁已中毒"))?;
+        let outputs = session
+            .run(ort::inputs![tensor])
+            .map_err(|e| anyhow!("OCR 方向分类推理失败: {e}"))?;
+        let probs = outputs[0]
+            .try_extract_array::<f32>()
+            .map_err(|e| anyhow!("读取 cls 输出失败: {e}"))?;
+        let shape = probs.shape();
+        if shape.len() != 2 || shape[0] != 1 || shape[1] < 2 {
+            bail!("cls 输出维度异常: {shape:?}");
+        }
+        // 类别 0 = 0°，类别 1 = 180°
+        let p_flipped = probs[[0, 1]];
+        drop(outputs);
+        drop(session);
+
+        Ok(p_flipped >= self.cls_threshold)
+    }
+
+    /// 返回识别结果与该行是否被判为倒置 —— 整图倒置时行顺序也要反过来
+    fn recognize_box(&self, image: &RgbImage, b: OcrBox) -> Result<Option<(OcrLine, bool)>> {
         let [x1, y1, x2, y2] = b;
         let crop = imageops::crop_imm(image, x1, y1, x2 - x1, y2 - y1).to_image();
+        // cls 判为倒置时先转正，再走与正向文本相同的识别路径
+        let flipped = self.is_upside_down(&crop)?;
+        let crop = if flipped {
+            imageops::rotate180(&crop)
+        } else {
+            crop
+        };
         let (input, rec_w) = rec_input(&crop)?;
         let tensor = Tensor::from_array((
             vec![1i64, 3, REC_HEIGHT as i64, rec_w as i64],
@@ -182,13 +253,18 @@ impl OnnxOcr {
         drop(outputs);
         drop(session);
 
-        Ok(decode_ctc(&probs, steps, classes, &self.dict))
+        Ok(decode_ctc(&probs, steps, classes, &self.dict).map(|line| (line, flipped)))
     }
 }
 
 impl OcrEngine for OnnxOcr {
     fn name(&self) -> &'static str {
-        "ppocr-v4"
+        // 启用方向分类后结果可能不同，纳入引擎名以失效旧的 OCR 缓存
+        if self.cls.is_some() {
+            "ppocr-v4-cls"
+        } else {
+            "ppocr-v4"
+        }
     }
 
     fn recognize(&self, image: &PreparedImage) -> Result<OcrResult> {
@@ -197,13 +273,18 @@ impl OcrEngine for OnnxOcr {
         let boxes = self.detect(&rgb)?;
 
         let mut lines = Vec::new();
+        let mut all_flipped = true;
         for b in boxes {
-            if let Some(line) = self.recognize_box(&rgb, b)? {
+            if let Some((line, flipped)) = self.recognize_box(&rgb, b)? {
                 if !line.text.trim().is_empty() {
+                    all_flipped &= flipped;
                     lines.push(line);
                 }
             }
         }
+        // 整图 180° 倒置时，det 仍在原图坐标系里按 y 排序，行顺序是反的。
+        // 只有所有行都被判为倒置才反转，避免误伤正置与倒置混排的图片
+        let lines = reorder_lines(lines, all_flipped);
 
         Ok(build_result(lines))
     }
@@ -261,6 +342,21 @@ pub(crate) fn det_input(image: &RgbImage) -> (Vec<f32>, u32, u32) {
         }
     }
     (out, w, h)
+}
+
+/// cls 预处理：直接缩放到 48x192，mean/std 均为 0.5。
+/// 与 det/rec 不同，这里不保持长宽比 —— cls 模型按固定分辨率训练
+pub(crate) fn cls_input(image: &RgbImage) -> Vec<f32> {
+    let resized = imageops::resize(image, CLS_WIDTH, CLS_HEIGHT, FilterType::Triangle);
+    let plane = CLS_WIDTH as usize * CLS_HEIGHT as usize;
+    let mut out = vec![0f32; 3 * plane];
+    for (x, y, px) in resized.enumerate_pixels() {
+        let idx = y as usize * CLS_WIDTH as usize + x as usize;
+        for c in 0..3 {
+            out[c * plane + idx] = (px[c] as f32 / 255.0 - 0.5) / 0.5;
+        }
+    }
+    out
 }
 
 /// rec 预处理：高度固定 48，宽度按比例缩放并限制在 [16, 320]
@@ -443,6 +539,14 @@ fn char_for_index(idx: usize, dict: &[String]) -> &str {
     }
 }
 
+/// 整图倒置时逆转行序；部分行倒置或只有一行时保持 det 给出的顺序
+fn reorder_lines(mut lines: Vec<OcrLine>, all_flipped: bool) -> Vec<OcrLine> {
+    if all_flipped && lines.len() > 1 {
+        lines.reverse();
+    }
+    lines
+}
+
 fn build_result(lines: Vec<OcrLine>) -> OcrResult {
     let text = lines
         .iter()
@@ -467,6 +571,7 @@ fn align_up(value: u32, align: u32) -> u32 {
 }
 
 /// 模型目录下 det/rec 是否齐全。字典不是必需：RapidOCR 导出的模型自带字符表。
+/// cls 也不强制：缺失时只是不做 180° 校正。
 /// 工具注册前只做文件探测，不加载模型
 pub(crate) fn models_present(dir: &Path) -> bool {
     [DET_MODEL_FILE, REC_MODEL_FILE]
@@ -574,6 +679,38 @@ mod tests {
     }
 
     #[test]
+    fn reorder_lines_reverses_only_when_all_flipped() {
+        let line = |text: &str| OcrLine {
+            text: text.to_string(),
+            confidence: 0.9,
+        };
+        let lines = || vec![line("A"), line("B"), line("C")];
+
+        let reordered = reorder_lines(lines(), true);
+        assert_eq!(
+            reordered.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+            vec!["C", "B", "A"]
+        );
+
+        let kept = reorder_lines(lines(), false);
+        assert_eq!(
+            kept.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
+            vec!["A", "B", "C"]
+        );
+
+        assert_eq!(reorder_lines(vec![line("A")], true)[0].text, "A");
+    }
+
+    #[test]
+    fn cls_input_has_fixed_shape_and_normalization() {
+        let img = RgbImage::new(300, 40);
+        let data = cls_input(&img);
+        assert_eq!(data.len(), 3 * CLS_WIDTH as usize * CLS_HEIGHT as usize);
+        // 全黑像素归一化后为 -1
+        assert!(data.iter().all(|&v| (v + 1.0).abs() < 1e-6));
+    }
+
+    #[test]
     fn rec_input_keeps_aspect_and_clamps_width() {
         let wide = RgbImage::new(1000, 20);
         let (_, w) = rec_input(&wide).unwrap();
@@ -599,7 +736,7 @@ mod tests {
     #[test]
     #[ignore = "需要本地模型与测试图，仅用于手工验收"]
     fn e2e_recognizes_chinese_image() {
-        let engine = OnnxOcr::load(Path::new("f:/Avalon/data/models/ocr")).unwrap();
+        let engine = OnnxOcr::load(Path::new("f:/Avalon/data/models/ocr"), true, 0.9).unwrap();
         let bytes = std::fs::read("f:/Avalon/data/test_data/ocr_e2e.png").unwrap();
         let prepared = PreparedImage {
             bytes,
@@ -628,6 +765,52 @@ mod tests {
         assert!(result.text.contains("Avalon"), "未识别到标题: {}", result.text);
         assert!(result.text.contains("连接超时"), "未识别到中文: {}", result.text);
         assert!(result.text.contains("2026"), "未识别到数字: {}", result.text);
+    }
+
+    /// 手工验收：整图旋转 180° 后，cls 应逐行纠正方向再识别。
+    /// 需要 data/models/ocr 下的真实模型（含 cls.onnx）与 data/test_data/ocr_e2e.png
+    #[test]
+    #[ignore = "需要本地模型与测试图，仅用于手工验收"]
+    fn e2e_recognizes_upside_down_image() {
+        let engine = OnnxOcr::load(Path::new("f:/Avalon/data/models/ocr"), true, 0.9).unwrap();
+        let bytes = std::fs::read("f:/Avalon/data/test_data/ocr_e2e.png").unwrap();
+        let rgb = image::load_from_memory(&bytes).unwrap().to_rgb8();
+        let (width, height) = rgb.dimensions();
+        let rotated = imageops::rotate180(&rgb);
+
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(rotated)
+            .write_to(
+                &mut std::io::Cursor::new(&mut png),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+
+        let prepared = PreparedImage {
+            bytes: png,
+            mime: "image/png",
+            width,
+            height,
+            sha256: "e2e-rotated".into(),
+            phash: "0".repeat(16),
+            profile: crate::vision::ImageProfile {
+                width,
+                height,
+                format: "png".into(),
+                has_alpha: false,
+                animated: false,
+                frames: 1,
+                source_bytes: 0,
+            },
+            thumbnail: crate::vision::Thumbnail {
+                bytes: vec![],
+                mime: "image/png",
+                ext: "png",
+            },
+        };
+        let result = engine.recognize(&prepared).unwrap();
+        println!("confidence={:.3}\n{}", result.confidence, result.text);
+        assert!(result.text.contains("Avalon"), "倒置图片未正确校正: {}", result.text);
     }
 
     #[test]

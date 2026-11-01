@@ -36,6 +36,7 @@
       "../../data/vector/models/embedding/bge-small-zh-v1.5/tokenizer.json": "data/vector/models/embedding/bge-small-zh-v1.5/tokenizer.json",
       "../../data/vector/models/embedding/bge-small-zh-v1.5/model.safetensors": "data/vector/models/embedding/bge-small-zh-v1.5/model.safetensors",
       "../../data/models/ocr/det.onnx": "data/models/ocr/det.onnx",
+      "../../data/models/ocr/cls.onnx": "data/models/ocr/cls.onnx",
       "../../data/models/ocr/rec.onnx": "data/models/ocr/rec.onnx"
     }
   }

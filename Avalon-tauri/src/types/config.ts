@@ -17,6 +17,12 @@ export interface OcrConfig {
   engine: string;
   /** 文本置信度达到该值才允许跳过 VLM */
   min_confidence: number;
+  /** 模型目录；空字符串 = 数据目录/models/ocr */
+  model_dir: string;
+  /** 方向分类器：倒置（180°）文本行先转正再识别；需 cls.onnx */
+  use_angle_cls: boolean;
+  /** 判定倒置的概率阈值 */
+  cls_threshold: number;
 }
 
 /** 视觉输入配置，对应后端 [vision] */
@@ -49,6 +55,11 @@ export interface FeishuConfig {
   /** 主人 open_id，feishu_notify_owner 的收件人；留空则由第一个私聊的用户自动填充 */
   owner_open_id: string;
   session_mode: FeishuSessionMode;
+  /**
+   * 收到图片消息后、等用户说明意图前发送的询问文本。
+   * 留空 = 不询问，收到图片立即交给模型处理
+   */
+  image_ack_text: string;
   /** 以下为进度表情，值须是飞书 emoji_type 枚举（OnIt / DONE / ERROR…），留空 = 关闭 */
   queued_reaction: string;
   processing_reaction: string;

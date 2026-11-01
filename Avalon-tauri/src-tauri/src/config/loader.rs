@@ -99,6 +99,8 @@ owner_open_id = ""                        # 主人 open_id，feishu_notify_owner
 #   isolated = 每个聊天独立上下文（私聊按人、群聊按群）
 #   unified  = 所有飞书消息汇入同一个永恒会话，跨群跨私聊记忆连贯
 session_mode = "isolated"
+# 图片消息先回一句询问，等用户下一条文字再一起处理；留空 = 收到图片立即处理
+image_ack_text = "已收到图片，请问需要我做什么？可以直接回复你的问题，我会结合这张图回答。"
 # 进度表情：在用户那条消息上标注处理进度，同一时刻只挂一个。
 # 值必须是飞书的 emoji_type 枚举（OnIt / DONE / ERROR / Typing / THINKING …），
 # 不能填 Unicode 字符，否则接口报 231001。任意一项留空 = 关闭该状态的标记。
@@ -168,9 +170,11 @@ confirm_before_send = true                # 首次向某个视觉模型发送图
 
 [vision.ocr]
 enabled = false                           # 本地 OCR 工具（P2）
-engine = "none"                           # none | onnx（tract 为后置备选，未实现）
+engine = "none"                           # none | onnx
 min_confidence = 0.75                     # 低于该值在工具输出里标注低置信度
 model_dir = ""                            # 模型目录；留空 = data_root/models/ocr
+use_angle_cls = true                      # 方向分类器：倒置（180°）文本行先转正再识别；需 cls.onnx
+cls_threshold = 0.9                       # 判定倒置的概率阈值
 "#;
 
 /// 加载配置：定位 → 不存在则生成默认模板 → 反序列化 → 回填 config_path → 环境变量覆盖
@@ -323,16 +327,27 @@ pub fn validate(config: &AppConfig) -> Vec<String> {
                     // 模型是外部资产，缺失时工具不会注册；启动时就提示，免得调用时才报错。
                     // 字典不强制：RapidOCR 导出的 rec 模型自带字符表
                     let dir = config.ocr_model_dir();
+                    let mut missing = false;
                     for file in ["det.onnx", "rec.onnx"] {
                         if !dir.join(file).is_file() {
+                            missing = true;
                             warnings.push(format!(
                                 "视觉 OCR 缺少模型文件: {}",
                                 dir.join(file).display()
                             ));
                         }
                     }
+                    // 方向分类是可选项：缺失只是不校正倒置文本，不影响工具注册
+                    if !missing
+                        && config.vision.ocr.use_angle_cls
+                        && !dir.join("cls.onnx").is_file()
+                    {
+                        warnings.push(format!(
+                            "视觉 OCR 已启用方向分类但缺少模型文件: {}（倒置文本将不做校正）",
+                            dir.join("cls.onnx").display()
+                        ));
+                    }
                 }
-                "tract" => warnings.push("OCR engine=tract 尚未实现".to_string()),
                 other => warnings.push(format!("未知的 OCR 引擎: {other}")),
             }
         }

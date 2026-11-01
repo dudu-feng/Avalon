@@ -31,6 +31,9 @@ const DEDUP_TTL: Duration = Duration::from_secs(600);
 const DEDUP_CAPACITY: usize = 1024;
 /// 单个会话最多允许多少条消息排队等待。超出直接告知用户，避免无限积压
 const MAX_WAITING: usize = 3;
+/// 已接收但还没等到用户文字说明的图片保留时长。
+/// 超过后丢弃，避免很久之后的一句文字误关联旧图
+const PENDING_IMAGE_TTL: Duration = Duration::from_secs(600);
 
 /// 统一模式下所有飞书消息共用的会话名。
 /// 刻意避开裸 "feishu" —— 那是 Python 版遗留会话文件的名字，两边的
@@ -46,6 +49,52 @@ const UNIFIED_CHANNEL: &str = "feishu_unified";
 struct ChannelSlot {
     lock: AsyncMutex<()>,
     waiting: AtomicUsize,
+}
+
+/// 已落盘、等待与下一条文字消息一起处理的图片。
+/// 飞书的图片与文字是两条独立消息，不能收到图片就立刻调用视觉模型
+struct PendingImage {
+    path: String,
+    received_at: Instant,
+}
+
+/// 待合并图片队列，按会话 key 分组。
+///
+/// 抽成独立结构而不是散在 handler 里的 HashMap：过期清理与「连发多图只问
+/// 一次」的判定都能直接测，不用拉起 API 与 engine
+#[derive(Default)]
+struct PendingImages {
+    map: HashMap<String, Vec<PendingImage>>,
+}
+
+impl PendingImages {
+    /// 存入一张图片，返回本次是否需要发送询问文本。
+    /// 该会话此前没有待处理图片时为 true —— 连发多张只问一次
+    fn push(&mut self, channel: String, path: String, now: Instant) -> bool {
+        // 顺手清理所有会话的过期项，避免长期运行内存缓慢增长
+        self.map.retain(|_, list| {
+            list.retain(|p| now.duration_since(p.received_at) < PENDING_IMAGE_TTL);
+            !list.is_empty()
+        });
+        let list = self.map.entry(channel).or_default();
+        let ask = list.is_empty();
+        list.push(PendingImage {
+            path,
+            received_at: now,
+        });
+        ask
+    }
+
+    /// 取走某会话的图片；过期项直接丢弃
+    fn take(&mut self, channel: &str, now: Instant) -> Vec<String> {
+        self.map
+            .remove(channel)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| now.duration_since(p.received_at) < PENDING_IMAGE_TTL)
+            .map(|p| p.path)
+            .collect()
+    }
 }
 
 /// event_id 去重表
@@ -112,6 +161,13 @@ impl IncomingMessage {
         }
     }
 
+    /// 待合并图片的分组 key。与 session_mode 无关，始终按聊天局部化 ——
+    /// 统一模式下所有人共享会话，但图片不应跨聊天合并：A 私聊发的图
+    /// 不该被 B 在群里的一句文字带走
+    fn pending_key(&self) -> String {
+        sanitize_channel(&format!("feishu_chat_{}", self.chat_id))
+    }
+
     /// 落盘用的结构化来源信息，对齐 Python 版 _build_meta。
     ///
     /// 只存 open_id 不查通讯录 —— 姓名交给后续的飞书工具按需查询。
@@ -171,6 +227,8 @@ pub struct MessageHandler {
     dedup: Mutex<Dedup>,
     /// 每会话一把串行锁
     slots: Mutex<HashMap<String, Arc<ChannelSlot>>>,
+    /// 等待用户文字说明的图片，按会话 key 分组
+    pending_images: Mutex<PendingImages>,
     /// 表情能力的熔断开关，跨消息共享
     reactions: ReactionGate,
 }
@@ -191,6 +249,7 @@ impl MessageHandler {
             store,
             dedup: Mutex::new(Dedup::new()),
             slots: Mutex::new(HashMap::new()),
+            pending_images: Mutex::new(PendingImages::default()),
             reactions: ReactionGate::new(),
         }
     }
@@ -302,7 +361,62 @@ impl MessageHandler {
         // 准入全部通过，这才是一个「有资格成为主人」的人
         self.record_owner(&msg);
 
-        self.run_engine(msg).await
+        self.dispatch(msg).await
+    }
+
+    /// 图片消息先挂起并回一句询问，文字消息到达后再合并处理。
+    ///
+    /// 外部渠道的图文通常分两条消息发送：收到图片就调用模型，等于在用户
+    /// 还没提出问题时先跑一次视觉理解。这里先下载落盘、存进 pending，再发
+    /// 一段可配置的询问文本；下一条文字消息会把这些图片作为附件一起送进
+    /// engine。询问文本为空时退回旧的「收到即处理」行为。
+    async fn dispatch(&self, msg: IncomingMessage) -> Result<()> {
+        let ack = self.config.image_ack_text.trim();
+        let image_only = msg.image_key.is_some() && msg.text.trim().is_empty();
+        if !image_only || ack.is_empty() {
+            return self.run_engine(msg).await;
+        }
+
+        let Some(image_key) = msg.image_key.clone() else {
+            return self.run_engine(msg).await;
+        };
+        let pending_key = msg.pending_key();
+
+        let path = match self.save_image(&msg, &image_key).await {
+            Ok(path) => path,
+            Err(e) => {
+                log::warn!(target: "feishu", "图片下载失败: {e:#}");
+                self.api
+                    .send_text(&msg.chat_id, &format!("图片接收失败：{e:#}"))
+                    .await?;
+                return Ok(());
+            }
+        };
+
+        // 连发多张图只询问一次；同会话的图片一起等下一段文字
+        let ask = self
+            .pending_images
+            .lock()
+            .unwrap()
+            .push(pending_key, path, Instant::now());
+
+        if ask {
+            if let Err(e) = self.api.send_text(&msg.chat_id, ack).await {
+                log::warn!(target: "feishu", "发送图片确认文本失败: {e:#}");
+            }
+        }
+        Ok(())
+    }
+
+    /// 取走某会话待处理的图片；过期项直接丢弃
+    fn take_pending(&self, channel: &str) -> Vec<ChatAttachment> {
+        self.pending_images
+            .lock()
+            .unwrap()
+            .take(channel, Instant::now())
+            .into_iter()
+            .map(|path| ChatAttachment { path })
+            .collect()
     }
 
     /// 驱动 ReAct 循环。输出分两路：正文走独立消息，思考与工具调用走流式卡片。
@@ -346,7 +460,9 @@ impl MessageHandler {
         };
         slot.waiting.fetch_sub(1, Ordering::SeqCst);
 
-        let result = self.drive(&msg, &channel).await;
+        // 之前先收到、还在等文字说明的图片，和这条消息一起处理
+        let pending = self.take_pending(&msg.pending_key());
+        let result = self.drive(&msg, &channel, pending).await;
 
         // 成败要分开标：之前无论如何都打「完成」，ReAct 崩了也显示 ✅
         let final_emoji = if result.is_ok() {
@@ -374,8 +490,14 @@ impl MessageHandler {
         Ok(stored.path)
     }
 
-    /// 跑一次 ReAct 并把输出推给飞书
-    async fn drive(&self, msg: &IncomingMessage, channel: &str) -> Result<()> {
+    /// 跑一次 ReAct 并把输出推给飞书。
+    /// `pending` 是此前已下载、等本条文字一起处理的图片
+    async fn drive(
+        &self,
+        msg: &IncomingMessage,
+        channel: &str,
+        pending: Vec<ChatAttachment>,
+    ) -> Result<()> {
         // 幂等：已有 active 会话就复用，没有才新建
         self.engine.init_session(channel)?;
 
@@ -387,7 +509,7 @@ impl MessageHandler {
         } else {
             msg.text.clone()
         };
-        let mut attachments = Vec::new();
+        let mut attachments = pending;
         if let Some(image_key) = &msg.image_key {
             match self.save_image(msg, image_key).await {
                 Ok(path) => attachments.push(ChatAttachment { path }),
@@ -540,5 +662,46 @@ impl MessageHandler {
             image_key,
             mentioned_bot,
         })
+    }
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::*;
+
+    #[test]
+    fn multiple_images_in_one_channel_ask_once() {
+        let mut pending = PendingImages::default();
+        let now = Instant::now();
+
+        assert!(pending.push("chat-a".into(), "1.png".into(), now), "首张应询问");
+        assert!(!pending.push("chat-a".into(), "2.png".into(), now), "连发第二张不再询问");
+        assert!(pending.push("chat-b".into(), "3.png".into(), now), "不同会话各自询问");
+
+        assert_eq!(pending.take("chat-a", now), vec!["1.png", "2.png"]);
+        assert!(pending.take("chat-a", now).is_empty(), "取走后应清空");
+        assert_eq!(pending.take("chat-b", now), vec!["3.png"]);
+    }
+
+    #[test]
+    fn expired_images_are_dropped_on_take() {
+        let mut pending = PendingImages::default();
+        let start = Instant::now();
+        pending.push("chat-a".into(), "old.png".into(), start);
+
+        let later = start + PENDING_IMAGE_TTL;
+        assert!(pending.take("chat-a", later).is_empty());
+    }
+
+    #[test]
+    fn push_prunes_expired_entries_of_other_channels() {
+        let mut pending = PendingImages::default();
+        let start = Instant::now();
+        pending.push("chat-a".into(), "old.png".into(), start);
+
+        let later = start + PENDING_IMAGE_TTL;
+        assert!(pending.push("chat-b".into(), "new.png".into(), later));
+        assert!(pending.take("chat-a", later).is_empty(), "过期项应被清理");
+        assert_eq!(pending.take("chat-b", later), vec!["new.png"]);
     }
 }

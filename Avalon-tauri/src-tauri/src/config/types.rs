@@ -197,6 +197,10 @@ pub struct FeishuConfig {
     pub owner_open_id: String,
     /// 会话隔离粒度
     pub session_mode: FeishuSessionMode,
+    /// 收到图片消息后、等用户说明意图前发送的询问文本。
+    /// 外部渠道的图片与文字通常分两条消息到达，先确认再挂起，避免在用户
+    /// 还没提出问题时提前调用视觉模型。留空 = 不询问，图片立即交给模型处理
+    pub image_ack_text: String,
     // —— 进度表情。值必须是飞书的 emoji_type 枚举（如 OnIt），不能填 Unicode
     //    字符，否则接口报 231001。任意一项留空即关闭该状态的标记。
     /// 排队等待中（前面还有消息在处理）
@@ -222,6 +226,9 @@ impl Default for FeishuConfig {
             allow_users: Vec::new(),
             owner_open_id: String::new(),
             session_mode: FeishuSessionMode::Isolated,
+            image_ack_text:
+                "已收到图片，请问需要我做什么？可以直接回复你的问题，我会结合这张图回答。"
+                    .to_string(),
             queued_reaction: "OneSecond".to_string(),
             processing_reaction: "OnIt".to_string(),
             done_reaction: "DONE".to_string(),
@@ -351,12 +358,17 @@ pub enum ObserveMode {
 #[serde(default)]
 pub struct OcrConfig {
     pub enabled: bool,
-    /// none | onnx（tract 为后置备选，当前未实现）
+    /// none | onnx
     pub engine: String,
     /// 低于该置信度时在工具输出里标注「低置信度」；不决定是否调用 VLM
     pub min_confidence: f32,
-    /// 模型目录；留空 = data_root/models/ocr（det.onnx / rec.onnx / ppocr_keys_v1.txt）
+    /// 模型目录；留空 = data_root/models/ocr（det.onnx / rec.onnx / cls.onnx / ppocr_keys_v1.txt）
     pub model_dir: String,
+    /// 是否用方向分类器把倒置（180°）的文本行转正后再识别。
+    /// 需要同目录下 cls.onnx；模型缺失时自动降级，不影响其余识别
+    pub use_angle_cls: bool,
+    /// 判定「倒置」的概率阈值：cls 输出 180° 的概率达到该值才旋转
+    pub cls_threshold: f32,
 }
 
 impl Default for OcrConfig {
@@ -366,6 +378,8 @@ impl Default for OcrConfig {
             engine: "none".to_string(),
             min_confidence: 0.75,
             model_dir: String::new(),
+            use_angle_cls: true,
+            cls_threshold: 0.9,
         }
     }
 }
@@ -424,6 +438,7 @@ impl VisionConfig {
         cfg.jpeg_quality = cfg.jpeg_quality.clamp(40, 95);
         cfg.timeout_secs = cfg.timeout_secs.max(5);
         cfg.concurrency = cfg.concurrency.clamp(1, 8);
+        cfg.ocr.cls_threshold = cfg.ocr.cls_threshold.clamp(0.5, 0.99);
         cfg
     }
 }

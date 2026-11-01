@@ -1,13 +1,14 @@
 // 本地 OCR：引擎 trait + 服务方法 + 结果缓存
 //
-// OCR 是模型可调用的工具，不是自动前置步骤：它只提取文字，不做语义理解。
-// 引擎未实现或模型缺失时 build_engine 返回 None，ocr_image 工具不会注册。
+// OCR 是模型可调用的基础工具，不是自动前置步骤：它只提取文字，不做语义理解；
+// 图片语义理解统一走云端 VLM。
+// 引擎配置无效或模型缺失时 build_engine 返回 None，ocr_image 工具不会注册。
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
@@ -68,20 +69,6 @@ pub trait OcrEngine: Send + Sync {
     fn recognize(&self, image: &PreparedImage) -> Result<OcrResult>;
 }
 
-/// 未启用 OCR 时的空实现：永远返回「没有结果」
-#[allow(dead_code)]
-pub struct NoopOcr;
-
-impl OcrEngine for NoopOcr {
-    fn name(&self) -> &'static str {
-        "none"
-    }
-
-    fn recognize(&self, _image: &PreparedImage) -> Result<OcrResult> {
-        bail!("OCR 未启用")
-    }
-}
-
 /// OCR 引擎句柄：持有配置与模型目录，真正加载推迟到首次识别。
 ///
 /// 用 `Mutex<Option<_>>` 而不是 `OnceLock`：需要支持卸载（关闭 OCR /
@@ -89,15 +76,19 @@ impl OcrEngine for NoopOcr {
 /// 放好模型后下一次调用应当能重试成功，而不是要求重启进程。
 pub struct OcrHandle {
     model_dir: PathBuf,
+    use_angle_cls: bool,
+    cls_threshold: f32,
     engine: Mutex<Option<Arc<dyn OcrEngine>>>,
     /// 串行化首次加载，避免并发请求各解析一份模型
     loading: AsyncMutex<()>,
 }
 
 impl OcrHandle {
-    pub fn new(model_dir: PathBuf) -> Self {
+    pub fn new(model_dir: PathBuf, use_angle_cls: bool, cls_threshold: f32) -> Self {
         Self {
             model_dir,
+            use_angle_cls,
+            cls_threshold,
             engine: Mutex::new(None),
             loading: AsyncMutex::new(()),
         }
@@ -130,8 +121,10 @@ impl OcrHandle {
         }
 
         let dir = self.model_dir.clone();
+        let use_angle_cls = self.use_angle_cls;
+        let cls_threshold = self.cls_threshold;
         let engine = tokio::task::spawn_blocking(move || -> Result<Arc<dyn OcrEngine>> {
-            Ok(Arc::new(OnnxOcr::load(&dir)?))
+            Ok(Arc::new(OnnxOcr::load(&dir, use_angle_cls, cls_threshold)?))
         })
         .await
         .map_err(|e| anyhow::anyhow!("OCR 加载任务失败: {e}"))??;
@@ -161,7 +154,7 @@ pub fn build_engine(cfg: &OcrConfig, model_dir: PathBuf) -> Option<Arc<OcrHandle
     match cfg.engine.trim().to_ascii_lowercase().as_str() {
         "none" | "" => None,
         "onnx" => {
-            let handle = OcrHandle::new(model_dir);
+            let handle = OcrHandle::new(model_dir, cfg.use_angle_cls, cfg.cls_threshold);
             if handle.models_present() {
                 // 这里只报告状态，不加载 —— 首次 ocr_image 才解析模型
                 log::info!(
@@ -172,16 +165,12 @@ pub fn build_engine(cfg: &OcrConfig, model_dir: PathBuf) -> Option<Arc<OcrHandle
             } else {
                 log::warn!(
                     target: "vision",
-                    "OCR 模型缺失，ocr_image 不会注册；请放置 det.onnx / rec.onnx / {} 到 {}",
+                    "OCR 模型缺失，ocr_image 不会注册；请放置 det.onnx / rec.onnx（可选 cls.onnx、{}）到 {}",
                     ocr_onnx::DICT_FILE,
                     handle.model_dir().display()
                 );
             }
             Some(Arc::new(handle))
-        }
-        "tract" => {
-            log::warn!(target: "vision", "OCR engine=tract 尚未实现，ocr_image 不会注册");
-            None
         }
         other => {
             log::warn!(
@@ -384,39 +373,11 @@ mod tests {
 
     #[tokio::test]
     async fn ocr_handle_load_failure_is_not_cached() {
-        let handle = OcrHandle::new(PathBuf::from("nonexistent-ocr-models"));
+        let handle = OcrHandle::new(PathBuf::from("nonexistent-ocr-models"), true, 0.9);
         // 模型缺失时两次都应立即失败：失败不写缓存，修好模型后下次可重试
         assert!(handle.get().await.is_err());
         assert!(handle.get().await.is_err());
         assert!(handle.loaded().is_none());
     }
 
-    #[test]
-    fn noop_engine_reports_error() {
-        let engine = NoopOcr;
-        assert_eq!(engine.name(), "none");
-        let prepared = PreparedImage {
-            bytes: vec![],
-            mime: "image/png",
-            width: 1,
-            height: 1,
-            sha256: "x".into(),
-            phash: "0".repeat(16),
-            profile: crate::vision::ImageProfile {
-                width: 1,
-                height: 1,
-                format: "png".into(),
-                has_alpha: false,
-                animated: false,
-                frames: 1,
-                source_bytes: 0,
-            },
-            thumbnail: crate::vision::Thumbnail {
-                bytes: vec![],
-                mime: "image/png",
-                ext: "png",
-            },
-        };
-        assert!(engine.recognize(&prepared).is_err());
-    }
 }

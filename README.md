@@ -139,7 +139,7 @@ npx tauri build
 
 本地 embedding 模型 `bge-small-zh-v1.5`（candle 所需的 `config.json` / `tokenizer.json` / `model.safetensors` 三个文件，约 96MB）已随安装包一起打包，装到 `数据目录/data/vector/models/embedding/bge-small-zh-v1.5/`，安装后开箱即用，无需手动下载或复制模型。这也是安装包体积从几 MB 涨到约 100MB 的原因。
 
-本地 OCR 模型（PP-OCRv4 的 `det.onnx` / `rec.onnx`，约 15MB）同样随包分发，安装后位于 `数据目录/data/models/ocr/`。启用方式是在 `Avalon-config.toml` 中设置 `[vision].enabled = true`、`[vision.ocr].enabled = true`、`[vision.ocr].engine = "onnx"`，模型本身无需再手动放置。
+本地 OCR 模型（PP-OCRv4 的 `det.onnx` / `cls.onnx` / `rec.onnx`，约 16MB）同样随包分发，安装后位于 `数据目录/data/models/ocr/`。启用方式是在 `Avalon-config.toml` 中设置 `[vision].enabled = true`、`[vision.ocr].enabled = true`、`[vision.ocr].engine = "onnx"`，模型本身无需再手动放置；`use_angle_cls = true` 会逐行校正倒置文本。
 
 ## 📁 仓库结构
 

@@ -203,7 +203,8 @@ export function VisionSettings({
           缓存与缩略图位于 file_root/cache，可随时删除后重建。
         </p>
         <p className={styles.hint}>
-          本地 OCR 快路与缓存自动清理属于 P2，当前配置会保存但尚未接入执行。
+          本地 OCR（PP-OCRv4）在配置文件的 [vision.ocr] 段启用：设置 engine = "onnx"，
+          use_angle_cls 会校正倒置文本。模型随安装包分发，缓存清理随 cache_ttl_days 生效。
         </p>
       </Card>
 
