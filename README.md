@@ -138,6 +138,8 @@ npx tauri build
 
 产物：`src-tauri/target/release/bundle/nsis/Avalon_0.7.2_x64-setup.exe`（Windows 安装包，双击安装，默认装到当前用户目录，无需管理员权限）。
 
+安装包统一发布在 [GitHub Releases](https://github.com/dudu-feng/Avalon/releases)，仓库不再跟踪 `exe_list/`；每个版本的发布说明归档在 `release-notes/`，新增版本时先写说明再打 tag 发布。
+
 本地 embedding 模型 `bge-small-zh-v1.5`（candle 所需的 `config.json` / `tokenizer.json` / `model.safetensors` 三个文件，约 96MB）已随安装包一起打包，装到 `数据目录/data/vector/models/embedding/bge-small-zh-v1.5/`，安装后开箱即用，无需手动下载或复制模型。这也是安装包体积从几 MB 涨到约 100MB 的原因。
 
 本地 OCR 模型（PP-OCRv4 的 `det.onnx` / `cls.onnx` / `rec.onnx`，约 16MB）同样随包分发，安装后位于 `数据目录/data/models/ocr/`。启用方式是在 `Avalon-config.toml` 中设置 `[vision].enabled = true`、`[vision.ocr].enabled = true`、`[vision.ocr].engine = "onnx"`，模型本身无需再手动放置；`use_angle_cls = true` 会逐行校正倒置文本。

@@ -63,3 +63,7 @@ Avalon-config.toml
 
 # 毕业设计
 毕业设计/
+
+# 安装包统一走 GitHub Release，不再提交进仓库
+exe_list/
+Avalon_*_x64-setup.exe
