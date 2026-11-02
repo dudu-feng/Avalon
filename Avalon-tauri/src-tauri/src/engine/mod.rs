@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
+use crate::channel::contact::ContactStore;
 use crate::config::ConfigStore;
 use crate::llm::LlmState;
 use crate::prompt::PromptAssembler;
@@ -66,6 +67,8 @@ pub struct Engine {
     session: Arc<dyn SessionStore>,
     usage: Arc<UsageStore>,
     vision: Arc<VisionService>,
+    /// 渠道通讯录。工具上下文靠它判断当前发言人是否主人
+    contacts: Arc<ContactStore>,
     /// 按 channel 维度的取消标志（chat 运行时注册，stop_chat 置位中断流式循环）
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// 正在运行的 channel 集合（心跳调度前判忙，避免并发执行同一任务）
@@ -81,6 +84,7 @@ impl Engine {
         session: Arc<dyn SessionStore>,
         usage: Arc<UsageStore>,
         vision: Arc<VisionService>,
+        contacts: Arc<ContactStore>,
     ) -> Self {
         Self {
             config,
@@ -90,6 +94,7 @@ impl Engine {
             session,
             usage,
             vision,
+            contacts,
             cancels: Mutex::new(HashMap::new()),
             busy: Mutex::new(HashSet::new()),
         }
@@ -133,6 +138,7 @@ impl Engine {
             self.session.as_ref(),
             self.usage.as_ref(),
             self.vision.as_ref(),
+            self.contacts.as_ref(),
             &cancel,
             &mut on_event,
         )

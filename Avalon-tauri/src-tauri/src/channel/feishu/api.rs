@@ -27,7 +27,7 @@ pub fn error_hint(raw: &str) -> Option<&'static str> {
     const CODES: &[(&str, &str)] = &[
         (
             "code=230001",
-            "请求参数不合法：确认 owner_open_id 是当前应用的 open_id（ou_ 开头），\
+            "请求参数不合法：确认收件人 id 属于当前应用（ou_ 开头），\
              且没有把用户 id 当成会话 id 使用",
         ),
         (

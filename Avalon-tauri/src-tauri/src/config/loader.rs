@@ -94,7 +94,7 @@ app_secret = ""                           # 敏感（支持环境变量 AVALON_F
 domain = "https://open.feishu.cn"         # Lark 国际版填 https://open.larksuite.com
 group_require_mention = true              # 群聊需 @ 机器人才响应
 allow_users = []                          # open_id 白名单，留空 = 不限制
-owner_open_id = ""                        # 主人 open_id，feishu_notify_owner 的收件人；留空则由第一个私聊的用户自动填充
+# 主人 open_id 已迁入通讯录（设置 → 通讯录），由首次私聊自动记录
 # 会话隔离粒度：
 #   isolated = 每个聊天独立上下文（私聊按人、群聊按群）
 #   unified  = 所有飞书消息汇入同一个永恒会话，跨群跨私聊记忆连贯
@@ -121,7 +121,7 @@ backend = "official"                      # official（已实现）| onebot（�
 session_mode = "isolated"                 # isolated = 每群/私聊独立；unified = 全部汇入一个会话
 group_require_mention = true              # 群聊只响应 @ 机器人的消息
 allow_users = []                          # openid 白名单，留空 = 不限制
-owner_open_id = ""                        # 主人 openid，qq_notify_owner 的收件人；留空则由第一个私聊用户自动填充
+# 主人 openid 已迁入通讯录（设置 → 通讯录），由首次私聊自动记录
 image_ack_text = "已收到图片，请问需要我做什么？可以直接回复你的问题，我会结合这张图回答。"
 
 [qq.official]

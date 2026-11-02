@@ -3,13 +3,14 @@
 // 前端通过 invoke("command_name", { params }) 调用这些命令。
 // 分两类：配置管理命令 + LLM 调用命令（LLM 命令由 engine 层后续编排）。
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::channel::contact::{Contact, ContactStore};
+use crate::channel::contact::{Contact, ContactStore, OwnerContact};
 use crate::channel::{ChannelKind, ChannelManager, ChannelStatus};
 use crate::config::{AppConfig, ConfigStore};
 use crate::engine::{Engine, EngineEvent};
@@ -726,14 +727,16 @@ pub async fn feishu_test_connection(
 
 // ============ 渠道通讯录 ============
 
-/// 通讯录列表：total 是全量人数，users 是本次匹配结果
+/// 通讯录列表：total 是全量人数，users 是本次匹配结果，owners 按渠道索引
 #[derive(serde::Serialize)]
 pub struct ContactList {
     pub total: usize,
     pub users: Vec<Contact>,
+    pub owners: BTreeMap<String, OwnerContact>,
 }
 
-/// 列出通讯录（前端主人管理页用）。query 对 id / name / profile 模糊匹配
+/// 列出通讯录（前端主人管理页用）。query 对 id / name / profile 模糊匹配。
+/// owners 不受 query 影响，始终返回全部已记录的主人
 #[tauri::command]
 pub fn list_contacts(
     query: Option<String>,
@@ -744,7 +747,22 @@ pub fn list_contacts(
     Ok(ContactList {
         total: contacts.len(),
         users: contacts.list(query.as_deref(), limit),
+        owners: contacts.owners(),
     })
+}
+
+/// 手工更正某渠道主人（前端通讯录页）。id 必填，昵称可空；
+/// 通常由渠道首次私聊自动记录，这里只用于纠正
+#[tauri::command]
+pub fn update_owner(
+    channel: String,
+    id: String,
+    name: Option<String>,
+    contacts: State<'_, Arc<ContactStore>>,
+) -> Result<OwnerContact, String> {
+    contacts
+        .set_owner(&channel, &id, name.as_deref().unwrap_or(""))
+        .map_err(|e| format!("{e:#}"))
 }
 
 /// 更新通讯录条目。profile 是整体替换；name / profile 至少提供一个

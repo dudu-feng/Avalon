@@ -24,7 +24,7 @@ pub mod web_tools;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::config::ConfigStore;
+use crate::channel::contact::ContactStore;
 
 /// 一次工具调用所在的上下文。
 ///
@@ -38,7 +38,7 @@ pub struct ToolContext {
     pub session_key: String,
     /// 当前发言人 id，带渠道前缀（如 feishu:ou_xxx）；桌面/后台任务为 None
     pub sender_id: Option<String>,
-    /// 当前发言人是否配置里的主人。桌面端与后台任务默认是
+    /// 当前发言人是否通讯录记录的主人。桌面端与后台任务默认是
     pub is_owner: bool,
 }
 
@@ -53,10 +53,8 @@ impl ToolContext {
         }
     }
 
-    /// 从会话 key + 消息 meta + 配置推导工具上下文
-    pub fn from_input(channel: &str, meta: Option<&Value>, config: &ConfigStore) -> Self {
-        let cfg = config.get();
-
+    /// 从会话 key + 消息 meta + 通讯录推导工具上下文
+    pub fn from_input(channel: &str, meta: Option<&Value>, contacts: &ContactStore) -> Self {
         let raw_sender = meta
             .and_then(|m| m.get("sender_id").or_else(|| m.get("sender")))
             .and_then(Value::as_str)
@@ -106,21 +104,11 @@ impl ToolContext {
             }
         });
 
-        let owner_id = match prefix {
-            "feishu" => cfg.feishu.owner_open_id.trim(),
-            "qq" => cfg.qq.owner_open_id.trim(),
-            _ => "",
-        };
-        let is_owner = match raw_sender.as_deref() {
-            Some(raw) if !owner_id.is_empty() => {
-                let bare = raw
-                    .strip_prefix("feishu:")
-                    .or_else(|| raw.strip_prefix("qq:"))
-                    .unwrap_or(raw);
-                bare == owner_id
-            }
-            _ => false,
-        };
+        // 主人身份只认通讯录：渠道 handler 在首次私聊时写入，桌面端手工更正也写这里
+        let is_owner = raw_sender
+            .as_deref()
+            .map(|raw| contacts.is_owner(prefix, raw))
+            .unwrap_or(false);
 
         Self {
             channel: prefix.to_string(),
@@ -158,19 +146,27 @@ pub use sandbox::resolve_allowed_command;
 mod tests {
     use super::*;
 
-    fn config_with_owners() -> ConfigStore {
-        let mut cfg = crate::config::default_config();
-        cfg.feishu.owner_open_id = "ou_owner".to_string();
-        cfg.qq.owner_open_id = "qq_owner".to_string();
-        ConfigStore::from_config(cfg)
+    fn contacts_with_owners() -> ContactStore {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "avalon-tool-context-test-{}-{stamp}.json",
+            std::process::id()
+        ));
+        let store = ContactStore::new(path);
+        store.record_owner("feishu", "ou_owner", "").unwrap();
+        store.record_owner("qq", "qq_owner", "").unwrap();
+        store
     }
 
     #[test]
     fn sender_prefix_wins_when_channel_is_unified() {
         // 统一到 main 会话后 channel 不再带渠道名，仍应靠 sender_id 识别来源与权限
-        let cfg = config_with_owners();
+        let contacts = contacts_with_owners();
         let meta = serde_json::json!({"sender_id": "feishu:ou_owner"});
-        let ctx = ToolContext::from_input("main", Some(&meta), &cfg);
+        let ctx = ToolContext::from_input("main", Some(&meta), &contacts);
         assert_eq!(ctx.channel, "feishu");
         assert_eq!(ctx.sender_id.as_deref(), Some("feishu:ou_owner"));
         assert!(ctx.is_owner);
@@ -178,30 +174,30 @@ mod tests {
 
     #[test]
     fn non_owner_is_detected_from_sender_id() {
-        let cfg = config_with_owners();
+        let contacts = contacts_with_owners();
         let meta = serde_json::json!({"sender_id": "qq:someone_else"});
-        let ctx = ToolContext::from_input("main", Some(&meta), &cfg);
+        let ctx = ToolContext::from_input("main", Some(&meta), &contacts);
         assert_eq!(ctx.channel, "qq");
         assert!(!ctx.is_owner);
     }
 
     #[test]
     fn bare_sender_gets_channel_prefix() {
-        let cfg = config_with_owners();
+        let contacts = contacts_with_owners();
         let meta = serde_json::json!({"sender": "ou_owner"});
-        let ctx = ToolContext::from_input("feishu_unified", Some(&meta), &cfg);
+        let ctx = ToolContext::from_input("feishu_unified", Some(&meta), &contacts);
         assert_eq!(ctx.sender_id.as_deref(), Some("feishu:ou_owner"));
         assert!(ctx.is_owner);
     }
 
     #[test]
     fn scheduler_and_desktop_have_no_sender() {
-        let cfg = config_with_owners();
-        let ctx = ToolContext::from_input("task_daily", None, &cfg);
+        let contacts = contacts_with_owners();
+        let ctx = ToolContext::from_input("task_daily", None, &contacts);
         assert_eq!(ctx.channel, "scheduler");
         assert!(ctx.is_owner);
 
-        let ctx = ToolContext::from_input("desktop", None, &cfg);
+        let ctx = ToolContext::from_input("desktop", None, &contacts);
         assert_eq!(ctx.channel, "desktop");
         assert!(ctx.is_owner);
     }

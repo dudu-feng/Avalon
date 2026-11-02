@@ -9,7 +9,6 @@
 use serde_json::Value;
 
 use crate::channel::contact::{Contact, ContactStore};
-use crate::config::ConfigStore;
 
 use super::ToolContext;
 
@@ -96,6 +95,11 @@ pub fn record_user(args: &Value, store: &ContactStore, ctx: &ToolContext) -> Str
             let message = e.to_string();
             if message.contains("已存在") {
                 format!("通讯录: 该用户已存在（{id}），请用 update_user 更新")
+            } else if message.contains("渠道主人") {
+                format!(
+                    "通讯录: {id} 是渠道主人，不登记在普通用户区。\
+                     主人的画像由灵魂模块维护，请用灵魂工具（profile 条目）更新"
+                )
             } else {
                 format!("通讯录写入失败: {message}")
             }
@@ -127,7 +131,17 @@ pub fn update_user(args: &Value, store: &ContactStore, ctx: &ToolContext) -> Str
             log::info!(target: "contact", "已更新用户 {}", c.id);
             format!("已更新用户：{}（{}）", c.name, c.id)
         }
-        Err(e) => format!("通讯录更新失败: {e}"),
+        Err(e) => {
+            let message = e.to_string();
+            if message.contains("渠道主人") {
+                format!(
+                    "通讯录: {id} 是渠道主人，画像由灵魂模块维护；\
+                     请用灵魂工具（profile 条目）更新"
+                )
+            } else {
+                format!("通讯录更新失败: {message}")
+            }
+        }
     }
 }
 
@@ -201,51 +215,36 @@ pub fn list_users(args: &Value, store: &ContactStore, ctx: &ToolContext) -> Stri
     lines.join("\n")
 }
 
-/// 获取主人的通讯录详情（仅主人）。两个渠道都配置了主人时都返回
-pub fn get_owner_contact(store: &ContactStore, config: &ConfigStore, ctx: &ToolContext) -> String {
+/// 获取主人的通讯录详情（仅主人）。两个渠道都有记录时都返回。
+///
+/// 主人条目只有 id 与昵称；画像不在通讯录里，归灵魂模块的 profile 条目。
+pub fn get_owner_contact(store: &ContactStore, ctx: &ToolContext) -> String {
     if !ctx.is_owner {
         return "权限不足: 主人通讯录只对主人开放".to_string();
     }
 
-    let cfg = config.get();
-    let owners = [
-        ("飞书", cfg.feishu.owner_open_id.trim()),
-        ("QQ", cfg.qq.owner_open_id.trim()),
-    ];
     let mut lines = Vec::new();
-
-    for (label, raw) in owners {
-        if raw.is_empty() {
-            continue;
-        }
-        let prefix = if label == "飞书" { "feishu" } else { "qq" };
-        let id = if raw.starts_with("feishu:") || raw.starts_with("qq:") {
-            raw.to_string()
-        } else {
-            format!("{prefix}:{raw}")
-        };
-        match store.get(&id) {
-            Some(c) => lines.push(format!(
-                "主人（{label}）：{}，{}\n画像：{}",
-                c.id,
-                c.name,
-                if c.profile.trim().is_empty() {
-                    "暂无"
+    for (channel, label) in [("feishu", "飞书"), ("qq", "QQ")] {
+        match store.owner(channel) {
+            Some(owner) => {
+                let name = if owner.name.trim().is_empty() {
+                    "昵称未记录".to_string()
                 } else {
-                    c.profile.as_str()
-                }
-            )),
+                    owner.name.clone()
+                };
+                lines.push(format!(
+                    "主人（{label}）：{}，{name}\n画像：由灵魂模块维护（通讯录不存主人画像）",
+                    owner.id
+                ));
+            }
             None => lines.push(format!(
-                "主人（{label}）：{id}，未记录（可在主人私聊时调用 record_user 补录）"
+                "主人（{label}）：未记录\n\
+                 提示：主人首次私聊机器人后自动记录；也可在设置 → 通讯录里补填。"
             )),
         }
     }
 
-    if lines.is_empty() {
-        "尚未配置主人。请先私聊一次机器人，或在设置页填写 owner_open_id".to_string()
-    } else {
-        lines.join("\n\n")
-    }
+    lines.join("\n\n")
 }
 
 fn summarize(text: &str, max_chars: usize) -> String {
@@ -364,16 +363,48 @@ mod tests {
     }
 
     #[test]
+    fn owner_contact_reads_contacts_not_config() {
+        let (s, path) = store();
+        s.record_owner("feishu", "ou_owner", "主人").unwrap();
+        s.record_owner("qq", "U1", "").unwrap();
+
+        let out = get_owner_contact(&s, &owner_ctx());
+        assert!(out.contains("主人（飞书）：feishu:ou_owner，主人"));
+        assert!(out.contains("主人（QQ）：qq:U1，昵称未记录"));
+        assert!(out.contains("由灵魂模块维护"));
+        assert!(!out.contains("画像：暂无"));
+        cleanup(&path);
+    }
+
+    #[test]
     fn owner_contact_handles_unrecorded_owner() {
         let (s, path) = store();
-        let mut cfg = crate::config::default_config();
-        cfg.feishu.owner_open_id = "ou_owner".to_string();
-        let cfg = ConfigStore::from_config(cfg);
+        let out = get_owner_contact(&s, &owner_ctx());
+        assert!(out.contains("主人（飞书）：未记录"));
+        assert!(out.contains("主人（QQ）：未记录"));
+        assert!(out.contains("自动记录"));
+        cleanup(&path);
+    }
 
-        let out = get_owner_contact(&s, &cfg, &owner_ctx());
-        assert!(out.contains("主人（飞书）"));
-        assert!(out.contains("feishu:ou_owner"));
-        assert!(out.contains("未记录"));
+    #[test]
+    fn owner_id_is_rejected_from_user_records() {
+        let (s, path) = store();
+        s.record_owner("feishu", "ou_owner", "主人").unwrap();
+
+        let out = record_user(
+            &json!({"id": "ou_owner", "name": "主人", "profile": "不该写这里"}),
+            &s,
+            &owner_ctx(),
+        );
+        assert!(out.contains("渠道主人"));
+        assert!(out.contains("灵魂模块"));
+
+        let out = update_user(
+            &json!({"id": "ou_owner", "profile": "也不该写这里"}),
+            &s,
+            &owner_ctx(),
+        );
+        assert!(out.contains("渠道主人"));
         cleanup(&path);
     }
 

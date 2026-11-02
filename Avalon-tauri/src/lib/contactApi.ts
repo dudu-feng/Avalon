@@ -1,7 +1,7 @@
 // 渠道通讯录命令的接口封装（前端主人管理页用）
 
 import { invoke } from '@tauri-apps/api/core';
-import type { Contact, ContactList } from '../types/contact';
+import type { Contact, ContactList, OwnerContact } from '../types/contact';
 
 /** 列出通讯录。query 对 id / name / 画像做模糊匹配 */
 export async function listContacts(query?: string): Promise<ContactList> {
@@ -21,6 +21,19 @@ export async function updateContact(
     id,
     name: name ?? null,
     profile,
+  });
+}
+
+/** 手工更正某渠道主人。id 必填，昵称可空；通常由首次私聊自动记录 */
+export async function updateOwner(
+  channel: string,
+  id: string,
+  name: string,
+): Promise<OwnerContact> {
+  return invoke<OwnerContact>('update_owner', {
+    channel,
+    id,
+    name,
   });
 }
 

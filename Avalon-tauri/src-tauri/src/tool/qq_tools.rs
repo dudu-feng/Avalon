@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::channel::contact::ContactStore;
 use crate::channel::qq::official::proto::{ChatType, Target as QqTarget};
 use crate::channel::QqHandle;
-use crate::config::ConfigStore;
 
 /// 取字符串参数并去空白，兼容常见正文别名
 fn arg(args: &Value, keys: &[&str]) -> Option<String> {
@@ -43,10 +43,10 @@ fn log_bad_args(tool: &str, args: &Value) {
     log::warn!(target: "qq", "{tool} 参数错误：缺少必需参数，收到字段 {keys:?}");
 }
 
-/// 读配置里的主人 openid，去掉误粘贴进来的空白
-fn owner_id(config: Option<&ConfigStore>) -> String {
-    config
-        .map(|c| c.get().qq.owner_open_id.trim().to_string())
+/// 读通讯录里的 QQ 主人裸 openid（去掉 qq: 前缀）
+fn owner_id(contacts: Option<&ContactStore>) -> String {
+    contacts
+        .and_then(|c| c.owner_open_id("qq"))
         .unwrap_or_default()
 }
 
@@ -54,17 +54,17 @@ fn owner_id(config: Option<&ConfigStore>) -> String {
 pub async fn notify_owner(
     args: &Value,
     handle: &Arc<QqHandle>,
-    config: Option<&ConfigStore>,
+    contacts: Option<&ContactStore>,
 ) -> String {
     let Some(text) = text_arg(args) else {
         log_bad_args("qq_notify_owner", args);
         return "参数错误: 缺少 text 或内容为空".to_string();
     };
 
-    let owner = owner_id(config);
+    let owner = owner_id(contacts);
     if owner.is_empty() {
-        return "尚未记录 QQ 主人的 openid。请先私聊一次机器人（会自动记录），\
-                或在设置页「渠道 → QQ」填写 owner_open_id；也可调用 get_owner_contact 核对当前记录"
+        return "尚未记录 QQ 主人。请先私聊一次机器人（会自动记录），\
+                也可在设置 → 通讯录里补填；还可用 get_owner_contact 核对当前记录"
             .to_string();
     }
 
@@ -75,7 +75,7 @@ pub async fn notify_owner(
         }
         Err(e) => {
             log::warn!(target: "qq", "向主人推送失败: {e:#}");
-            let message = format!("发送失败: {e}");
+            let message = format!("发送失败: {e}\n渠道状态：{}", handle.status());
             if message.contains("未运行") {
                 return message;
             }
@@ -131,7 +131,7 @@ pub async fn send_to(args: &Value, handle: &Arc<QqHandle>) -> String {
         }
         Err(e) => {
             log::warn!(target: "qq", "向 QQ 会话 {chat_id} 发送失败: {e:#}");
-            let message = format!("发送失败: {e}");
+            let message = format!("发送失败: {e}\n渠道状态：{}", handle.status());
             if message.contains("未运行") {
                 return message;
             }
@@ -176,21 +176,30 @@ mod tests {
             &handle(),
             None,
         ));
-        assert!(out.contains("owner_open_id"));
+        assert!(out.contains("尚未记录 QQ 主人"));
         assert!(!out.contains("缺少 text"));
     }
 
     #[test]
-    fn 未配置主人时提示如何设置() {
+    fn 未记录主人时提示如何设置() {
         let out =
             tauri::async_runtime::block_on(notify_owner(&json!({ "text": "hi" }), &handle(), None));
-        assert!(out.contains("owner_open_id"));
+        assert!(out.contains("尚未记录 QQ 主人"));
+        assert!(out.contains("通讯录"));
     }
 
-    fn store_with_owner(owner: &str) -> ConfigStore {
-        let mut cfg = crate::config::default_config();
-        cfg.qq.owner_open_id = owner.to_string();
-        ConfigStore::from_config(cfg)
+    fn contacts_with_owner(owner: &str) -> ContactStore {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "avalon-qq-owner-test-{}-{stamp}.json",
+            std::process::id()
+        ));
+        let store = ContactStore::new(path);
+        store.record_owner("qq", owner, "").unwrap();
+        store
     }
 
     #[test]
@@ -258,11 +267,11 @@ mod tests {
 
     #[test]
     fn 有主人但渠道离线时发送返回未运行() {
-        let store = store_with_owner("U_abc");
+        let contacts = contacts_with_owner("U_abc");
         let out = tauri::async_runtime::block_on(notify_owner(
             &json!({ "text": "hi" }),
             &handle(),
-            Some(&store),
+            Some(&contacts),
         ));
         assert!(out.contains("发送失败"));
         assert!(out.contains("未运行"));

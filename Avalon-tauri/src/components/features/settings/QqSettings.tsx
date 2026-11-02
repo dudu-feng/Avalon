@@ -287,12 +287,6 @@ export function QqSettings({ config, onChange, dirty }: QqSettingsProps) {
             onBlur={() => patch('allow_users', parseList(allowText))}
           />
           <Input
-            label="主人 owner_open_id"
-            value={config.owner_open_id}
-            placeholder="留空则由第一个私聊用户自动填充"
-            onChange={(e) => patch('owner_open_id', e.currentTarget.value)}
-          />
-          <Input
             label="收到图片后的询问文本 image_ack_text（留空 = 立即处理）"
             value={config.image_ack_text}
             placeholder="已收到图片，请问需要我做什么？"

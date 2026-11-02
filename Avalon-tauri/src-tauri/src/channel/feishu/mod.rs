@@ -17,9 +17,10 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
+use crate::channel::contact::ContactStore;
 use crate::channel::handle::{FeishuHandle, HandleGuard};
 use crate::channel::ChannelStatus;
-use crate::config::{ConfigStore, FeishuConfig};
+use crate::config::FeishuConfig;
 use crate::engine::Engine;
 
 pub use ws::test_credentials;
@@ -32,7 +33,7 @@ pub async fn run(
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<ChannelStatus>>,
     handle: Arc<FeishuHandle>,
-    store: ConfigStore,
+    contacts: Arc<ContactStore>,
 ) {
     let base_url = config.base_url().to_string();
 
@@ -65,7 +66,7 @@ pub async fn run(
         api,
         config.clone(),
         bot_open_id,
-        store,
+        contacts,
     ));
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();

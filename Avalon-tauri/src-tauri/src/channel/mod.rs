@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
-use crate::config::{ConfigStore, FeishuConfig, QqConfig};
+use crate::channel::contact::ContactStore;
+use crate::config::{FeishuConfig, QqConfig};
 use crate::engine::Engine;
 
 pub use feishu::api::Target;
@@ -109,12 +110,16 @@ pub struct ChannelManager {
     handle: Arc<FeishuHandle>,
     /// 工具层共享的 QQ 发送句柄，生命周期与飞书一致
     qq_handle: Arc<QqHandle>,
-    /// 配置句柄，供 handler 做 owner 自动填充
-    store: ConfigStore,
+    /// 通讯录句柄，供 handler 自动记录主人
+    contacts: Arc<ContactStore>,
 }
 
 impl ChannelManager {
-    pub fn new(handle: Arc<FeishuHandle>, qq_handle: Arc<QqHandle>, store: ConfigStore) -> Self {
+    pub fn new(
+        handle: Arc<FeishuHandle>,
+        qq_handle: Arc<QqHandle>,
+        contacts: Arc<ContactStore>,
+    ) -> Self {
         // 长连接自己走 tokio-tungstenite，这个 client 只用于 REST 调用与凭证测试
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -127,7 +132,7 @@ impl ChannelManager {
             http,
             handle,
             qq_handle,
-            store,
+            contacts,
         }
     }
 
@@ -166,9 +171,9 @@ impl ChannelManager {
         let http = self.http.clone();
         let task_stop = stop.clone();
         let handle = self.handle.clone();
-        let store = self.store.clone();
+        let contacts = self.contacts.clone();
         let task = tauri::async_runtime::spawn(async move {
-            feishu::run(http, config, engine, task_stop, status, handle, store).await;
+            feishu::run(http, config, engine, task_stop, status, handle, contacts).await;
         });
 
         *self
@@ -196,10 +201,10 @@ impl ChannelManager {
         self.qq.set_status(ChannelStatus::Connecting);
 
         let task_stop = stop.clone();
-        let store = self.store.clone();
+        let contacts = self.contacts.clone();
         let qq_handle = self.qq_handle.clone();
         let task = tauri::async_runtime::spawn(async move {
-            qq::run(config, engine, task_stop, status, store, qq_handle).await;
+            qq::run(config, engine, task_stop, status, contacts, qq_handle).await;
         });
 
         *self.qq.running.lock().unwrap_or_else(|e| e.into_inner()) = Some(Running { stop, task });

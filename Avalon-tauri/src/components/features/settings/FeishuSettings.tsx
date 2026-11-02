@@ -249,12 +249,6 @@ export function FeishuSettings({ config, onChange, dirty }: FeishuSettingsProps)
             onBlur={() => patch('allow_users', parseList(allowText))}
           />
           <Input
-            label="主人 owner_open_id"
-            value={config.owner_open_id}
-            placeholder="留空则由第一个私聊的用户自动填充"
-            onChange={(e) => patch('owner_open_id', e.currentTarget.value)}
-          />
-          <Input
             label="收到图片后的询问文本 image_ack_text（留空 = 不询问、立即处理）"
             value={config.image_ack_text}
             placeholder="已收到图片，请问需要我做什么？"
@@ -262,8 +256,8 @@ export function FeishuSettings({ config, onChange, dirty }: FeishuSettingsProps)
           />
         </div>
         <p className={styles.hint}>
-          owner_open_id 是 feishu_notify_owner 工具的收件人 —— 定时任务靠它把结果推到你的
-          手机上。留空时，第一个私聊机器人并通过白名单校验的用户会被自动记录到这里。
+          主人 open_id 已迁入「设置 → 通讯录」：第一个私聊并通过白名单校验的用户会被自动记录，
+          定时任务的推送靠它把结果发到你的手机上。误记录时可在通讯录顶部更正。
         </p>
         <p className={styles.hint}>
           飞书的图片和文字是两条消息。填写询问文本后，收到图片只会先回复这句话并把图片挂起，

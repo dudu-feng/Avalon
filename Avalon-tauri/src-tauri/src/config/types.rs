@@ -195,8 +195,10 @@ pub struct FeishuConfig {
     pub group_require_mention: bool,
     /// 允许对话的用户 open_id 白名单，空列表 = 不限制
     pub allow_users: Vec<String>,
-    /// 主人的 open_id，feishu_notify_owner 的收件人。
-    /// 留空时由「第一个私聊机器人且通过准入的用户」自动填充并落盘
+    /// 旧版配置里的主人 open_id。主人已迁入通讯录（`owners.feishu`），
+    /// 这里只在启动时读取一次做迁移，运行期不再使用；序列化时跳过，
+    /// 避免把已经废弃的字段重新写回配置文件
+    #[serde(default, skip_serializing)]
     pub owner_open_id: String,
     /// 会话隔离粒度
     pub session_mode: FeishuSessionMode,
@@ -357,7 +359,9 @@ pub struct QqConfig {
     pub group_require_mention: bool,
     /// 允许对话的用户 openid 白名单，空列表 = 不限制
     pub allow_users: Vec<String>,
-    /// 主人 openid，qq_notify_owner 的收件人；留空时由第一个私聊用户自动填充
+    /// 旧版配置里的主人 openid。主人已迁入通讯录（`owners.qq`），
+    /// 仅用于启动迁移；序列化时跳过
+    #[serde(default, skip_serializing)]
     pub owner_open_id: String,
     /// 收到纯图片消息后、等用户说明意图前发送的询问文本。
     /// 留空 = 不询问，图片立即交给模型处理

@@ -136,11 +136,43 @@ pub fn run() {
     ));
     let task_store: Arc<scheduler::TaskStore> =
         Arc::new(scheduler::TaskStore::new(cfg.scheduler_path()));
-    // 渠道通讯录：只记录智能体主动登记的用户（id / name / profile）。
-    // 与消息流程解耦，渠道 handler 不写它
+    // 渠道通讯录：普通用户由智能体主动登记（id / name / profile）；
+    // 主人由渠道在首次私聊时自动写入（id / 昵称），主人的画像归灵魂模块
     let contact_store: Arc<channel::contact::ContactStore> = Arc::new(
         channel::contact::ContactStore::new(cfg.channel_contacts_path()),
     );
+    // 老配置里的 owner_open_id 只作为一次性迁移输入：
+    // 通讯录还没有该渠道主人时迁入，之后运行期一律读 ContactStore
+    for (channel, raw) in [
+        ("feishu", cfg.feishu.owner_open_id.as_str()),
+        ("qq", cfg.qq.owner_open_id.as_str()),
+    ] {
+        let raw = raw.trim();
+        if raw.is_empty() || contact_store.owner(channel).is_some() {
+            continue;
+        }
+        let canonical = if raw.starts_with("feishu:") || raw.starts_with("qq:") {
+            raw.to_string()
+        } else {
+            format!("{channel}:{raw}")
+        };
+        // 旧版本可能把主人也记进用户区，借用它的显示名，但不删除原记录
+        let name = contact_store
+            .get(&canonical)
+            .map(|c| c.name)
+            .unwrap_or_default();
+        match contact_store.record_owner(channel, raw, &name) {
+            Ok(true) => boot_log.push((
+                log::Level::Info,
+                format!("已将旧配置里的 {channel} 主人迁入通讯录"),
+            )),
+            Ok(false) => {}
+            Err(e) => boot_log.push((
+                log::Level::Warn,
+                format!("迁移 {channel} 主人到通讯录失败: {e}"),
+            )),
+        }
+    }
     // 飞书发送句柄。必须先于 ToolSet 创建 —— 工具层拿的是这个 Arc，
     // 渠道启动时才往里填 api。空句柄下工具会如实回答「渠道未运行」
     let feishu_handle = Arc::new(channel::FeishuHandle::new());
@@ -173,6 +205,7 @@ pub fn run() {
         session_store,
         usage_store.clone(),
         vision_service.clone(),
+        contact_store.clone(),
     ));
 
     // 供 setup 里启动心跳循环（manage 会 move 原句柄，这里提前 clone）
@@ -183,7 +216,7 @@ pub fn run() {
     let channels = Arc::new(channel::ChannelManager::new(
         feishu_handle,
         qq_handle,
-        store.clone(),
+        contact_store.clone(),
     ));
     let channel_engine = engine.clone();
     let channel_manager = channels.clone();
@@ -265,6 +298,7 @@ pub fn run() {
             commands::qq_test_connection,
             commands::list_contacts,
             commands::update_contact,
+            commands::update_owner,
             commands::delete_contact,
             commands::list_soul_entries,
             commands::get_soul_entry,

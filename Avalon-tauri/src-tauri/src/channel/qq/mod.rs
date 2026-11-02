@@ -14,8 +14,9 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+use crate::channel::contact::ContactStore;
 use crate::channel::{ChannelStatus, QqHandle};
-use crate::config::{ConfigStore, QqConfig};
+use crate::config::QqConfig;
 use crate::engine::Engine;
 
 use official::{MessageHandler, QqApi, TokenProvider};
@@ -26,7 +27,7 @@ pub async fn run(
     engine: Arc<Engine>,
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<ChannelStatus>>,
-    store: ConfigStore,
+    contacts: Arc<ContactStore>,
     handle: Arc<QqHandle>,
 ) {
     if !config.is_ready() {
@@ -63,7 +64,7 @@ pub async fn run(
         engine,
         api.clone(),
         config.clone(),
-        store,
+        contacts,
     ));
 
     let (tx, mut rx) = mpsc::unbounded_channel();

@@ -19,7 +19,8 @@ use super::api::QqApi;
 use super::out::QqOut;
 use super::proto::{self, GatewayEvent, IncomingMessage, Target};
 use crate::channel::common::{sanitize_channel, Dedup, PendingImages, SlotRegistry, MAX_WAITING};
-use crate::config::{ConfigStore, QqConfig, QqSessionMode};
+use crate::channel::contact::ContactStore;
+use crate::config::{QqConfig, QqSessionMode};
 use crate::engine::{Engine, EngineEvent, UserInput};
 use crate::file::{FileSource, SaveRequest};
 use crate::vision::ChatAttachment;
@@ -35,20 +36,25 @@ pub struct MessageHandler {
     engine: Arc<Engine>,
     api: QqApi,
     config: QqConfig,
-    /// 只用于主人 openid 自动填充
-    store: ConfigStore,
+    /// 通讯录。只用于主人自动记录
+    contacts: Arc<ContactStore>,
     dedup: Mutex<Dedup>,
     slots: SlotRegistry,
     pending_images: Mutex<PendingImages>,
 }
 
 impl MessageHandler {
-    pub fn new(engine: Arc<Engine>, api: QqApi, config: QqConfig, store: ConfigStore) -> Self {
+    pub fn new(
+        engine: Arc<Engine>,
+        api: QqApi,
+        config: QqConfig,
+        contacts: Arc<ContactStore>,
+    ) -> Self {
         Self {
             engine,
             api,
             config,
-            store,
+            contacts,
             dedup: Mutex::new(Dedup::new(DEDUP_TTL, DEDUP_CAPACITY)),
             slots: SlotRegistry::new(),
             pending_images: Mutex::new(PendingImages::default()),
@@ -185,23 +191,19 @@ impl MessageHandler {
             .collect()
     }
 
-    /// 首次私聊时把发信人记为主人
+    /// 首次私聊时把发信人记为主人。只写 id + 昵称，画像归灵魂模块
     fn record_owner(&self, msg: &IncomingMessage) {
         if msg.is_group() || msg.sender_open_id.is_empty() {
             return;
         }
-        let mut next = self.store.get();
-        if !next.qq.owner_open_id.is_empty() {
-            return;
-        }
-        next.qq.owner_open_id = msg.sender_open_id.clone();
-        match self.store.save(next) {
-            Ok(_) => log::info!(
+        let name = msg.sender_name.as_deref().unwrap_or("");
+        match self.contacts.record_owner("qq", &msg.sender_open_id, name) {
+            Ok(true) => log::info!(
                 target: "qq",
-                "已将 {} 记为 QQ 主人（预留 owner 通知）",
-                msg.sender_open_id
+                "已记录 QQ 主人到通讯录，qq_notify_owner 将发给该用户"
             ),
-            Err(e) => log::warn!(target: "qq", "写入 QQ owner_open_id 失败: {e:#}"),
+            Ok(false) => {}
+            Err(e) => log::warn!(target: "qq", "记录 QQ 主人失败: {e:#}"),
         }
     }
 

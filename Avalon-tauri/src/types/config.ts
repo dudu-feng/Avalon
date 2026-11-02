@@ -54,8 +54,6 @@ export interface FeishuConfig {
   domain: string;
   group_require_mention: boolean;
   allow_users: string[];
-  /** 主人 open_id，feishu_notify_owner 的收件人；留空则由第一个私聊的用户自动填充 */
-  owner_open_id: string;
   session_mode: FeishuSessionMode;
   /**
    * 收到图片消息后、等用户说明意图前发送的询问文本。
@@ -101,8 +99,6 @@ export interface QqConfig {
   group_require_mention: boolean;
   /** 允许对话的用户 openid 白名单，空数组 = 不限制 */
   allow_users: string[];
-  /** 主人 openid，qq_notify_owner 的收件人；留空时由第一个私聊用户自动填充 */
-  owner_open_id: string;
   /** 收到纯图片后、等用户说明意图前发送的询问文本；留空 = 立即处理 */
   image_ack_text: string;
   official: QqOfficialConfig;

@@ -4,7 +4,7 @@
 
 A lightweight personal intelligent assistant focused on individuals, humanized, low-threshold, and interaction-friendly.
 
-![Version](https://img.shields.io/badge/version-0.7.0-blue)
+![Version](https://img.shields.io/badge/version-0.7.2-blue)
 ![Tauri](https://img.shields.io/badge/Tauri-2-orange)
 ![React](https://img.shields.io/badge/React-19-61dafb)
 ![Rust](https://img.shields.io/badge/Rust-1.7x-dea584)
@@ -21,7 +21,7 @@ Avalon 是一个运行在本地的 AI 个人助手，采用 **Tauri 2（Rust 后
 - **会话管理**：多会话切换、归档、重命名、删除，历史按需渐进式加载。
 - **飞书渠道**：长连接接入，私聊直接对话、群聊 @ 触发；思考与工具调用以流式卡片呈现并自动折叠，正文作为独立消息发出；用表情标记处理进度。会话可按聊天隔离，也可全部汇入同一份记忆。
 - **QQ 渠道**：QQ 开放平台官方机器人，WebSocket 长连接；群聊 @ 触发、私聊直接对话，单聊支持流式输出与 Markdown（流式仅手机 QQ 渲染）。
-- **主动推送**：模型可通过 `feishu_notify_owner` / `qq_notify_owner` 主动给你发消息 —— 定时任务的结果因此能落到手机上，而不是只躺在会话文件里。`feishu_send_to` / `qq_send_to` 还可选传 `quote_message_id` 引用某条消息；发送失败时用通讯录工具 `get_owner_contact` 核对主人 id。
+- **主动推送**：模型可通过 `feishu_notify_owner` / `qq_notify_owner` 主动给你发消息 —— 定时任务的结果因此能落到手机上，而不是只躺在会话文件里。`feishu_send_to` / `qq_send_to` 还可选传 `quote_message_id` 引用某条消息；发送失败时用通讯录工具 `get_owner_contact` 核对主人 id。主人 id 由渠道在首次私聊时自动记入通讯录（只存 id 与昵称，画像归灵魂模块），不再放在渠道配置里。
 - **联网搜索**：`web_search` 检索 + `read_web_page` 读取网页正文（AnySearch，默认关闭）。
 - **工具沙箱**：文件操作限定在工作区内，终端只能执行白名单命令且不经过 shell。详见下方[安全边界](#-安全边界)。
 - **托盘常驻**：关闭窗口不退出进程，定时任务与飞书渠道在后台继续跑。
@@ -88,7 +88,7 @@ npm run tauri dev
 
 App Secret 也可用环境变量 `AVALON_FEISHU_APP_SECRET` 覆盖，避免写进配置文件。
 
-启动后**私聊机器人一次**，你的 `open_id` 会被自动记为「主人」，`feishu_notify_owner` 之后就发给你 —— 定时任务的结果推送靠这个。也可以在「设置 → 渠道」里手填 `owner_open_id`。
+启动后**私聊机器人一次**，你的 `open_id` 会被自动记为「主人」，`feishu_notify_owner` 之后就发给你 —— 定时任务的结果推送靠这个。主人记录在「设置 → 通讯录」顶部，只存 id 与昵称；误记录时可以在这里手工更正。
 
 > ⚠️ 飞书长连接是集群模式且不广播消息：**同一个飞书应用同时只应有一台机器在线**，否则消息会被随机分走。
 
@@ -136,7 +136,7 @@ cd Avalon-tauri
 npx tauri build
 ```
 
-产物：`src-tauri/target/release/bundle/nsis/Avalon_0.7.0_x64-setup.exe`（Windows 安装包，双击安装，默认装到当前用户目录，无需管理员权限）。
+产物：`src-tauri/target/release/bundle/nsis/Avalon_0.7.2_x64-setup.exe`（Windows 安装包，双击安装，默认装到当前用户目录，无需管理员权限）。
 
 本地 embedding 模型 `bge-small-zh-v1.5`（candle 所需的 `config.json` / `tokenizer.json` / `model.safetensors` 三个文件，约 96MB）已随安装包一起打包，装到 `数据目录/data/vector/models/embedding/bge-small-zh-v1.5/`，安装后开箱即用，无需手动下载或复制模型。这也是安装包体积从几 MB 涨到约 100MB 的原因。
 

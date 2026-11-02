@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Result;
 use serde_json::{json, Value};
 
+use crate::channel::contact::ContactStore;
 use crate::config::ConfigStore;
 use crate::llm::{ChatResult, LlmState, StreamEvent, TokenUsage};
 use crate::prompt::PromptAssembler;
@@ -39,6 +40,7 @@ pub(crate) async fn run_loop<F>(
     session: &dyn SessionStore,
     usage: &UsageStore,
     vision: &VisionService,
+    contacts: &ContactStore,
     cancel: &AtomicBool,
     on_event: &mut F,
 ) -> Result<()>
@@ -47,7 +49,7 @@ where
 {
     // 工具上下文只回答「当前是谁、在哪个渠道说话」，不参与消息路由。
     // 必须在 input.meta 被 take 之前构建；桌面/后台任务没有 meta，按主人处理。
-    let tool_ctx = ToolContext::from_input(channel, input.meta.as_ref(), config);
+    let tool_ctx = ToolContext::from_input(channel, input.meta.as_ref(), contacts);
     let tools_schema = tools.get_tools_schema(&tool_ctx);
     let session_context = session.get_context_for_prompt(channel)?;
     let mut system_prompt = prompt.assemble_chat_prompt(&session_context)?;
@@ -64,10 +66,7 @@ where
     // 只按「当前轮有无附件」判断会漏掉纯文本后续轮次 —— 历史观察里的伪造指令同样危险。
     let history_has_observations = serde_json::from_str::<Value>(&session_context)
         .ok()
-        .and_then(|v| {
-            v.get("has_image_observations")
-                .and_then(Value::as_bool)
-        })
+        .and_then(|v| v.get("has_image_observations").and_then(Value::as_bool))
         .unwrap_or(false);
     if !input.attachments.is_empty() || history_has_observations {
         system_prompt.push_str(IMAGE_INPUT_RULE);
@@ -103,8 +102,7 @@ where
     // 持久化轨迹（user + 每轮 assistant + tool 消息）+ 跨轮累积的正文/思考/用量。
     // 用 for_history —— 落盘只存原文，来源信息由 meta 结构化承载，不重复写进正文。
     // 附件快照（路径 + 观察）也放进 meta，后续轮次不再重发图片字节。
-    let mut persisted: Vec<Message> =
-        vec![history::user_entry(input.for_history, meta)];
+    let mut persisted: Vec<Message> = vec![history::user_entry(input.for_history, meta)];
     let mut accumulated_message = String::new();
     let mut accumulated_thought = String::new();
     let mut accumulated_usage = TokenUsage::default();
@@ -124,8 +122,12 @@ where
         on_event(EngineEvent::RoundStart);
         let result = client
             .chat_stream(&messages, &tools_schema, cancel, |ev| match ev {
-                StreamEvent::ThoughtDelta { delta } => on_event(EngineEvent::ThoughtDelta { delta }),
-                StreamEvent::MessageDelta { delta } => on_event(EngineEvent::MessageDelta { delta }),
+                StreamEvent::ThoughtDelta { delta } => {
+                    on_event(EngineEvent::ThoughtDelta { delta })
+                }
+                StreamEvent::MessageDelta { delta } => {
+                    on_event(EngineEvent::MessageDelta { delta })
+                }
                 StreamEvent::Done { .. } => {}
             })
             .await?;
@@ -177,7 +179,13 @@ where
                 result: summary.clone(),
             });
             // 持久化 tool 消息（content 存精简摘要，注意力隔离；回填 LLM 仍用完整 out）
-            persisted.push(history::tool_entry(&tc.id, &tc.name, tc.arguments.clone(), success, &summary));
+            persisted.push(history::tool_entry(
+                &tc.id,
+                &tc.name,
+                tc.arguments.clone(),
+                success,
+                &summary,
+            ));
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -196,7 +204,9 @@ where
         log::warn!(target: "usage", "记录 token 用量失败: {e}");
     }
 
-    on_event(EngineEvent::Done { result: last_result });
+    on_event(EngineEvent::Done {
+        result: last_result,
+    });
 
     // 自动压缩：先发「压缩中」气泡可视化，再串行执行（决策 D3：init/save 留给调用方）。
     // 压缩是读改写 current 的临界区，串行保证不丢消息；这里只把它挪出「消息结束」的关键路径。
@@ -204,10 +214,16 @@ where
     if max_input_tokens(&persisted) >= threshold {
         on_event(EngineEvent::CompressStart);
         match session.auto_compress_check(channel, &persisted).await {
-            Ok(_) => on_event(EngineEvent::CompressDone { success: true, error: None }),
+            Ok(_) => on_event(EngineEvent::CompressDone {
+                success: true,
+                error: None,
+            }),
             Err(e) => {
                 log::warn!(target: "session", "自动压缩失败: {e:#}");
-                on_event(EngineEvent::CompressDone { success: false, error: Some(e.to_string()) });
+                on_event(EngineEvent::CompressDone {
+                    success: false,
+                    error: Some(e.to_string()),
+                });
             }
         }
     }

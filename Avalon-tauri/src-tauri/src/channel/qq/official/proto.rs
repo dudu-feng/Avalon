@@ -75,6 +75,8 @@ pub struct IncomingMessage {
     pub chat_type: ChatType,
     pub chat_id: String,
     pub sender_open_id: String,
+    /// 发送者昵称。平台给的时候才有，群事件通常是 author.username
+    pub sender_name: Option<String>,
     pub text: String,
     pub images: Vec<ImageAttachment>,
     /// 是否 @ 了当前机器人。群 @ 事件恒为 true；全量事件看 mentions[].is_you
@@ -116,6 +118,9 @@ impl IncomingMessage {
         if let Some(msg_idx) = &self.msg_idx {
             meta["msg_idx"] = Value::String(msg_idx.clone());
         }
+        if let Some(name) = &self.sender_name {
+            meta["sender_name"] = Value::String(name.clone());
+        }
         meta
     }
 
@@ -147,7 +152,7 @@ pub fn is_message_event(event_type: &str) -> bool {
 
 /// 从事件体解析消息。不是消息事件、缺少关键字段时返回 None
 pub fn parse_message(event_type: &str, d: &Value) -> Option<IncomingMessage> {
-    let (chat_type, chat_id, sender_open_id, mentioned_bot) = match event_type {
+    let (chat_type, chat_id, sender_open_id, sender_name, mentioned_bot) = match event_type {
         GROUP_AT_MESSAGE_CREATE | GROUP_MESSAGE_CREATE => {
             let chat_id = str_at(d, &["group_openid"]).or_else(|| str_at(d, &["group_id"]))?;
             let sender = str_at(d, &["author", "member_openid"])
@@ -156,7 +161,7 @@ pub fn parse_message(event_type: &str, d: &Value) -> Option<IncomingMessage> {
             // @ 事件通常没有 mentions，按已 @ 处理；有 mentions 时以 is_you 为准，
             // 否则同群多机器人会一起抢答
             let mentioned = mentioned_bot(d, event_type);
-            (ChatType::Group, chat_id, sender, mentioned)
+            (ChatType::Group, chat_id, sender, sender_name(d), mentioned)
         }
         C2C_MESSAGE_CREATE => {
             let chat_id =
@@ -164,7 +169,7 @@ pub fn parse_message(event_type: &str, d: &Value) -> Option<IncomingMessage> {
             let sender = str_at(d, &["author", "user_openid"])
                 .or_else(|| str_at(d, &["author", "id"]))
                 .unwrap_or_default();
-            (ChatType::C2c, chat_id, sender, true)
+            (ChatType::C2c, chat_id, sender, sender_name(d), true)
         }
         _ => return None,
     };
@@ -191,6 +196,7 @@ pub fn parse_message(event_type: &str, d: &Value) -> Option<IncomingMessage> {
         chat_type,
         chat_id,
         sender_open_id,
+        sender_name,
         text,
         images,
         mentioned_bot,
@@ -300,6 +306,11 @@ fn strip_mentions(text: &str) -> String {
     out
 }
 
+/// 发送者昵称。不同事件版本字段名不一致，按常见顺序取第一个非空值
+fn sender_name(d: &Value) -> Option<String> {
+    str_at(d, &["author", "username"]).or_else(|| str_at(d, &["author", "nickname"]))
+}
+
 fn str_at(value: &Value, path: &[&str]) -> Option<String> {
     let mut cur = value;
     for key in path {
@@ -338,6 +349,19 @@ mod tests {
         assert!(msg.mentioned_bot, "@ 事件应视为已 @");
         assert_eq!(msg.images.len(), 1);
         assert_eq!(msg.attachment_count, 2);
+    }
+
+    #[test]
+    fn parses_sender_name_when_platform_provides_it() {
+        let mut d = group_at_event();
+        d["author"]["username"] = serde_json::json!("小明");
+        let msg = parse_message(GROUP_AT_MESSAGE_CREATE, &d).expect("应解析成功");
+        assert_eq!(msg.sender_name.as_deref(), Some("小明"));
+        assert_eq!(msg.meta()["sender_name"], "小明");
+
+        let msg = parse_message(GROUP_AT_MESSAGE_CREATE, &group_at_event()).expect("应解析成功");
+        assert!(msg.sender_name.is_none());
+        assert!(msg.meta().get("sender_name").is_none());
     }
 
     #[test]

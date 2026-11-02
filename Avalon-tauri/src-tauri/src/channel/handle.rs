@@ -111,6 +111,27 @@ impl FeishuHandle {
         FEISHU_WINDOW_LIMIT.saturating_sub(*count)
     }
 
+    /// 一句话运行状态：渠道在不在、本分钟还剩几条、上次成功与最近错误。
+    /// 发送失败时附在错误后面，模型据此判断是启动渠道、等一会儿还是换方式，
+    /// 而不是对着一条「发送失败」反复重试。
+    pub fn status(&self) -> String {
+        let mut parts = vec![
+            if self.is_online() {
+                "渠道在线".to_string()
+            } else {
+                "渠道未运行".to_string()
+            },
+            format!("本分钟剩余 {} 条", self.rate_remaining()),
+        ];
+        if let Some(time) = self.last_success() {
+            parts.push(format!("上次成功 {time}"));
+        }
+        if let Some(error) = self.last_error() {
+            parts.push(format!("最近错误 {error}"));
+        }
+        parts.join("，")
+    }
+
     /// 发一条消息，返回 message_id。
     ///
     /// 优先内联卡片：模型输出必然带 markdown，飞书 text 消息不渲染，
@@ -284,6 +305,25 @@ impl QqHandle {
         QQ_WINDOW_LIMIT.saturating_sub(*count)
     }
 
+    /// 一句话运行状态，语义同 `FeishuHandle::status`
+    pub fn status(&self) -> String {
+        let mut parts = vec![
+            if self.is_online() {
+                "渠道在线".to_string()
+            } else {
+                "渠道未运行".to_string()
+            },
+            format!("本分钟剩余 {} 条", self.rate_remaining()),
+        ];
+        if let Some(time) = self.last_success() {
+            parts.push(format!("上次成功 {time}"));
+        }
+        if let Some(error) = self.last_error() {
+            parts.push(format!("最近错误 {error}"));
+        }
+        parts.join("，")
+    }
+
     /// 给指定 QQ 会话（群聊或单聊）发一条主动消息（不携带 msg_id）。
     ///
     /// 主动消息受 QQ 平台额度限制，通常需要用户/群近期和机器人有过互动；
@@ -317,11 +357,11 @@ impl QqHandle {
         }
     }
 
-    /// 给主人发一条主动 C2C 消息。收件人来自配置，工具层不暴露任意用户 id
+    /// 给主人发一条主动 C2C 消息。收件人来自通讯录，工具层不暴露任意用户 id
     pub async fn send_to_owner(&self, open_id: &str, text: &str) -> Result<String> {
         let open_id = open_id.trim();
         if open_id.is_empty() {
-            bail!("QQ owner_open_id 为空");
+            bail!("QQ 主人 openid 为空（通讯录尚未记录主人）");
         }
         self.send_to(&QqTarget::new(ChatType::C2c, open_id), text, None)
             .await

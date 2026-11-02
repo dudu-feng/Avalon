@@ -19,7 +19,8 @@ use super::api::FeishuApi;
 use super::reaction::{ReactionGate, ReactionTracker};
 use super::stream;
 use crate::channel::common::{sanitize_channel, Dedup, PendingImages, SlotRegistry, MAX_WAITING};
-use crate::config::{ConfigStore, FeishuConfig, FeishuSessionMode};
+use crate::channel::contact::ContactStore;
+use crate::config::{FeishuConfig, FeishuSessionMode};
 use crate::engine::{Engine, EngineEvent, UserInput};
 use crate::file::{FileSource, SaveRequest};
 use crate::vision::ChatAttachment;
@@ -119,8 +120,8 @@ pub struct MessageHandler {
     config: FeishuConfig,
     /// 机器人自身 open_id，用于判断群聊里是否 @ 了自己
     bot_open_id: String,
-    /// 配置句柄。只用于 owner 自动填充 —— 其余读配置一律走上面的 config 快照
-    store: ConfigStore,
+    /// 通讯录。只用于主人自动记录 —— 普通用户仍由智能体主动调用工具维护
+    contacts: Arc<ContactStore>,
     dedup: Mutex<Dedup>,
     /// 每会话一把串行锁
     slots: SlotRegistry,
@@ -136,14 +137,14 @@ impl MessageHandler {
         api: FeishuApi,
         config: FeishuConfig,
         bot_open_id: String,
-        store: ConfigStore,
+        contacts: Arc<ContactStore>,
     ) -> Self {
         Self {
             engine,
             api,
             config,
             bot_open_id,
-            store,
+            contacts,
             dedup: Mutex::new(Dedup::new(DEDUP_TTL, DEDUP_CAPACITY)),
             slots: SlotRegistry::new(),
             pending_images: Mutex::new(PendingImages::default()),
@@ -156,25 +157,23 @@ impl MessageHandler {
     /// 必须在准入判定之后调用 —— 放在白名单过滤之前的话，
     /// 组织里任意一个未授权的人私聊一句就能把自己封为主人。
     ///
-    /// 判空刻意走 store.get() 而不是 self.config：后者是渠道启动时的快照，
-    /// 永不更新，落盘之后它里面依然是空，会导致每条私聊都重复写一次配置。
+    /// 只写 id；飞书事件不带昵称，主人区允许昵称为空，需要时可在前端补填。
+    /// `record_owner` 内部是「第一个私聊者生效」，重复调用不会覆盖。
     fn record_owner(&self, msg: &IncomingMessage) {
         // 群里 @ 一下不代表这人是主人，只认私聊
         if msg.chat_type != "p2p" || msg.sender_open_id.is_empty() {
             return;
         }
-        let mut next = self.store.get();
-        if !next.feishu.owner_open_id.is_empty() {
-            return;
-        }
-        next.feishu.owner_open_id = msg.sender_open_id.clone();
-        match self.store.save(next) {
-            Ok(_) => log::info!(
+        match self
+            .contacts
+            .record_owner("feishu", &msg.sender_open_id, "")
+        {
+            Ok(true) => log::info!(
                 target: "feishu",
-                "已将 {} 记为主人，feishu_notify_owner 将发给该用户",
-                msg.sender_open_id
+                "已记录飞书主人到通讯录，feishu_notify_owner 将发给该用户"
             ),
-            Err(e) => log::warn!(target: "feishu", "写入主人 open_id 失败: {e:#}"),
+            Ok(false) => {}
+            Err(e) => log::warn!(target: "feishu", "记录飞书主人失败: {e:#}"),
         }
     }
 

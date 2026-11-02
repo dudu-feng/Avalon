@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::channel::contact::ContactStore;
 use crate::channel::{FeishuHandle, Target};
-use crate::config::ConfigStore;
 
 /// 取字符串参数并去空白，缺失或空串返回 None。
 ///
@@ -45,35 +45,35 @@ fn log_bad_args(tool: &str, args: &Value) {
     log::warn!(target: "feishu", "{tool} 参数错误：缺少必需参数，收到字段 {keys:?}");
 }
 
-/// 读配置里的主人 open_id，去掉误粘贴进来的空白
-fn owner_id(config: Option<&ConfigStore>) -> String {
-    config
-        .map(|c| c.get().feishu.owner_open_id.trim().to_string())
+/// 读通讯录里的飞书主人裸 open_id（去掉 feishu: 前缀）
+fn owner_id(contacts: Option<&ContactStore>) -> String {
+    contacts
+        .and_then(|c| c.owner_open_id("feishu"))
         .unwrap_or_default()
 }
 
-/// 发给主人。收件人来自配置，模型无法指定 —— 这是它唯一能主动打扰用户的通道
+/// 发给主人。收件人来自通讯录，模型无法指定 —— 这是它唯一能主动打扰用户的通道
 pub async fn notify_owner(
     args: &Value,
     handle: &Arc<FeishuHandle>,
-    config: Option<&ConfigStore>,
+    contacts: Option<&ContactStore>,
 ) -> String {
     let Some(text) = text_arg(args) else {
         log_bad_args("feishu_notify_owner", args);
         return "参数错误: 缺少 text 或内容为空".to_string();
     };
 
-    // owner 现读而不是缓存：自动填充改的是同一个 ConfigStore，下次调用自然拿到新值
-    let owner = owner_id(config);
+    // owner 现读而不是缓存：渠道首次私聊会自动写入同一个 ContactStore
+    let owner = owner_id(contacts);
     if owner.is_empty() {
-        return "尚未记录主人的 open_id。请先私聊一次机器人，或在设置页「渠道 → 飞书」里填写 \
-                owner_open_id；也可调用 get_owner_contact 核对当前记录"
+        return "尚未记录飞书主人。请先私聊一次机器人（会自动记录），\
+                也可在设置 → 通讯录里补填；还可用 get_owner_contact 核对当前记录"
             .to_string();
     }
     if !owner.starts_with("ou_") {
         return format!(
-            "配置的 owner_open_id 格式不正确：应以 ou_ 开头（当前为 {owner}）。\
-             请在设置页「渠道 → 飞书」更正，或调用 get_owner_contact 查看"
+            "通讯录里的飞书主人 id 格式不正确：应以 ou_ 开头（当前为 {owner}）。\
+             请在设置 → 通讯录里更正，或调用 get_owner_contact 查看"
         );
     }
 
@@ -84,8 +84,7 @@ pub async fn notify_owner(
         }
         Err(e) => {
             log::warn!(target: "feishu", "向主人推送失败: {e:#}");
-            // handle 已经在错误里附上了错误码解释与最近状态，这里不再重复拼接
-            format!("发送失败: {e}")
+            format!("发送失败: {e}\n渠道状态：{}", handle.status())
         }
     }
 }
@@ -123,7 +122,7 @@ pub async fn send_to(args: &Value, handle: &Arc<FeishuHandle>) -> String {
         }
         Err(e) => {
             log::warn!(target: "feishu", "向会话 {chat_id} 发送失败: {e:#}");
-            format!("发送失败: {e}")
+            format!("发送失败: {e}\n渠道状态：{}", handle.status())
         }
     }
 }
@@ -161,15 +160,16 @@ mod tests {
             &handle(),
             None,
         ));
-        assert!(out.contains("owner_open_id"));
+        assert!(out.contains("尚未记录飞书主人"));
         assert!(!out.contains("缺少 text"));
     }
 
     #[test]
-    fn 未配置主人时提示如何设置() {
+    fn 未记录主人时提示如何设置() {
         let out =
             tauri::async_runtime::block_on(notify_owner(&json!({ "text": "hi" }), &handle(), None));
-        assert!(out.contains("owner_open_id"));
+        assert!(out.contains("尚未记录飞书主人"));
+        assert!(out.contains("通讯录"));
     }
 
     #[test]
@@ -205,21 +205,41 @@ mod tests {
         assert!(out.contains("未运行"));
     }
 
-    fn store_with_owner(owner: &str) -> ConfigStore {
-        let mut cfg = crate::config::default_config();
-        cfg.feishu.owner_open_id = owner.to_string();
-        ConfigStore::from_config(cfg)
+    fn contacts_with_owner(owner: &str) -> ContactStore {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "avalon-feishu-owner-test-{}-{stamp}.json",
+            std::process::id()
+        ));
+        let store = ContactStore::new(path);
+        store.record_owner("feishu", owner, "").unwrap();
+        store
     }
 
     #[test]
     fn 有主人但渠道离线时发送返回未运行() {
-        let store = store_with_owner("ou_abc");
+        let contacts = contacts_with_owner("ou_abc");
         let out = tauri::async_runtime::block_on(notify_owner(
             &json!({ "text": "hi" }),
             &handle(),
-            Some(&store),
+            Some(&contacts),
         ));
         assert!(out.contains("发送失败"));
         assert!(out.contains("未运行"));
+    }
+
+    #[test]
+    fn 通讯录里的主人id格式不对时给出可读提示() {
+        let contacts = contacts_with_owner("not_an_open_id");
+        let out = tauri::async_runtime::block_on(notify_owner(
+            &json!({ "text": "hi" }),
+            &handle(),
+            Some(&contacts),
+        ));
+        assert!(out.contains("应以 ou_ 开头"));
+        assert!(out.contains("通讯录"));
     }
 }

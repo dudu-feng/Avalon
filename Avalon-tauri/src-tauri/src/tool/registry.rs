@@ -255,8 +255,8 @@ fn contact_tool_defs(is_owner: bool) -> Vec<ToolDef> {
         });
         defs.push(ToolDef {
             name: "get_owner_contact",
-            description: "获取主人的通讯录详情。主人由配置的 owner_open_id 决定；\
-                          未记录时返回 id 并提示可以补录。"
+            description: "获取主人的通讯录详情。主人由渠道在首次私聊时自动记入通讯录，\
+                          只有 id 与昵称；主人画像由灵魂模块维护，这里不返回画像。"
                 .to_string(),
             parameters: json!({ "type": "object", "properties": {} }),
         });
@@ -929,10 +929,9 @@ impl ToolRegistry for ToolSet {
                 Some(s) => contact_tools::list_users(args, s, ctx),
                 None => "通讯录未配置".to_string(),
             },
-            "get_owner_contact" => match (&self.contacts, &self.config) {
-                (Some(s), Some(c)) => contact_tools::get_owner_contact(s, c, ctx),
-                (Some(_), None) => "通讯录未配置主人信息".to_string(),
-                (None, _) => "通讯录未配置".to_string(),
+            "get_owner_contact" => match &self.contacts {
+                Some(s) => contact_tools::get_owner_contact(s, ctx),
+                None => "通讯录未配置".to_string(),
             },
             "read_file" => fs_tools::read_file(args, &self.sandbox()),
             "write_file" => fs_tools::write_file(args, &self.sandbox()),
@@ -992,7 +991,7 @@ impl ToolRegistry for ToolSet {
                 None => "联网搜索未启用（配置 [search] enabled = true 后重启）".to_string(),
             },
             "feishu_notify_owner" => match &self.feishu {
-                Some(h) => feishu_tools::notify_owner(args, h, self.config.as_ref()).await,
+                Some(h) => feishu_tools::notify_owner(args, h, self.contacts.as_deref()).await,
                 None => "飞书工具未配置".to_string(),
             },
             "feishu_send_to" => match &self.feishu {
@@ -1000,7 +999,7 @@ impl ToolRegistry for ToolSet {
                 None => "飞书工具未配置".to_string(),
             },
             "qq_notify_owner" => match &self.qq {
-                Some(h) => qq_tools::notify_owner(args, h, self.config.as_ref()).await,
+                Some(h) => qq_tools::notify_owner(args, h, self.contacts.as_deref()).await,
                 None => "QQ 工具未配置".to_string(),
             },
             "qq_send_to" => match &self.qq {
@@ -1118,10 +1117,8 @@ mod tests {
 
     #[test]
     fn 非主人不暴露渠道发送工具与通讯录枚举() {
-        let mut cfg = crate::config::default_config();
-        cfg.feishu.owner_open_id = "ou_owner".to_string();
         let set = ToolSet::new()
-            .with_config(ConfigStore::from_config(cfg))
+            .with_config(ConfigStore::from_config(crate::config::default_config()))
             .with_contacts(Arc::new(ContactStore::new(
                 std::env::temp_dir().join("avalon-contact-registry-test.json"),
             )))
