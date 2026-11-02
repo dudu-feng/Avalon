@@ -45,10 +45,6 @@ pub struct Attachment {
 pub struct ImageProfile {
     pub width: u32,
     pub height: u32,
-    pub format: String,
-    pub has_alpha: bool,
-    pub animated: bool,
-    pub frames: u32,
     pub source_bytes: u64,
 }
 
@@ -56,7 +52,6 @@ pub struct ImageProfile {
 #[derive(Debug, Clone)]
 pub struct Thumbnail {
     pub bytes: Vec<u8>,
-    pub mime: &'static str,
     pub ext: &'static str,
 }
 
@@ -65,8 +60,6 @@ pub struct Thumbnail {
 pub struct PreparedImage {
     pub bytes: Vec<u8>,
     pub mime: &'static str,
-    pub width: u32,
-    pub height: u32,
     /// 原图内容哈希，用于缓存键
     pub sha256: String,
     /// 64 位感知哈希（dHash，16 位十六进制）。对缩放/重编码不敏感，

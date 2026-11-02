@@ -225,6 +225,19 @@
   border-radius: var(--radius-sm);
 }
 
+/* 数学公式（KaTeX）：长公式横向滚动，避免撑破气泡 */
+.root :global(.katex) {
+  font-size: 1.05em;
+  word-break: normal;
+}
+
+.root :global(.katex-display) {
+  margin: 0.75em 0;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    代码块三套配色（--code-* 变量，挂在 data-code-theme 容器上）
    经典白 / 深色 固定不随主题；奶油 引用 design tokens 随 html.dark 切换。

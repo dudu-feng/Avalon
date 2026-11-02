@@ -15,11 +15,14 @@
     "@tauri-apps/plugin-opener": "^2",
     "@xyflow/react": "^12.11.2",
     "antd": "^6.5.3",
+    "katex": "^0.16.47",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
-    "remark-gfm": "^4.0.1"
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

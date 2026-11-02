@@ -1,6 +1,7 @@
 // 助手正文的 Markdown 渲染组件：把模型输出的 markdown 源文本渲染为富文本。
 //
-// 基于 react-markdown + remark-gfm（GFM：表格 / 删除线 / 任务列表 / 自动链接）。
+// 基于 react-markdown + remark-gfm（GFM：表格 / 删除线 / 任务列表 / 自动链接）
+// + remark-math / rehype-katex（LaTeX 公式，支持 $…$、$$…$$、\(…\)、\[…\]）。
 // 仅用于 assistant 正文；user 消息保持纯文本（pre-wrap），见 MessageBubble。
 // 流式生成时内容为不完整的 markdown，react-markdown 增量解析会有轻微抖动（未闭合标记），
 // 属主流聊天应用的固有权衡，可接受。
@@ -11,7 +12,10 @@
 import type { SVGProps } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { useCodeTheme } from '../../../hooks/useCodeTheme';
 import type { ThemeMode } from '../../../types';
 import styles from './MarkdownContent.module.css';
@@ -21,6 +25,65 @@ export interface MarkdownContentProps {
   children: string;
   /** 是否流式生成中（末尾追加闪烁光标） */
   streaming?: boolean;
+}
+
+/** 代码围栏起始行，捕获 ``` / ~~~ 标记本身 */
+const FENCE_OPEN = /^[ \t]*(`{3,}|~{3,})[^\n]*\n?/;
+
+/** 把 LaTeX 风格的 \(...\) / \[...\] 换成 remark-math 认识的 $...$ / $$...$$。 */
+function replaceMathDelimiters(text: string): string {
+  return text
+    .replace(/(?<!\\)\\\[([\s\S]*?)(?<!\\)\\\]/g, (match, body: string) => {
+      const formula = body.trim();
+      return formula ? `\n$$\n${formula}\n$$\n` : match;
+    })
+    .replace(/(?<!\\)\\\(([\s\S]*?)(?<!\\)\\\)/g, (match, body: string) => {
+      const formula = body.trim();
+      return formula ? `$${formula}$` : match;
+    });
+}
+
+/** 行内代码原样保留，其余片段才做公式定界符归一化。 */
+function normalizeInlineText(text: string): string {
+  return text
+    .split(/(`+[^`\n]*`+)/g)
+    .map((part, index) => (index % 2 === 1 ? part : replaceMathDelimiters(part)))
+    .join('');
+}
+
+/**
+ * 代码围栏整段跳过，避免把代码里的反斜杠、美元符号误判成公式。
+ * 未闭合的围栏按“后面全是代码”处理，流式生成过程中不会误渲染。
+ */
+function normalizeMathDelimiters(source: string): string {
+  let result = '';
+  let textStart = 0;
+  let pos = 0;
+
+  while (pos < source.length) {
+    const atLineStart = pos === 0 || source[pos - 1] === '\n';
+    if (atLineStart) {
+      const open = FENCE_OPEN.exec(source.slice(pos));
+      if (open) {
+        result += normalizeInlineText(source.slice(textStart, pos));
+
+        const fence = open[1];
+        const marker = fence[0];
+        const afterOpen = pos + open[0].length;
+        const closeRe = new RegExp(`^[ \\t\\r]*[${marker}]{${fence.length},}[ \\t\\r]*$`, 'm');
+        const close = closeRe.exec(source.slice(afterOpen));
+        const end = close ? afterOpen + close.index + close[0].length : source.length;
+
+        result += source.slice(pos, end);
+        pos = end;
+        textStart = end;
+        continue;
+      }
+    }
+    pos++;
+  }
+
+  return result + normalizeInlineText(source.slice(textStart));
 }
 
 const TITLES: Record<ThemeMode, string> = {
@@ -77,12 +140,16 @@ function CodeThemeIcon({ mode }: { mode: ThemeMode }) {
 
 export function MarkdownContent({ children, streaming = false }: MarkdownContentProps) {
   const { codeTheme, cycle } = useCodeTheme();
+  const content = normalizeMathDelimiters(children);
 
   return (
     <div className={styles.root}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[
+          [rehypeKatex, { throwOnError: false, strict: false, errorColor: '#d73a49' }],
+          rehypeHighlight,
+        ]}
         components={{
           pre: (props) => (
             <div className={styles.codeBlock} data-code-theme={codeTheme}>
@@ -100,7 +167,7 @@ export function MarkdownContent({ children, streaming = false }: MarkdownContent
           ),
         }}
       >
-        {children}
+        {content}
       </ReactMarkdown>
       {streaming && <span className={styles.cursor}>▌</span>}
     </div>

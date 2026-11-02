@@ -58,27 +58,15 @@ pub fn prepare(bytes: &[u8], cfg: &VisionConfig) -> Result<PreparedImage> {
     let profile = ImageProfile {
         width,
         height,
-        format: format
-            .extensions_str()
-            .first()
-            .copied()
-            .unwrap_or("bin")
-            .to_string(),
-        has_alpha: oriented.color().has_alpha(),
-        // 第一帧之外的内容当前不分析；GIF/APNG 只标记动图属性
-        animated: matches!(format, ImageFormat::Gif),
-        frames: 1,
         source_bytes: bytes.len() as u64,
     };
 
-    let (encoded, mime, out_w, out_h) = encode_within_budget(&oriented, cfg)?;
+    let (encoded, mime) = encode_within_budget(&oriented, cfg)?;
     let thumbnail = make_thumbnail(&oriented)?;
 
     Ok(PreparedImage {
         bytes: encoded,
         mime,
-        width: out_w,
-        height: out_h,
         sha256: sha256_hex(bytes),
         phash: dhash(&oriented),
         profile,
@@ -136,7 +124,7 @@ fn is_supported(format: ImageFormat) -> bool {
 fn encode_within_budget(
     image: &DynamicImage,
     cfg: &VisionConfig,
-) -> Result<(Vec<u8>, &'static str, u32, u32)> {
+) -> Result<(Vec<u8>, &'static str)> {
     let has_alpha = image.color().has_alpha();
     let max_edge = cfg.max_edge;
     let mut edge = max_edge;
@@ -150,7 +138,7 @@ fn encode_within_budget(
         };
         let (bytes, mime) = encode(&resized, has_alpha, quality)?;
         if bytes.len() as u64 <= cfg.max_bytes || attempt == 5 {
-            return Ok((bytes, mime, resized.width(), resized.height()));
+            return Ok((bytes, mime));
         }
 
         if quality > 55 {
@@ -187,7 +175,6 @@ fn make_thumbnail(image: &DynamicImage) -> Result<Thumbnail> {
             .context("编码缩略图 PNG 失败")?;
         Ok(Thumbnail {
             bytes: buf,
-            mime: "image/png",
             ext: "png",
         })
     } else {
@@ -197,7 +184,6 @@ fn make_thumbnail(image: &DynamicImage) -> Result<Thumbnail> {
             .context("编码缩略图 JPEG 失败")?;
         Ok(Thumbnail {
             bytes: buf,
-            mime: "image/jpeg",
             ext: "jpg",
         })
     }
@@ -268,10 +254,10 @@ mod tests {
         let bytes = png(512, 256, false);
         let out = prepare(&bytes, &cfg()).unwrap();
         assert_eq!(out.mime, "image/jpeg");
-        assert_eq!(out.width, 64);
-        assert_eq!(out.height, 32);
+        let decoded = image::load_from_memory(&out.bytes).unwrap();
+        assert_eq!(decoded.width(), 64);
+        assert_eq!(decoded.height(), 32);
         assert_eq!(out.profile.width, 512);
-        assert!(!out.profile.has_alpha);
         assert!(!out.thumbnail.bytes.is_empty());
     }
 
@@ -280,7 +266,8 @@ mod tests {
         let bytes = png(128, 128, true);
         let out = prepare(&bytes, &cfg()).unwrap();
         assert_eq!(out.mime, "image/png");
-        assert!(out.profile.has_alpha);
+        let decoded = image::load_from_memory(&out.bytes).unwrap();
+        assert!(decoded.color().has_alpha());
     }
 
     #[test]

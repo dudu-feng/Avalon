@@ -741,22 +741,15 @@ mod tests {
         let prepared = PreparedImage {
             bytes,
             mime: "image/png",
-            width: 900,
-            height: 420,
             sha256: "e2e".into(),
             phash: "0".repeat(16),
             profile: crate::vision::ImageProfile {
                 width: 900,
                 height: 420,
-                format: "png".into(),
-                has_alpha: false,
-                animated: false,
-                frames: 1,
                 source_bytes: 0,
             },
             thumbnail: crate::vision::Thumbnail {
                 bytes: vec![],
-                mime: "image/png",
                 ext: "png",
             },
         };
@@ -789,22 +782,15 @@ mod tests {
         let prepared = PreparedImage {
             bytes: png,
             mime: "image/png",
-            width,
-            height,
             sha256: "e2e-rotated".into(),
             phash: "0".repeat(16),
             profile: crate::vision::ImageProfile {
                 width,
                 height,
-                format: "png".into(),
-                has_alpha: false,
-                animated: false,
-                frames: 1,
                 source_bytes: 0,
             },
             thumbnail: crate::vision::Thumbnail {
                 bytes: vec![],
-                mime: "image/png",
                 ext: "png",
             },
         };
