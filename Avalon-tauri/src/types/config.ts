@@ -142,6 +142,10 @@ export interface ModelConfig {
   modelname: string;
   /** 是否支持图片输入。必须与提供商的真实能力一致 */
   supports_vision: boolean;
+  /** 上下文窗口（token）。缺省回退 session_memory.context_window */
+  context_window?: number;
+  /** 单次请求预留的最大输出 token。缺省回退 session_memory.max_output_tokens */
+  max_output_tokens?: number;
 }
 
 /** 顶层配置：整体映射 Avalon-config.toml */
@@ -168,10 +172,18 @@ export interface AppConfig {
     api_base_url: string;
   };
   session_memory: {
+    /** 旧版绝对阈值；0 = 仅按预算比例触发 */
     compress_threshold: number;
     max_chunks: number;
     context_chunks: number;
     search_mode: SearchMode;
+    context_window: number;
+    max_output_tokens: number;
+    safety_margin_ratio: number;
+    compress_trigger_ratio: number;
+    memory_budget_ratio: number;
+    /** 工具结果超过该字节数时写入 artifact，只把预览放回上下文 */
+    artifact_threshold_bytes: number;
   };
   whisper: {
     model_name: string;

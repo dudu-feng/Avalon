@@ -8,6 +8,10 @@
 #![allow(dead_code)] // session 模块供未来 engine/tool 引用，当前无调用方，接入后移除
 #![allow(unused_imports)] // FileSessionStore 等 re-export 供外部模块引用，mod 内暂未使用
 
+pub mod artifact;
+pub mod compress;
+pub mod context;
+pub mod migrate;
 pub mod store;
 pub mod types;
 
@@ -16,6 +20,7 @@ use async_trait::async_trait;
 
 use crate::vector::{RebuildProgress, RebuildStats};
 
+pub use artifact::ArtifactRead;
 pub use store::FileSessionStore;
 pub use types::*;
 
@@ -28,14 +33,24 @@ pub trait SessionStore: Send + Sync {
     async fn create_session(&self, channel: &str) -> Result<SessionData>;
     /// 读取当前会话完整数据（供前端加载历史消息 / 判断会话状态）
     fn get_current_session(&self, channel: &str) -> Result<SessionData>;
-    /// 当前会话上下文用量（最大输入 token vs 压缩阈值），供前端圆形进度条展示
+    /// 当前会话上下文用量（最近真实输入 vs 预算触发线），供前端圆形进度条展示
     fn get_context_usage(&self, channel: &str) -> Result<ContextUsage>;
-    /// 限界会话上下文（JSON 字符串），供 engine 拼进 system_prompt
-    fn get_context_for_prompt(&self, channel: &str) -> Result<String>;
     /// 持久化本轮 chat_history（追加到 messages 字段）
     fn update_current_session(&self, channel: &str, chat_history: &[Message]) -> Result<()>;
-    /// 自动压缩检查：输入 token 超阈值触发压缩，返回是否触发
-    async fn auto_compress_check(&self, channel: &str, chat_history: &[Message]) -> Result<bool>;
+    /// 记录一次真实请求用量（下一次请求的锚点）
+    fn record_request_usage(
+        &self,
+        channel: &str,
+        model: &str,
+        usage: &crate::llm::TokenUsage,
+    ) -> Result<()>;
+    /// 自动压缩检查：输入锚点超过预算触发线（或 force）时压缩，返回是否触发
+    async fn auto_compress_check(
+        &self,
+        channel: &str,
+        anchor_tokens: usize,
+        force: bool,
+    ) -> Result<bool>;
     /// 主动压缩当前会话（不归档，仅压缩未压缩消息并入库），返回是否实际压缩（空会话返回 false）
     async fn compress_session(&self, channel: &str) -> Result<bool>;
     /// 归档当前会话（先压缩，写 history/{id}/index.json，重置 current）
@@ -61,6 +76,21 @@ pub trait SessionStore: Send + Sync {
     /// 读取会话的原始消息：所有 raw 压缩块 + 尚未压缩的 messages，按时间顺序合并。
     /// 与记忆检索返回的压缩摘要不同，这里给的是原文
     fn read_session_raw_messages(&self, id: &str) -> Result<Vec<Message>>;
+    /// 写入工具结果全文 artifact，返回引用信息（同一 id 覆盖）
+    fn write_tool_artifact(
+        &self,
+        session_id: &str,
+        artifact_id: &str,
+        content: &str,
+    ) -> Result<ArtifactRef>;
+    /// 读取当前会话的工具结果 artifact（只允许当前会话，防止跨会话读取）
+    fn read_tool_artifact(
+        &self,
+        channel: &str,
+        artifact_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<ArtifactRead>;
     /// 删除归档会话（目录 + 向量库该会话 chunk 一并清理）
     fn delete_session(&self, id: &str) -> Result<()>;
     /// 重命名会话标题（活跃或归档均可）

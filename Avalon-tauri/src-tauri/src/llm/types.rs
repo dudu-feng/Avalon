@@ -65,12 +65,42 @@ pub struct ChatResult {
 }
 
 /// 压缩层结果
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompressResult {
+    #[serde(default)]
     pub summary: Vec<String>,
+    #[serde(default)]
     pub keywords: Vec<String>,
     #[serde(default)]
     pub usage: TokenUsage,
+    // ---- 结构化摘要（提示词要求返回；旧模型/解析失败时为空） ----
+    #[serde(default)]
+    pub facts: Vec<String>,
+    #[serde(default)]
+    pub decisions: Vec<String>,
+    #[serde(default)]
+    pub open_tasks: Vec<String>,
+    #[serde(default)]
+    pub tool_outcomes: Vec<String>,
+    #[serde(default)]
+    pub time_range: Option<String>,
+}
+
+impl CompressResult {
+    /// 解析失败回退：把原始文本当作一条摘要，至少不阻断压缩
+    pub fn from_fallback_text(text: &str, usage: TokenUsage) -> Self {
+        let summary = text.trim();
+        let summary = if summary.is_empty() {
+            Vec::new()
+        } else {
+            vec![summary.chars().take(500).collect()]
+        };
+        Self {
+            summary,
+            usage,
+            ..Default::default()
+        }
+    }
 }
 
 /// 流式事件（通过 Tauri Channel 推给前端）

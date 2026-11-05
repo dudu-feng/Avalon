@@ -16,7 +16,7 @@ use anyhow::Result;
 use crate::skill::{Skill, SkillRegistry};
 use crate::soul::SoulRegistry;
 
-pub use templates::build_compress_prompt;
+pub use templates::{build_compress_prompt, build_rolling_prompt};
 
 /// 提示词组装器：从灵魂注册表读条目 + 技能清单拼 system prompt，带线程安全缓存
 pub struct PromptAssembler {
@@ -70,8 +70,11 @@ impl PromptAssembler {
         *self.cache.write().unwrap() = None;
     }
 
-    /// 对话层完整组装：灵魂条目 + 技能清单（动态，不缓存）+ 会话上下文
-    pub fn assemble_chat_prompt(&self, session_context: &str) -> Result<String> {
+    /// 对话层稳定部分：灵魂条目 + 技能清单（动态，不缓存）+ 通讯录规则。
+    ///
+    /// 历史上限、压缩摘要、当前渠道等动态内容不属于这里：历史走原生 messages，
+    /// 长期记忆由 session 层单独渲染，当前来源放在 user 正文前缀。
+    pub fn assemble_stable_prompt(&self) -> Result<String> {
         let mut files = self.load_files()?;
         if let Some(skills) = &self.skills {
             if let Ok(list) = skills.list() {
@@ -83,8 +86,9 @@ impl PromptAssembler {
         if self.contacts {
             files.push(render_contacts_section());
         }
-        Ok(assemble_chat_system_prompt(&files, session_context))
+        Ok(assemble_stable_system_prompt(&files))
     }
+
 }
 
 /// 渲染「可用技能」清单段（只列 name + description，正文用 use_skill 按需加载）
@@ -112,16 +116,12 @@ fn render_contacts_section() -> String {
     .join("\n")
 }
 
-/// 纯函数：文件列表 + 会话上下文 → 完整 system prompt（工具走原生 tools 参数，不再写进提示词）
-pub fn assemble_chat_system_prompt(files: &[String], session_context: &str) -> String {
+/// 纯函数：文件列表 → 稳定 system prompt（不含历史；工具走原生 tools 参数）
+pub fn assemble_stable_system_prompt(files: &[String]) -> String {
     let mut out = String::new();
     for f in files {
         out.push_str(f);
         out.push('\n');
-    }
-    if !session_context.trim().is_empty() {
-        out.push_str("\n=====历史会话记录=====\n");
-        out.push_str(session_context);
     }
     out
 }

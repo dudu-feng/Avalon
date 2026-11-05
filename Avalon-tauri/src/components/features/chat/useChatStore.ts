@@ -210,6 +210,8 @@ export interface ChatStore {
   epoch: number;
   /** msg-* 计数器（桶内自增，不再是组件 useRef —— 卸载重挂不再从 1 重来） */
   idSeq: number;
+  /** 本轮是否已请求停止：send 收尾时据此重拉后端历史，丢弃被中断的轮次 */
+  stopRequested: boolean;
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => ChatState;
 }
@@ -242,6 +244,7 @@ function createStore(channel: string): ChatStore {
     initDone: false,
     epoch: 0,
     idSeq: 0,
+    stopRequested: false,
     // subscribe / getSnapshot 在创建时固化为稳定引用：useSyncExternalStore 要求每次渲染
     // 拿到同一个函数，否则每次渲染都会重新订阅。
     subscribe(listener) {
@@ -462,8 +465,11 @@ export async function renameSession(store: ChatStore, id: string, title: string)
 }
 
 /** 停止当前流式生成：置位后端取消标志，chat 提前收尾返回部分结果。
+ *  后端会丢弃本轮不落盘，send 的 finally 据此重拉历史，把 UI 同步回存储状态。
  *  刻意不在这里清 isBusy —— 由 send 的 finally 在后端返回后清，避免停止瞬间就允许再次发送。 */
 export function stop(store: ChatStore) {
+  if (!store.state.isBusy) return;
+  store.stopRequested = true;
   void stopChat(store.channel);
 }
 
@@ -494,6 +500,8 @@ export async function send(
     return;
   }
 
+  store.stopRequested = false;
+
   const userMsg: ChatMessage = {
     id: nextId(store),
     role: 'user',
@@ -506,7 +514,7 @@ export async function send(
   // 守卫判断与置位之间不能有 await，否则连点回车会双发。
   // 守卫读的是模块状态的当前值，不是渲染时的闭包快照 —— 旧实现把 isBusy 放进 useCallback 依赖，
   // 调用方持有一份旧 send 就能并发发两条。
-  ++store.epoch; // 本条会追加消息，作废在飞的 init 写入
+  const runEpoch = ++store.epoch; // 本条会追加消息，作废在飞的 init 写入
   setState(store, {
     messages: [...st.messages, userMsg, newAssistant(assistantId)],
     isBusy: true,
@@ -518,6 +526,9 @@ export async function send(
       store.channel,
       attachments.map((a) => ({ path: a.path })),
       (ev) => {
+        // 已请求停止或代次已变：本轮消息不会再落盘，忽略陈旧事件，
+        // 由 finally 从后端重拉，避免事件与重拉结果互相覆盖。
+        if (store.stopRequested || store.epoch !== runEpoch) return;
         updateMessages(store, (prev) => applyEvent(prev, ev, () => nextId(store)));
       },
     );
@@ -530,6 +541,11 @@ export async function send(
       ),
     );
   } finally {
+    if (store.stopRequested) {
+      store.stopRequested = false;
+      // 后端不保存中断轮次；重拉当前会话，避免 UI 继续显示已丢弃的消息。
+      await runInit(store);
+    }
     setState(store, { isBusy: false });
     void refreshUsage(store);
   }

@@ -8,7 +8,7 @@
 use serde_json::Value;
 
 use crate::llm::ChatResult;
-use crate::session::Message;
+use crate::session::{ArtifactRef, Message};
 
 /// 消息时间戳：%Y-%m-%d-%H:%M:%S（冒号，对齐 Python get_current_time）
 /// 与 session_id 的 %Y-%m-%d-%H_%M_%S（下划线，文件名安全）格式不同，分别定义。
@@ -39,13 +39,14 @@ pub fn assistant_entry(result: &ChatResult) -> Message {
     }
 }
 
-/// 工具执行结果消息（对齐 OpenAI tool 消息，content 存精简摘要，arguments 自包含）
+/// 工具执行结果消息（对齐 OpenAI tool 消息，content 存预览/摘要，arguments 自包含）
 pub fn tool_entry(
     tool_call_id: &str,
     name: &str,
     arguments: Value,
     success: bool,
     content: &str,
+    artifact: Option<ArtifactRef>,
 ) -> Message {
     Message::Tool {
         time: now_str(),
@@ -54,5 +55,6 @@ pub fn tool_entry(
         arguments,
         success,
         content: content.to_string(),
+        artifact,
     }
 }

@@ -6,7 +6,6 @@
 #![allow(dead_code)] // session 模块供未来 engine/tool 引用，当前无调用方，接入后移除
 
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
 
 use crate::llm::{TokenUsage, ToolCall};
 
@@ -20,17 +19,73 @@ pub enum SessionStatus {
 }
 
 /// 压缩块：普通块 chunk="2"，合并块 chunk="merged_1_5"
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompressedChunk {
     /// 块编号（普通 "2" / 合并 "merged_1_5"）。
     /// 自定义反序列化兼容 Python 的 int（普通）/ str（合并）混用，统一存 String。
-    #[serde(deserialize_with = "deserialize_chunk")]
+    #[serde(default, deserialize_with = "deserialize_chunk")]
     pub chunk: String,
+    #[serde(default)]
     pub summary: Vec<String>,
+    #[serde(default)]
     pub keywords: Vec<String>,
     /// 仅合并块有：被合并的旧块编号列表
     #[serde(default)]
     pub merged_from_chunks: Vec<String>,
+
+    // ---- 结构化摘要（旧数据缺失时为空，渲染层回退 summary） ----
+    /// 稳定事实
+    #[serde(default)]
+    pub facts: Vec<String>,
+    /// 已做出的决定
+    #[serde(default)]
+    pub decisions: Vec<String>,
+    /// 未完成 / 待办
+    #[serde(default)]
+    pub open_tasks: Vec<String>,
+    /// 工具执行的关键结果
+    #[serde(default)]
+    pub tool_outcomes: Vec<String>,
+    /// 来源消息 id（本期未引入 Message.id，保留空）
+    #[serde(default)]
+    pub source_message_ids: Vec<String>,
+    /// 覆盖的时间范围，如 "2026-11-01 ~ 2026-11-03"
+    #[serde(default)]
+    pub time_range: Option<String>,
+    /// 压缩输入的估算 token 数
+    #[serde(default)]
+    pub token_count: Option<usize>,
+}
+
+impl CompressedChunk {
+    /// 向量索引文本：结构化字段拼成可检索正文
+    pub fn index_text(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        for list in [
+            &self.summary,
+            &self.facts,
+            &self.decisions,
+            &self.open_tasks,
+            &self.tool_outcomes,
+        ] {
+            for item in list {
+                let item = item.trim();
+                if !item.is_empty() {
+                    parts.push(item.to_string());
+                }
+            }
+        }
+        parts.join("\n")
+    }
+
+    /// 无任何正文内容
+    pub fn is_empty(&self) -> bool {
+        self.summary.is_empty()
+            && self.facts.is_empty()
+            && self.decisions.is_empty()
+            && self.open_tasks.is_empty()
+            && self.tool_outcomes.is_empty()
+    }
 }
 
 /// chunk 字段反序列化：接受 int 或 str，统一转 String（读旧 Python 数据兼容）
@@ -66,6 +121,45 @@ where
     }
 }
 
+/// 会话请求统计（provider 返回的真实用量，作为下一次请求的锚点）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStats {
+    /// 最近一次真实请求的 input_tokens
+    #[serde(default)]
+    pub last_input_tokens: usize,
+    /// 最近一次真实请求的 output_tokens
+    #[serde(default)]
+    pub last_output_tokens: usize,
+    /// 最近一次请求使用的模型
+    #[serde(default)]
+    pub last_model: String,
+    /// 最近一次请求时间（RFC 3339）
+    #[serde(default)]
+    pub last_request_at: String,
+}
+
+impl Default for SessionStats {
+    fn default() -> Self {
+        Self {
+            last_input_tokens: 0,
+            last_output_tokens: 0,
+            last_model: String::new(),
+            last_request_at: String::new(),
+        }
+    }
+}
+
+/// 工具结果 artifact 引用：会话里只存预览，全文留在 artifacts/{session_id}/{id}.txt
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactRef {
+    /// 逻辑 id，写入预览末尾的 `[完整结果: artifact:{id}]`
+    pub id: String,
+    /// 全文的字符数
+    pub chars: usize,
+    /// 全文的字节数
+    pub bytes: usize,
+}
+
 /// 会话文件结构（current/{channel}.json 与 history/{id}/index.json 的内容）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionData {
@@ -86,6 +180,9 @@ pub struct SessionData {
     /// 当前未压缩的消息（user/assistant/tool 平铺）
     #[serde(default)]
     pub messages: Vec<Message>,
+    /// 最近一次请求的统计与估算校准
+    #[serde(default)]
+    pub stats: SessionStats,
 }
 
 impl SessionData {
@@ -99,6 +196,7 @@ impl SessionData {
             compressed: Vec::new(),
             super_compressed: None,
             messages: Vec::new(),
+            stats: SessionStats::default(),
         }
     }
 
@@ -114,6 +212,7 @@ impl SessionData {
             compressed: Vec::new(),
             super_compressed: None,
             messages: Vec::new(),
+            stats: SessionStats::default(),
         }
     }
 }
@@ -147,8 +246,7 @@ pub enum Message {
         time: String,
         content: String,
         /// 渠道来源元信息：飞书消息带 message_id / chat_id / chat_type / sender，
-        /// 桌面端为 None 不落盘。会话整体会被序列化进 system prompt（见
-        /// SessionStore::get_context_for_prompt），所以历史消息的来源模型自动可见。
+        /// 桌面端为 None 不落盘。投影为模型消息时由 context 层渲染成来源前缀。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         meta: Option<serde_json::Value>,
     },
@@ -168,7 +266,7 @@ pub enum Message {
         #[serde(default)]
         model: String,
     },
-    /// 工具执行结果（对齐 OpenAI tool 消息，content 为精简摘要，arguments 自包含供前端独立渲染）
+    /// 工具执行结果（对齐 OpenAI tool 消息；大结果 content 存预览，全文见 artifact）
     Tool {
         time: String,
         tool_call_id: String,
@@ -178,102 +276,17 @@ pub enum Message {
         arguments: serde_json::Value,
         success: bool,
         content: String,
+        /// 大体积结果落盘后的引用；短结果或旧数据为 None
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<ArtifactRef>,
     },
-}
-
-impl Message {
-    /// 模型可见投影：会话文件保留完整元数据，拼进 system prompt 前只留模型需要的字段。
-    ///
-    /// 附件只保留 `path` / `original_name` / `observation` / `ocr_text` / `labels`；
-    /// `mime`、`size`、`sha256`、尺寸、观察来源等只供前端渲染或追溯，见 doc 8.3.1。
-    /// 投影是副本，不修改落盘消息。
-    pub fn for_prompt(&self) -> Message {
-        match self {
-            Message::User { time, content, meta } => Message::User {
-                time: time.clone(),
-                content: content.clone(),
-                meta: meta.as_ref().and_then(project_user_meta),
-            },
-            other => other.clone(),
-        }
-    }
-
-    /// 是否携带图片观察文本。观察来自视觉模型，属于不可信数据；
-    /// system prompt 据此决定是否注入图片安全规则（纯文本轮次也要防历史注入）。
-    pub fn has_image_observation(&self) -> bool {
-        let Message::User { meta: Some(meta), .. } = self else {
-            return false;
-        };
-        meta.get("attachments")
-            .and_then(Value::as_array)
-            .is_some_and(|list| {
-                list.iter().any(|a| {
-                    a.get("observation")
-                        .and_then(Value::as_str)
-                        .is_some_and(|s| !s.trim().is_empty())
-                })
-            })
-    }
-}
-
-/// 用户消息投影：保留渠道来源字段，只裁剪 attachments
-fn project_user_meta(meta: &Value) -> Option<Value> {
-    let obj = meta.as_object()?;
-    let mut out = Map::new();
-    for (key, value) in obj {
-        if key != "attachments" {
-            out.insert(key.clone(), value.clone());
-        }
-    }
-    if let Some(list) = obj.get("attachments").and_then(Value::as_array) {
-        let attachments: Vec<Value> = list.iter().filter_map(project_attachment).collect();
-        if !attachments.is_empty() {
-            out.insert("attachments".to_string(), Value::Array(attachments));
-        }
-    }
-    (!out.is_empty()).then(|| Value::Object(out))
-}
-
-/// 单个附件投影：白名单字段，缺失/null 一律省略
-fn project_attachment(value: &Value) -> Option<Value> {
-    let obj = value.as_object()?;
-    let mut out = Map::new();
-    for key in ["path", "original_name", "observation", "ocr_text"] {
-        if let Some(v) = obj.get(key).filter(|v| !v.is_null()) {
-            out.insert(key.to_string(), v.clone());
-        }
-    }
-    if let Some(labels) = obj.get("labels").and_then(Value::as_array) {
-        if !labels.is_empty() {
-            out.insert("labels".to_string(), Value::Array(labels.clone()));
-        }
-    }
-    (!out.is_empty()).then(|| Value::Object(out))
 }
 
 /// 当前会话上下文用量（get_context_usage 命令返回）
 #[derive(Debug, Clone, Serialize)]
 pub struct ContextUsage {
-    /// 当前会话最大输入 token（遍历 assistant 消息的 token_usage.input_tokens 取最大）
+    /// 下一次请求的输入锚点（最近真实 input + output）；旧会话回退到历史最大值
     pub used_tokens: usize,
-    /// 压缩阈值（config.session_memory.compress_threshold）
+    /// 当前预算触发线（input_budget × compress_trigger_ratio，受旧绝对阈值约束）
     pub threshold: usize,
-}
-
-/// 限界会话上下文（get_context_for_prompt 的输出，序列化为 JSON 拼进 system_prompt）
-#[derive(Debug, Clone, Serialize)]
-pub struct SessionContext {
-    pub id: String,
-    pub status: SessionStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub super_compressed: Option<CompressedChunk>,
-    /// 最近 context_chunks 个普通压缩块
-    pub compressed: Vec<CompressedChunk>,
-    /// 当前未压缩消息
-    pub messages: Vec<Message>,
-    /// 会话里是否存在图片观察文本（引擎据此注入不可信数据规则）
-    pub has_image_observations: bool,
-    /// 裁剪掉的旧块数（超限时存在）
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub older_chunks_omitted: Option<usize>,
 }

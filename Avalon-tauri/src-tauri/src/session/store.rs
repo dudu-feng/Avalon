@@ -11,15 +11,22 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::config::ConfigStore;
 use crate::llm::{CompressResult, LlmState};
-use crate::prompt::build_compress_prompt;
+use crate::prompt::{build_compress_prompt, build_rolling_prompt};
 use crate::vector::{RebuildProgress, RebuildStats, VectorStore};
 
+use super::compress::{build_transcript, message_time_range};
+use super::context::{estimate_text_tokens, ContextBudget};
 use super::types::*;
+use super::{artifact, ArtifactRead};
 use super::{now_id_ts, SessionStore};
+
+/// 旧会话工具链清洗标记：存在即表示已扫描过，无需每次启动重复读全部历史
+const TOOLCHAIN_CLEANUP_MARKER: &str = ".toolchain_cleanup_v1";
 
 /// 会话文件存储实现
 pub struct FileSessionStore {
@@ -109,6 +116,160 @@ impl FileSessionStore {
         std::fs::write(dir.join("index.json"), content).with_context(|| "写入 index.json 失败")
     }
 
+    /// 一次性清洗旧版本取消留下的不完整工具链。
+    ///
+    /// 旧引擎停止时仍会写入已生成的部分轨迹，可能留下 assistant(tool_calls)
+    /// 缺少对应 tool 结果的半条链。新投影不做运行时配对修复（见
+    /// `context::build_history_messages`），因此启动时把 current / history index /
+    /// raw 块统一清洗一次。标记文件保证只扫描一次；清洗幂等，失败时下次启动重试。
+    pub fn cleanup_legacy_tool_chains(&self) -> Result<usize> {
+        let marker = self.session_path().join(TOOLCHAIN_CLEANUP_MARKER);
+        if marker.is_file() {
+            return Ok(0);
+        }
+
+        let mut removed = 0usize;
+        let mut touched = 0usize;
+
+        // ① 活跃会话：current/{channel}.json
+        let current_dir = self.session_path().join("current");
+        if current_dir.is_dir() {
+            for entry in std::fs::read_dir(&current_dir)
+                .with_context(|| format!("读取 current 目录失败: {}", current_dir.display()))?
+            {
+                let path = entry.context("读取 current 条目失败")?.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                    continue;
+                }
+                let Some(channel) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                match self.read_session_file(&path) {
+                    Ok(mut data) => {
+                        let n = super::migrate::sanitize_tool_chains(&mut data.messages);
+                        if n > 0 {
+                            self.write_current(channel, &data)?;
+                            removed += n;
+                            touched += 1;
+                        }
+                    }
+                    Err(e) => log::warn!(
+                        target: "session",
+                        "跳过无法解析的会话文件 {}: {e:#}",
+                        path.display()
+                    ),
+                }
+            }
+        }
+
+        // ② 归档会话：history/{id}/index.json + raw/{chunk}.json
+        let history = self.history_dir();
+        if history.is_dir() {
+            for entry in std::fs::read_dir(&history)
+                .with_context(|| format!("读取 history 目录失败: {}", history.display()))?
+            {
+                let dir = entry.context("读取 history 条目失败")?.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+
+                let index = dir.join("index.json");
+                if index.is_file() {
+                    match self.read_session_file(&index) {
+                        Ok(mut data) => {
+                            let n = super::migrate::sanitize_tool_chains(&mut data.messages);
+                            if n > 0 {
+                                self.write_session_index(&data)?;
+                                removed += n;
+                                touched += 1;
+                            }
+                        }
+                        Err(e) => log::warn!(
+                            target: "session",
+                            "跳过无法解析的会话索引 {}: {e:#}",
+                            index.display()
+                        ),
+                    }
+                }
+
+                let raw_dir = dir.join("raw");
+                if raw_dir.is_dir() {
+                    for raw_entry in std::fs::read_dir(&raw_dir)
+                        .with_context(|| format!("读取 raw 目录失败: {}", raw_dir.display()))?
+                    {
+                        let path = raw_entry.context("读取 raw 条目失败")?.path();
+                        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                            continue;
+                        }
+                        match self.cleanup_raw_file(&path) {
+                            Ok(n) if n > 0 => {
+                                removed += n;
+                                touched += 1;
+                            }
+                            Ok(_) => {}
+                            Err(e) => log::warn!(
+                                target: "session",
+                                "跳过无法清洗的 raw 文件 {}: {e:#}",
+                                path.display()
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+
+        if removed > 0 {
+            log::info!(
+                target: "session",
+                "旧会话工具链清理完成：删除 {removed} 条不完整/孤立消息，涉及 {touched} 个文件"
+            );
+        }
+
+        std::fs::create_dir_all(self.session_path())
+            .with_context(|| "创建会话目录失败")?;
+        std::fs::write(&marker, format!("removed={removed}\n"))
+            .with_context(|| format!("写入清洗标记失败: {}", marker.display()))?;
+        Ok(removed)
+    }
+
+    /// 清洗单个 raw 块：兼容信封结构与旧版裸数组，保留其余字段。
+    fn cleanup_raw_file(&self, path: &Path) -> Result<usize> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("读取 raw 文件失败: {}", path.display()))?;
+        let mut value: serde_json::Value = serde_json::from_str(&content)
+            .with_context(|| format!("解析 raw 文件失败: {}", path.display()))?;
+
+        let mut messages: Vec<Message> = if value.is_array() {
+            serde_json::from_value(value.clone())
+                .with_context(|| format!("解析 raw 消息失败: {}", path.display()))?
+        } else {
+            let Some(items) = value.get("messages") else {
+                return Ok(0);
+            };
+            serde_json::from_value(items.clone())
+                .with_context(|| format!("解析 raw 消息失败: {}", path.display()))?
+        };
+
+        let removed = super::migrate::sanitize_tool_chains(&mut messages);
+        if removed == 0 {
+            return Ok(0);
+        }
+
+        let serialized = serde_json::to_value(&messages).context("序列化 raw 消息失败")?;
+        if value.is_array() {
+            value = serialized;
+        } else {
+            value["messages"] = serialized;
+        }
+        let text = serde_json::to_string_pretty(&value).context("序列化 raw 文件失败")?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, text)
+            .with_context(|| format!("写入 raw 临时文件失败: {}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .with_context(|| format!("替换 raw 文件失败: {}", path.display()))?;
+        Ok(removed)
+    }
+
     /// 从 session_id 提取时间戳（去掉 {channel}_ 前缀）
     fn doc_timestamp(&self, session_id: &str, channel: &str) -> String {
         session_id
@@ -141,63 +302,95 @@ impl FileSessionStore {
 
     // ============ 压缩编排 ============
 
-    /// 会话压缩：把 session 压成摘要，追加 compressed，清空 session，同步向量库，触发渐进式总结
-    async fn compress(&self, channel: &str) -> Result<()> {
+    /// 会话压缩：把当前全部未压缩消息压成结构化摘要。
+    ///
+    /// 写侧保证 messages 一定是完整轮次，因此这里不再选择保留边界；
+    /// 压缩成功后 messages 清空，锚点清零，下一次请求直接发送并由 provider 重新锚定。
+    /// 返回是否实际写入压缩块；空会话或摘要为空时返回 false。
+    async fn compress(&self, channel: &str) -> Result<bool> {
         let mut data = self.read_current(channel)?;
         if data.messages.is_empty() {
             log::debug!(target: "session", "当前会话为空，无需压缩。");
-            return Ok(());
+            return Ok(false);
         }
 
-        // 1. 组装压缩提示词（只压未压缩消息，不传已压缩的 compressed/super_compressed）
-        let payload = serde_json::to_string(&data.messages).context("序列化待压缩会话失败")?;
-        let (system, user) = build_compress_prompt(&payload);
+        let cfg = self.config.get();
+
+        // 1. 全部未压缩消息 → 干净对话转录（不是存储 JSON）
+        let to_compress: Vec<Message> = data.messages.clone();
+        let transcript = build_transcript(&to_compress);
+        let (system, user) = build_compress_prompt(&transcript);
 
         // 2. 调用 LLM 压缩（动态读最新配置构建 client）
-        let cfg = self.config.get();
-        let model = cfg.active_model_config().cloned()
+        let model = cfg
+            .active_model_config()
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("未配置活跃模型（active_model 无效）"))?;
         let client = self.llm.client(model, cfg.llm.clone());
         let result: CompressResult = client.compress(&system, &user).await?;
+        // 空结果不能清空原消息，否则会话内容会静默丢失
+        if result.summary.is_empty()
+            && result.facts.is_empty()
+            && result.decisions.is_empty()
+            && result.open_tasks.is_empty()
+            && result.tool_outcomes.is_empty()
+        {
+            log::warn!(target: "session", "压缩结果为空，保留原消息不落盘。");
+            return Ok(false);
+        }
 
-        // 3. 组装压缩块
+        // 3. 组装结构化压缩块
         let round = data.compress_round + 1;
         let chunk = CompressedChunk {
             chunk: round.to_string(),
             summary: result.summary,
             keywords: result.keywords,
             merged_from_chunks: Vec::new(),
+            facts: result.facts,
+            decisions: result.decisions,
+            open_tasks: result.open_tasks,
+            tool_outcomes: result.tool_outcomes,
+            source_message_ids: Vec::new(),
+            time_range: message_time_range(&to_compress).or(result.time_range),
+            token_count: Some(estimate_text_tokens(&transcript)),
         };
         data.compress_round = round;
         data.compressed.push(chunk.clone());
 
-        // 4. 写 raw（压缩前的原始 session）
-        let raw_dir = self.history_dir().join(&data.id).join("raw");
-        std::fs::create_dir_all(&raw_dir)
-            .with_context(|| format!("创建 raw 目录失败: {}", raw_dir.display()))?;
-        let raw_content = serde_json::to_string_pretty(&data.messages).context("序列化 raw 失败")?;
-        std::fs::write(raw_dir.join(format!("{round}.json")), raw_content)
-            .with_context(|| "写入 raw 文件失败")?;
+        // 4. 写 raw（全部被压缩消息，带元信息）
+        self.write_raw_chunk(&data.id, round, &to_compress)?;
 
-        // 5. 清空 messages + 落盘
+        // 5. 全部消息已进入摘要与 raw，清空当前消息；锚点失效，等待 provider 重新锚定
         data.messages.clear();
+        data.stats.last_input_tokens = 0;
+        data.stats.last_output_tokens = 0;
         self.write_current(channel, &data)?;
 
         // 6. 同步向量库
-        let doc_id = format!("{}_chunk_{round}", data.id);
-        let timestamp = self.doc_timestamp(&data.id, channel);
-        let summary_text = chunk.summary.join("\n");
-        self.vector.insert(&doc_id, &summary_text, &chunk.keywords, &timestamp)?;
+        let index_text = chunk.index_text();
+        if !index_text.is_empty() {
+            let doc_id = format!("{}_chunk_{round}", data.id);
+            let timestamp = self.doc_timestamp(&data.id, channel);
+            self.vector
+                .insert(&doc_id, &index_text, &chunk.keywords, &timestamp)?;
+        }
 
-        log::info!(target: "session", "当前会话已压缩。{} 个压缩记录", data.compressed.len());
+        log::info!(
+            target: "session",
+            "当前会话已压缩全部消息：块 {round}，{} 条消息 → 摘要，现有 {} 个压缩记录",
+            to_compress.len(),
+            data.compressed.len()
+        );
 
-        // 7. 渐进式总结检查
+        // 7. 滚动摘要检查
         self.progressive_summarize(channel, &mut data).await?;
 
-        Ok(())
+        Ok(true)
     }
 
-    /// 渐进式总结：compressed 超 max_chunks 时，把最旧块合并为 super_compressed
+    /// 滚动摘要：compressed 超 max_chunks 时，把旧滚动状态 + 最旧块合并成新的滚动状态。
+    ///
+    /// `super_compressed` 只有一层，不再对摘要反复做二级嵌套。
     async fn progressive_summarize(&self, channel: &str, data: &mut SessionData) -> Result<()> {
         let max_chunks = self.config.get().session_memory.max_chunks;
         // max_chunks < 2 时 merge_batch < 1，无意义，跳过
@@ -206,103 +399,143 @@ impl FileSessionStore {
         }
         let merge_batch = max_chunks / 2;
 
-        // 构建待合并列表（超摘要存在时作为最旧逻辑块纳入）
-        let (old_chunks, recent_chunks) = match &data.super_compressed {
-            Some(sc) => {
-                let mut old = vec![sc.clone()];
-                old.extend(data.compressed[..merge_batch - 1].iter().cloned());
-                (old, data.compressed[merge_batch - 1..].to_vec())
-            }
-            None => (
-                data.compressed[..merge_batch].to_vec(),
-                data.compressed[merge_batch..].to_vec(),
-            ),
-        };
+        let old_rolling = data.super_compressed.clone();
+        let old_chunks: Vec<CompressedChunk> = data.compressed[..merge_batch].to_vec();
+        let recent_chunks: Vec<CompressedChunk> = data.compressed[merge_batch..].to_vec();
 
-        // 收集摘要 / 关键词 / 块编号范围
-        let all_summaries: Vec<String> = old_chunks.iter().flat_map(|c| c.summary.clone()).collect();
-        let all_keywords: Vec<String> = old_chunks.iter().flat_map(|c| c.keywords.clone()).collect();
-        let nums: Vec<u64> = old_chunks.iter().flat_map(|c| extract_chunk_nums(&c.chunk)).collect();
-        let start = nums.iter().min().copied().unwrap_or(1);
-        let end = nums.iter().max().copied().unwrap_or(merge_batch as u64);
-        let merged_num = format!("merged_{start}_{end}");
-
-        // 二次压缩（把旧摘要当作 assistant 消息）
-        let mock = json!({
-            "messages": all_summaries
-                .iter()
-                .map(|s| json!({"role": "assistant", "content": s}))
-                .collect::<Vec<_>>()
+        // 输入：旧滚动状态 + 新块的结构化摘要（不是嵌套摘要数组）
+        let payload = json!({
+            "old_rolling": old_rolling.as_ref().map(chunk_payload),
+            "new_chunks": old_chunks.iter().map(chunk_payload).collect::<Vec<_>>(),
         });
-        let (system, user) = build_compress_prompt(&mock.to_string());
+        let (system, user) = build_rolling_prompt(&payload.to_string());
+
         let cfg = self.config.get();
-        let model = cfg.active_model_config().cloned()
+        let model = cfg
+            .active_model_config()
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("未配置活跃模型（active_model 无效）"))?;
         let client = self.llm.client(model, cfg.llm.clone());
         let merged_result: CompressResult = match client.compress(&system, &user).await {
             Ok(r) => r,
             Err(e) => {
-                log::warn!(target: "session", "合并压缩调用失败: {e}");
+                log::warn!(target: "session", "滚动摘要调用失败: {e}");
                 return Ok(());
             }
         };
 
-        let merged_chunk = CompressedChunk {
-            chunk: merged_num.clone(),
-            summary: if merged_result.summary.is_empty() {
-                all_summaries.iter().take(3).cloned().collect()
+        // 来源块：旧滚动覆盖的块 + 本次合并的块
+        let mut merged_from: Vec<String> = Vec::new();
+        if let Some(sc) = &old_rolling {
+            if sc.merged_from_chunks.is_empty() {
+                merged_from.push(sc.chunk.clone());
             } else {
-                merged_result.summary
-            },
-            keywords: if merged_result.keywords.is_empty() {
-                let mut k: Vec<String> = all_keywords.clone();
-                k.sort();
-                k.dedup();
-                k.truncate(10);
-                k
-            } else {
-                merged_result.keywords
-            },
-            merged_from_chunks: old_chunks.iter().map(|c| c.chunk.clone()).collect(),
-        };
+                merged_from.extend(sc.merged_from_chunks.iter().cloned());
+            }
+        }
+        merged_from.extend(old_chunks.iter().map(|c| c.chunk.clone()));
+        dedup_keep_order(&mut merged_from);
+
+        // 覆盖范围包含旧滚动摘要代表的更早块，避免编号只显示本次合并的尾部
+        let nums: Vec<u64> = merged_from
+            .iter()
+            .flat_map(|c| extract_chunk_nums(c))
+            .collect();
+        let start = nums.iter().min().copied().unwrap_or(1);
+        let end = nums.iter().max().copied().unwrap_or(merge_batch as u64);
+        let merged_num = format!("merged_{start}_{end}");
+
+        let merged_chunk = merge_rolling_chunk(
+            merged_num.clone(),
+            old_rolling.as_ref(),
+            &old_chunks,
+            merged_result,
+            merged_from,
+        );
 
         // 更新数据 + 落盘
         data.super_compressed = Some(merged_chunk.clone());
         data.compressed = recent_chunks;
         self.write_current(channel, data)?;
 
-        // 同步向量库：删旧块（含旧超摘要），插超级摘要
+        // 同步向量库：删旧块（含旧滚动摘要），插新滚动摘要
         let session_id = data.id.clone();
-        let delete_ids: Vec<String> = old_chunks
+        let mut delete_ids: Vec<String> = old_chunks
             .iter()
             .map(|c| format!("{session_id}_chunk_{}", c.chunk))
             .collect();
+        if let Some(sc) = &old_rolling {
+            delete_ids.push(format!("{session_id}_chunk_{}", sc.chunk));
+        }
         let _ = self.vector.batch_delete(&delete_ids);
 
         let merged_doc_id = format!("{session_id}_chunk_{merged_num}");
-        let merged_text = merged_chunk.summary.join("\n");
-        let timestamp = self.doc_timestamp(&session_id, channel);
-        let _ = self.vector.insert(&merged_doc_id, &merged_text, &merged_chunk.keywords, &timestamp);
+        let merged_text = merged_chunk.index_text();
+        if !merged_text.is_empty() {
+            let timestamp = self.doc_timestamp(&session_id, channel);
+            let _ = self.vector.insert(
+                &merged_doc_id,
+                &merged_text,
+                &merged_chunk.keywords,
+                &timestamp,
+            );
+        }
 
-        // 写 raw（merged_summary）
+        // 写 raw（merged_summary）：保存本次滚动输入与输出，便于追溯
         let raw_dir = self.history_dir().join(&session_id).join("raw");
         if std::fs::create_dir_all(&raw_dir).is_ok() {
             let raw = json!({
                 "type": "merged_summary",
+                "created_at": chrono::Local::now().to_rfc3339(),
                 "merged_from_chunks": merged_chunk.merged_from_chunks,
                 "summary": merged_chunk.summary,
                 "keywords": merged_chunk.keywords,
+                "facts": merged_chunk.facts,
+                "decisions": merged_chunk.decisions,
+                "open_tasks": merged_chunk.open_tasks,
+                "tool_outcomes": merged_chunk.tool_outcomes,
+                "time_range": merged_chunk.time_range,
             });
             if let Ok(content) = serde_json::to_string_pretty(&raw) {
                 let _ = std::fs::write(raw_dir.join(format!("{merged_num}.json")), content);
             }
         }
 
-        log::info!(target: "session", 
-            "[ProgressiveSummarize] {} 个逻辑块 → 1 个超级摘要 {merged_num}（覆盖 {start}~{end}，compressed 剩余 {} 块）",
+        log::info!(target: "session",
+            "[RollingSummary] 旧滚动状态 + {} 个块 → {merged_num}（覆盖 {start}~{end}，compressed 剩余 {} 块）",
             old_chunks.len(),
             data.compressed.len()
         );
+        Ok(())
+    }
+
+    /// 写 raw/{chunk}.json：带会话、块号、时间与 artifact 引用的信封结构
+    fn write_raw_chunk(&self, session_id: &str, chunk: usize, messages: &[Message]) -> Result<()> {
+        let raw_dir = self.history_dir().join(session_id).join("raw");
+        std::fs::create_dir_all(&raw_dir)
+            .with_context(|| format!("创建 raw 目录失败: {}", raw_dir.display()))?;
+        let mut artifact_ids: Vec<String> = messages
+            .iter()
+            .filter_map(|m| match m {
+                Message::Tool {
+                    artifact: Some(a), ..
+                } => Some(a.id.clone()),
+                _ => None,
+            })
+            .collect();
+        dedup_keep_order(&mut artifact_ids);
+
+        let raw = RawChunkFile {
+            kind: "messages".to_string(),
+            session_id: session_id.to_string(),
+            chunk: chunk.to_string(),
+            created_at: chrono::Local::now().to_rfc3339(),
+            messages: messages.to_vec(),
+            artifact_ids,
+        };
+        let content = serde_json::to_string_pretty(&raw).context("序列化 raw 失败")?;
+        std::fs::write(raw_dir.join(format!("{chunk}.json")), content)
+            .with_context(|| "写入 raw 文件失败")?;
         Ok(())
     }
 
@@ -346,8 +579,9 @@ impl FileSessionStore {
         let file = raw_dir.join(format!("{n}.json"));
         let content = std::fs::read_to_string(&file)
             .with_context(|| format!("读取 raw 文件失败: {}", file.display()))?;
-        let messages: Vec<Message> = serde_json::from_str(&content)
-            .with_context(|| format!("解析 raw 文件失败: {}", file.display()))?;
+        let messages = serde_json::from_str::<RawChunkContent>(&content)
+            .with_context(|| format!("解析 raw 文件失败: {}", file.display()))?
+            .into_messages();
         let has_earlier = nums.first().copied().map(|min| min < n).unwrap_or(false);
         Ok((Some(n), messages, has_earlier))
     }
@@ -531,7 +765,7 @@ impl FileSessionStore {
 
         for chunk in &data.compressed {
             let doc_id = format!("{}_chunk_{}", data.id, chunk.chunk);
-            let text = chunk.summary.join("\n");
+            let text = chunk.index_text();
             if !text.is_empty() {
                 self.vector.insert(&doc_id, &text, &chunk.keywords, &timestamp)?;
                 count += 1;
@@ -540,7 +774,7 @@ impl FileSessionStore {
 
         if let Some(sc) = &data.super_compressed {
             let doc_id = format!("{}_chunk_{}", data.id, sc.chunk);
-            let text = sc.summary.join("\n");
+            let text = sc.index_text();
             if !text.is_empty() {
                 self.vector.insert(&doc_id, &text, &sc.keywords, &timestamp)?;
                 count += 1;
@@ -579,34 +813,47 @@ impl SessionStore for FileSessionStore {
 
     fn get_context_usage(&self, channel: &str) -> Result<ContextUsage> {
         let data = self.read_current(channel)?;
-        let used_tokens = max_input_tokens(&data.messages);
-        let threshold = self.config.get().session_memory.compress_threshold;
-        Ok(ContextUsage { used_tokens, threshold })
-    }
-
-    fn get_context_for_prompt(&self, channel: &str) -> Result<String> {
-        let data = self.read_current(channel)?;
-        let max = self.config.get().session_memory.context_chunks;
-        let omitted = data.compressed.len().saturating_sub(max);
-        let start = data.compressed.len() - max.min(data.compressed.len());
-        // 投影：附件只留模型需要的字段，落盘会话本身不动
-        let messages: Vec<Message> = data.messages.iter().map(Message::for_prompt).collect();
-        let has_image_observations = messages.iter().any(Message::has_image_observation);
-        let ctx = SessionContext {
-            id: data.id,
-            status: data.status,
-            super_compressed: data.super_compressed,
-            compressed: data.compressed[start..].to_vec(),
-            messages,
-            has_image_observations,
-            older_chunks_omitted: (omitted > 0).then_some(omitted),
+        let cfg = self.config.get();
+        let budget =
+            ContextBudget::from_config(cfg.active_model_config(), &cfg.session_memory);
+        // 优先展示下一次请求的锚点（真实 input + output，与压缩触发同一口径）；
+        // 旧会话没有 stats 时回退到历史最大值，避免升级后进度条恒为 0。
+        let used_tokens = if data.stats.last_input_tokens > 0 {
+            data.stats
+                .last_input_tokens
+                .saturating_add(data.stats.last_output_tokens)
+        } else {
+            max_input_tokens(&data.messages)
         };
-        serde_json::to_string(&ctx).context("序列化会话上下文失败")
+        Ok(ContextUsage {
+            used_tokens,
+            threshold: budget.trigger_tokens,
+        })
     }
 
     fn update_current_session(&self, channel: &str, chat_history: &[Message]) -> Result<()> {
         let mut data = self.ensure_active(channel)?;
         data.messages.extend_from_slice(chat_history);
+        self.write_current(channel, &data)
+    }
+
+    fn record_request_usage(
+        &self,
+        channel: &str,
+        model: &str,
+        usage: &crate::llm::TokenUsage,
+    ) -> Result<()> {
+        let mut data = self.read_current(channel)?;
+        if data.id.is_empty() {
+            return Ok(());
+        }
+
+        data.stats = SessionStats {
+            last_input_tokens: usage.input_tokens as usize,
+            last_output_tokens: usage.output_tokens as usize,
+            last_model: model.to_string(),
+            last_request_at: chrono::Local::now().to_rfc3339(),
+        };
         self.write_current(channel, &data)
     }
 
@@ -619,27 +866,30 @@ impl SessionStore for FileSessionStore {
         self.write_current(channel, &data)
     }
 
-    async fn auto_compress_check(&self, channel: &str, chat_history: &[Message]) -> Result<bool> {
-        let max_input = max_input_tokens(chat_history);
-        let threshold = self.config.get().session_memory.compress_threshold;
-        if max_input >= threshold {
-            log::info!(target: "session", "输入 token({max_input}) >= 阈值({threshold})，触发自动压缩...");
-            self.compress(channel).await?;
-            Ok(true)
+    async fn auto_compress_check(
+        &self,
+        channel: &str,
+        anchor_tokens: usize,
+        force: bool,
+    ) -> Result<bool> {
+        let cfg = self.config.get();
+        let budget =
+            ContextBudget::from_config(cfg.active_model_config(), &cfg.session_memory);
+        if force || anchor_tokens >= budget.trigger_tokens {
+            log::info!(
+                target: "session",
+                "输入锚点({anchor_tokens}) >= 触发线({})（force={force}），触发自动压缩...",
+                budget.trigger_tokens
+            );
+            self.compress(channel).await
         } else {
             Ok(false)
         }
     }
 
     async fn compress_session(&self, channel: &str) -> Result<bool> {
-        // 空会话无需压缩（compress 内部也会短路，这里提前返回以便前端区分「已压缩」与「无内容」）
-        let had_content = !self.read_current(channel)?.messages.is_empty();
-        if !had_content {
-            log::debug!(target: "session", "当前会话为空，无需主动压缩。");
-            return Ok(false);
-        }
-        self.compress(channel).await?;
-        Ok(true)
+        // 空会话无需压缩（compress 内部也会短路）
+        self.compress(channel).await
     }
 
     async fn save_current_session(&self, channel: &str) -> Result<()> {
@@ -662,7 +912,8 @@ impl SessionStore for FileSessionStore {
         }
 
         self.ensure_title(channel)?;
-        self.compress(channel).await?;
+        // 归档时把全部未压缩消息压成摘要；压缩失败时保留原文随 index 一起存档
+        let _ = self.compress(channel).await?;
         data = self.read_current(channel)?;
         data.status = SessionStatus::Archived;
         self.write_session_index(&data)?;
@@ -751,13 +1002,37 @@ impl SessionStore for FileSessionStore {
             let path = self.history_dir().join(id).join("raw").join(format!("{n}.json"));
             let content = std::fs::read_to_string(&path)
                 .with_context(|| format!("读取 raw 文件失败: {}", path.display()))?;
-            let chunk: Vec<Message> = serde_json::from_str(&content)
-                .with_context(|| format!("解析 raw 文件失败: {}", path.display()))?;
+            let chunk = serde_json::from_str::<RawChunkContent>(&content)
+                .with_context(|| format!("解析 raw 文件失败: {}", path.display()))?
+                .into_messages();
             messages.extend(chunk);
         }
         // raw 块是压缩前的历史，data.messages 是尚未压缩的尾部
         messages.extend(data.messages);
         Ok(messages)
+    }
+
+    fn write_tool_artifact(
+        &self,
+        session_id: &str,
+        artifact_id: &str,
+        content: &str,
+    ) -> Result<ArtifactRef> {
+        artifact::write(&self.session_path(), session_id, artifact_id, content)
+    }
+
+    fn read_tool_artifact(
+        &self,
+        channel: &str,
+        artifact_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<ArtifactRead> {
+        let data = self.read_current(channel)?;
+        if data.id.is_empty() {
+            anyhow::bail!("当前没有进行中的会话");
+        }
+        artifact::read(&self.session_path(), &data.id, artifact_id, offset, limit)
     }
 
     fn delete_session(&self, id: &str) -> Result<()> {
@@ -791,6 +1066,13 @@ impl SessionStore for FileSessionStore {
         if dir.is_dir() {
             std::fs::remove_dir_all(&dir)
                 .with_context(|| format!("删除会话目录失败: {}", dir.display()))?;
+        }
+
+        // ③ 删该会话的工具结果 artifact（与 history 分开存放，需单独清理）
+        let artifacts = self.session_path().join("artifacts").join(id);
+        if artifacts.is_dir() {
+            std::fs::remove_dir_all(&artifacts)
+                .with_context(|| format!("删除工具结果目录失败: {}", artifacts.display()))?;
         }
         Ok(())
     }
@@ -846,6 +1128,130 @@ pub(crate) fn extract_chunk_nums(chunk: &str) -> Vec<u64> {
         rest.split('_').filter_map(|p| p.parse().ok()).collect()
     } else {
         chunk.parse().ok().into_iter().collect()
+    }
+}
+
+/// raw/{chunk}.json 的信封结构（旧数据是裸 `Vec<Message>` 数组，读取时兼容）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RawChunkFile {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    chunk: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    messages: Vec<Message>,
+    #[serde(default)]
+    artifact_ids: Vec<String>,
+}
+
+/// raw 文件内容：信封（新）或裸消息数组（旧）
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum RawChunkContent {
+    Envelope(RawChunkFile),
+    Legacy(Vec<Message>),
+}
+
+impl RawChunkContent {
+    pub(crate) fn into_messages(self) -> Vec<Message> {
+        match self {
+            RawChunkContent::Envelope(f) => f.messages,
+            RawChunkContent::Legacy(messages) => messages,
+        }
+    }
+}
+
+/// 按插入顺序去重
+fn dedup_keep_order(items: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    items.retain(|item| seen.insert(item.clone()));
+}
+
+/// 压缩块 → 滚动摘要提示词的结构化载荷
+fn chunk_payload(chunk: &CompressedChunk) -> serde_json::Value {
+    json!({
+        "chunk": chunk.chunk,
+        "summary": chunk.summary,
+        "keywords": chunk.keywords,
+        "facts": chunk.facts,
+        "decisions": chunk.decisions,
+        "open_tasks": chunk.open_tasks,
+        "tool_outcomes": chunk.tool_outcomes,
+        "time_range": chunk.time_range,
+    })
+}
+
+/// 组装滚动摘要块：模型输出优先，缺项时回退到旧滚动状态 + 被合并块的字段拼接。
+fn merge_rolling_chunk(
+    chunk: String,
+    old_rolling: Option<&CompressedChunk>,
+    old_chunks: &[CompressedChunk],
+    result: CompressResult,
+    merged_from: Vec<String>,
+) -> CompressedChunk {
+    let sources: Vec<&CompressedChunk> = old_rolling.into_iter().chain(old_chunks).collect();
+
+    let fallback = |pick: fn(&CompressedChunk) -> &Vec<String>, limit: usize| -> Vec<String> {
+        let mut out: Vec<String> = sources
+            .iter()
+            .flat_map(|c| pick(c).iter().cloned())
+            .collect();
+        dedup_keep_order(&mut out);
+        out.truncate(limit);
+        out
+    };
+
+    let summary = if result.summary.is_empty() {
+        fallback(|c| &c.summary, 20)
+    } else {
+        result.summary
+    };
+    let keywords = if result.keywords.is_empty() {
+        fallback(|c| &c.keywords, 20)
+    } else {
+        result.keywords
+    };
+    let facts = if result.facts.is_empty() {
+        fallback(|c| &c.facts, 20)
+    } else {
+        result.facts
+    };
+    let decisions = if result.decisions.is_empty() {
+        fallback(|c| &c.decisions, 20)
+    } else {
+        result.decisions
+    };
+    let open_tasks = if result.open_tasks.is_empty() {
+        fallback(|c| &c.open_tasks, 10)
+    } else {
+        result.open_tasks
+    };
+    let tool_outcomes = if result.tool_outcomes.is_empty() {
+        fallback(|c| &c.tool_outcomes, 10)
+    } else {
+        result.tool_outcomes
+    };
+    let time_range = result
+        .time_range
+        .or_else(|| old_rolling.and_then(|c| c.time_range.clone()));
+    let token_count = Some(sources.iter().filter_map(|c| c.token_count).sum::<usize>());
+
+    CompressedChunk {
+        chunk,
+        summary,
+        keywords,
+        merged_from_chunks: merged_from,
+        facts,
+        decisions,
+        open_tasks,
+        tool_outcomes,
+        source_message_ids: Vec::new(),
+        time_range,
+        token_count,
     }
 }
 

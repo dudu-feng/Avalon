@@ -146,7 +146,11 @@ impl LlmClient {
     /// (system_prompt, user_prompt) 由 engine 用 prompt::build_compress_prompt 组装后传入。
     pub async fn compress(&self, system_prompt: &str, user_prompt: &str) -> Result<CompressResult> {
         let (content, usage) = self.invoke_json(system_prompt, Some(user_prompt)).await?;
-        let mut result: CompressResult = parse_llm_json(&content)?;
+        // 解析失败不阻断压缩：把原文当成一条摘要，总比整轮压缩直接失败好。
+        let mut result: CompressResult = parse_llm_json(&content).unwrap_or_else(|e| {
+            log::warn!(target: "llm", "压缩结果 JSON 解析失败，回退纯文本摘要: {e}");
+            CompressResult::from_fallback_text(&content, usage.clone())
+        });
         result.usage = usage;
         Ok(result)
     }

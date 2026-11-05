@@ -86,6 +86,8 @@ export type HistoryMessage =
       arguments?: unknown;
       success: boolean;
       content: string;
+      /** 大结果落盘后的引用（后端 Message::Tool.artifact） */
+      artifact?: { id: string; chars: number; bytes: number } | null;
     };
 
 /** get_current_session 返回（精简，前端只用这些字段） */

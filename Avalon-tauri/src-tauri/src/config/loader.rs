@@ -41,6 +41,8 @@ url = "https://api.deepseek.com"          # OpenAI 兼容 API 基础 URL
 key = ""                                  # API Key（支持环境变量 AVALON_LLM_API_KEY 覆盖）
 modelname = "deepseek-v4-flash"           # 实际模型名
 supports_vision = false                   # 是否支持图片输入（多模态）
+context_window = 128000                   # 上下文窗口（token），省略则回退 [session_memory]
+max_output_tokens = 8192                  # 单次请求预留的最大输出 token，省略同上
 
 # ============================================================
 #  LLM 全局行为参数（所有模型共享）
@@ -66,10 +68,16 @@ api_base_url = ""
 #  会话记忆配置
 # ============================================================
 [session_memory]
-compress_threshold = 10000                # 输入 token 超此阈值触发自动压缩
+compress_threshold = 0                    # 旧版绝对阈值；0 = 仅按下面的预算比例触发
 max_chunks = 10                           # 压缩块超此数量触发渐进式总结
 context_chunks = 5                        # 系统提示加载最近 N 个压缩块
 search_mode = "hybrid"                    # semantic | keyword | hybrid
+context_window = 128000                   # 模型未单独配置时的上下文窗口兜底
+max_output_tokens = 8192                  # 模型未单独配置时的输出预留兜底
+safety_margin_ratio = 0.05                # 安全余量（最低 2048 token）
+compress_trigger_ratio = 0.85             # 预估输入达到输入预算的 85% 时压缩
+memory_budget_ratio = 0.20                # 长期记忆最多占输入预算的 20%
+artifact_threshold_bytes = 2048           # 工具结果超过该字节数时落 artifact，只把预览放回上下文
 
 # ============================================================
 #  Whisper 语音转写配置
@@ -469,6 +477,8 @@ pub(crate) fn migrate_legacy_llm(content: &str, config: &mut AppConfig) -> Resul
                 key: l.api_key,
                 modelname: l.model,
                 supports_vision: false,
+                context_window: None,
+                max_output_tokens: None,
             });
             config.active_model = "default".to_string();
             log::info!(target: "config", "检测到旧版单模型配置，已迁移为模型列表（name=default）");

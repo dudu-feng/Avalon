@@ -93,6 +93,7 @@ export function ChatInput({
 }: ChatInputProps) {
   const [value, setValue] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [visionConfirmOpen, setVisionConfirmOpen] = useState(false);
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -228,6 +229,12 @@ export function ChatInput({
   const cancelVisionSend = () => {
     setVisionConfirmOpen(false);
     pendingSendRef.current = null;
+  };
+
+  // 停止前确认：后端会丢弃本轮，必须让用户明确知道本轮历史不会保存
+  const handleStop = () => {
+    setStopConfirmOpen(false);
+    onStop();
   };
 
   // 确认框确认：关弹窗后触发主动压缩（错误仅记日志，不打断输入流程）
@@ -390,7 +397,7 @@ export function ChatInput({
             <Button
               size="sm"
               variant={isBusy ? 'secondary' : 'primary'}
-              onClick={isBusy ? onStop : submit}
+              onClick={isBusy ? () => setStopConfirmOpen(true) : submit}
               disabled={!isBusy && !value.trim() && attachments.length === 0}
             >
               {isBusy ? '停止' : '发送'}
@@ -405,6 +412,15 @@ export function ChatInput({
         confirmText="压缩"
         onConfirm={handleCompress}
         onCancel={() => setConfirmOpen(false)}
+      />
+      <ConfirmDialog
+        open={stopConfirmOpen}
+        title="停止生成？"
+        description="中断会丢失本轮对话历史：你刚发送的消息、已生成的内容和工具调用都不会被保存。"
+        confirmText="停止"
+        danger
+        onConfirm={handleStop}
+        onCancel={() => setStopConfirmOpen(false)}
       />
       <ConfirmDialog
         open={visionConfirmOpen}

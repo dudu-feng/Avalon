@@ -7,6 +7,12 @@ export interface ModelFormProps {
   onChange: (next: ModelConfig) => void;
 }
 
+/** 空输入表示「跟随全局兜底」，不写入 0 或 NaN */
+function optionalPositiveInt(raw: string): number | undefined {
+  const n = Number(raw);
+  return raw.trim() !== '' && Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 /** 单模型内联编辑表单：name / url / key / modelname */
 export function ModelForm({ model, onChange }: ModelFormProps) {
   function patch(p: Partial<ModelConfig>) {
@@ -39,6 +45,24 @@ export function ModelForm({ model, onChange }: ModelFormProps) {
         value={model.key}
         placeholder="支持环境变量 AVALON_LLM_API_KEY 覆盖"
         onChange={(e) => patch({ key: e.currentTarget.value })}
+      />
+      <Input
+        label="上下文窗口 context_window"
+        type="number"
+        min={1}
+        step={1}
+        value={model.context_window ?? ''}
+        placeholder="留空使用会话记忆里的兜底值"
+        onChange={(e) => patch({ context_window: optionalPositiveInt(e.currentTarget.value) })}
+      />
+      <Input
+        label="输出预留 max_output_tokens"
+        type="number"
+        min={1}
+        step={1}
+        value={model.max_output_tokens ?? ''}
+        placeholder="留空使用会话记忆里的兜底值"
+        onChange={(e) => patch({ max_output_tokens: optionalPositiveInt(e.currentTarget.value) })}
       />
       <div className={styles.visionRow}>
         <div className={styles.visionText}>

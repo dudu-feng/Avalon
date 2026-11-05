@@ -102,11 +102,22 @@ pub fn run() {
             return;
         }
     };
-    let session_store: Arc<dyn session::SessionStore> = Arc::new(session::FileSessionStore::new(
-        store.clone(),
-        llm.clone(),
-        vector_store,
-    ));
+    let file_session_store =
+        session::FileSessionStore::new(store.clone(), llm.clone(), vector_store);
+    // 旧版本停止时可能把半条工具链写进会话。新投影不做运行时配对修复，
+    // 启动时清洗一次（带标记，只扫描一次）；失败只提示，不阻断启动
+    match file_session_store.cleanup_legacy_tool_chains() {
+        Ok(0) => {}
+        Ok(n) => boot_log.push((
+            log::Level::Info,
+            format!("已清理旧会话中的 {n} 条不完整/孤立工具链消息"),
+        )),
+        Err(e) => boot_log.push((
+            log::Level::Warn,
+            format!("清理旧会话工具链失败: {e:#}"),
+        )),
+    }
+    let session_store: Arc<dyn session::SessionStore> = Arc::new(file_session_store);
     // 灵魂注册表：统一管理灵魂/画像条目（registry.json），首次启动时从旧分节 .md 迁移
     let soul_registry: Arc<soul::SoulRegistry> = Arc::new(
         soul::SoulRegistry::new(cfg.prompt_file_path())

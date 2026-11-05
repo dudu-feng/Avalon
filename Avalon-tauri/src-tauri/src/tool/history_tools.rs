@@ -8,6 +8,7 @@
 
 use serde_json::Value;
 
+use crate::session::artifact::{DEFAULT_READ_LIMIT, MAX_READ_LIMIT};
 use crate::session::{Message, SessionStatus, SessionStore};
 
 use super::ToolContext;
@@ -202,6 +203,50 @@ pub fn read_session_history(args: &Value, session: &dyn SessionStore, ctx: &Tool
         out.push("本次未显示工具执行结果；需要时 include_tools=true。".to_string());
     }
 
+    out.join("\n")
+}
+
+/// 读取当前会话中工具结果的完整正文。
+///
+/// artifact id 来自工具消息末尾的 `[完整结果: artifact:xxx]`。只允许读
+/// 当前会话：切换会话后旧 artifact 不再暴露，避免跨会话越权读取。
+pub fn read_tool_result(args: &Value, session: &dyn SessionStore, ctx: &ToolContext) -> String {
+    let Some(raw_id) = str_arg(args, "artifact_id").or_else(|| str_arg(args, "id")) else {
+        return "参数错误: 缺少 artifact_id（来自工具消息里的 [完整结果: artifact:xxx]）"
+            .to_string();
+    };
+    let artifact_id = raw_id.strip_prefix("artifact:").unwrap_or(raw_id).trim();
+
+    let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .unwrap_or(DEFAULT_READ_LIMIT)
+        .clamp(1, MAX_READ_LIMIT);
+
+    let read = match session.read_tool_artifact(&ctx.session_key, artifact_id, offset, limit) {
+        Ok(read) => read,
+        Err(e) => return format!("读取工具结果失败: {e:#}"),
+    };
+
+    let mut out = vec![format!(
+        "[artifact:{}] 字符 {}-{} / 共 {}",
+        read.id, read.offset, read.next_offset, read.total_chars
+    )];
+    if read.content.is_empty() {
+        out.push("（该偏移之后没有内容，offset 从 0 开始）".to_string());
+        return out.join("\n");
+    }
+    out.push(String::new());
+    out.push(read.content);
+    if read.next_offset < read.total_chars {
+        out.push(String::new());
+        out.push(format!(
+            "还有更多内容，继续读取请传 offset={}。",
+            read.next_offset
+        ));
+    }
     out.join("\n")
 }
 

@@ -81,6 +81,12 @@ pub struct ModelConfig {
     /// 否则发图时提供商会直接 400
     #[serde(default)]
     pub supports_vision: bool,
+    /// 模型上下文窗口（token）。缺省时回退 [session_memory].context_window
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<usize>,
+    /// 单次请求预留的最大输出 token。缺省时回退 [session_memory].max_output_tokens
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<usize>,
 }
 
 /// 全局 LLM 行为参数（所有模型共享）
@@ -132,9 +138,13 @@ pub enum SearchMode {
 }
 
 /// 会话记忆配置
+///
+/// 新增字段全部有默认值：老配置文件缺失时按预算模型自动补齐，
+/// 不需要用户手动迁移。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SessionMemoryConfig {
-    /// 自动压缩阈值（输入 token）
+    /// 旧版绝对压缩阈值（输入 token）。0 = 关闭，仅按预算比例触发
     pub compress_threshold: usize,
     /// 压缩块超此数量触发渐进式总结
     pub max_chunks: usize,
@@ -142,6 +152,35 @@ pub struct SessionMemoryConfig {
     pub context_chunks: usize,
     /// 检索模式
     pub search_mode: SearchMode,
+    /// 模型未单独配置时的上下文窗口兜底
+    pub context_window: usize,
+    /// 模型未单独配置时的最大输出 token 兜底
+    pub max_output_tokens: usize,
+    /// 安全余量比例（相对上下文窗口），最低 2048 token
+    pub safety_margin_ratio: f32,
+    /// 预估输入达到输入预算的该比例时触发压缩
+    pub compress_trigger_ratio: f32,
+    /// 长期记忆可占输入预算的比例
+    pub memory_budget_ratio: f32,
+    /// 工具结果超过该字节数时写入 artifact，会话里只保留预览
+    pub artifact_threshold_bytes: usize,
+}
+
+impl Default for SessionMemoryConfig {
+    fn default() -> Self {
+        Self {
+            compress_threshold: 0,
+            max_chunks: 10,
+            context_chunks: 5,
+            search_mode: SearchMode::Hybrid,
+            context_window: 128_000,
+            max_output_tokens: 8_192,
+            safety_margin_ratio: 0.05,
+            compress_trigger_ratio: 0.85,
+            memory_budget_ratio: 0.20,
+            artifact_threshold_bytes: 2_048,
+        }
+    }
 }
 
 /// Whisper 语音转写配置

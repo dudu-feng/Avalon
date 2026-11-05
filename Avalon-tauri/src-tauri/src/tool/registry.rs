@@ -185,6 +185,29 @@ fn history_tool_defs(is_owner: bool) -> Vec<ToolDef> {
     ]
 }
 
+/// 工具结果回读定义。
+///
+/// 不按主人过滤：artifact 只属于当前会话，内容和用户在聊天界面里看到的一致；
+/// 非主人也可能需要回看自己会话里的大体积工具输出。
+fn read_tool_result_def() -> ToolDef {
+    ToolDef {
+        name: "read_tool_result",
+        description: "读取当前会话里工具结果的完整内容。当工具消息末尾出现 \
+                      [完整结果: artifact:xxx] 时，说明原输出较长，只展示了开头和结尾；\
+                      需要中间内容时用本工具回读。分页用 offset 继续。"
+            .to_string(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "artifact_id": {"type": "string", "description": "来自 [完整结果: artifact:xxx] 中的 id"},
+                "offset": {"type": "integer", "description": "字符偏移，默认 0"},
+                "limit": {"type": "integer", "description": "最多返回字符数，默认 4000，最大 20000"}
+            },
+            "required": ["artifact_id"]
+        }),
+    }
+}
+
 /// 通讯录工具定义。
 ///
 /// 记录/更新/查询自己对所有上下文开放；枚举通讯录和查主人通讯录只对主人开放。
@@ -833,6 +856,7 @@ impl ToolSet {
         }
         if self.session.is_some() {
             defs.extend(history_tool_defs(ctx.is_owner));
+            defs.push(read_tool_result_def());
         }
         if self.contacts.is_some() {
             defs.extend(contact_tool_defs(ctx.is_owner));
@@ -964,6 +988,10 @@ impl ToolRegistry for ToolSet {
             },
             "read_session_history" => match &self.session {
                 Some(s) => history_tools::read_session_history(args, s.as_ref(), ctx),
+                None => "会话历史未配置".to_string(),
+            },
+            "read_tool_result" => match &self.session {
+                Some(s) => history_tools::read_tool_result(args, s.as_ref(), ctx),
                 None => "会话历史未配置".to_string(),
             },
             "create_scheduled_task" => match &self.scheduler {

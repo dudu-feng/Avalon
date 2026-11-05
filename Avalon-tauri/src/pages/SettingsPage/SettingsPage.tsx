@@ -383,15 +383,69 @@ export function SettingsPage() {
 
       {/* 会话：压缩与检索 */}
       {tab === 'session' && (
-        <Card eyebrow="会话记忆" title="压缩与检索" description="自动压缩阈值、渐进式总结与检索模式。">
+        <Card eyebrow="会话记忆" title="压缩与检索" description="上下文预算、自动压缩、渐进式总结与检索模式。">
           <div className={styles.grid}>
             <Input
-              label="压缩阈值 compress_threshold"
+              label="旧版绝对阈值 compress_threshold"
               type="number"
               step="1"
               value={config.session_memory.compress_threshold}
               onChange={onNumber((n) =>
                 update('session_memory', { ...config.session_memory, compress_threshold: n }),
+              )}
+            />
+            <Input
+              label="上下文窗口 context_window"
+              type="number"
+              step="1"
+              value={config.session_memory.context_window}
+              onChange={onNumber((n) =>
+                update('session_memory', { ...config.session_memory, context_window: n }),
+              )}
+            />
+            <Input
+              label="输出预留 max_output_tokens"
+              type="number"
+              step="1"
+              value={config.session_memory.max_output_tokens}
+              onChange={onNumber((n) =>
+                update('session_memory', { ...config.session_memory, max_output_tokens: n }),
+              )}
+            />
+            <Input
+              label="安全余量 safety_margin_ratio"
+              type="number"
+              step="0.01"
+              value={config.session_memory.safety_margin_ratio}
+              onChange={onNumber((n) =>
+                update('session_memory', { ...config.session_memory, safety_margin_ratio: n }),
+              )}
+            />
+            <Input
+              label="压缩触发比例 compress_trigger_ratio"
+              type="number"
+              step="0.01"
+              value={config.session_memory.compress_trigger_ratio}
+              onChange={onNumber((n) =>
+                update('session_memory', { ...config.session_memory, compress_trigger_ratio: n }),
+              )}
+            />
+            <Input
+              label="记忆预算比例 memory_budget_ratio"
+              type="number"
+              step="0.01"
+              value={config.session_memory.memory_budget_ratio}
+              onChange={onNumber((n) =>
+                update('session_memory', { ...config.session_memory, memory_budget_ratio: n }),
+              )}
+            />
+            <Input
+              label="工具结果落盘阈值 artifact_threshold_bytes"
+              type="number"
+              step="1"
+              value={config.session_memory.artifact_threshold_bytes}
+              onChange={onNumber((n) =>
+                update('session_memory', { ...config.session_memory, artifact_threshold_bytes: n }),
               )}
             />
             <Input
