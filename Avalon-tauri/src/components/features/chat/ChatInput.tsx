@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent, DragEvent, KeyboardEvent } from 'react';
 import { Button, CircleProgress, ConfirmDialog, Dropdown, Tooltip } from '../../ui';
 import { saveAttachment } from '../../../lib/fileApi';
@@ -76,7 +76,7 @@ interface PendingAttachment {
   previewUrl: string;
 }
 
-export function ChatInput({
+function ChatInputImpl({
   onSubmit,
   onStop,
   isBusy = false,
@@ -435,3 +435,7 @@ export function ChatInput({
     </>
   );
 }
+
+// 流式期间 ChatPage 会随每个增量重渲染；输入框的 props 大多稳定，memo 避免
+// 每次增量都重跑 Dropdown / 附件区等子树，把主线程留给正在增长的消息正文。
+export const ChatInput = memo(ChatInputImpl);

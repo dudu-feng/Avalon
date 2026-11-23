@@ -8,6 +8,8 @@
 
 use serde_json::Value;
 
+use crate::session::MessageOrigin;
+
 /// 群 @ 消息事件
 pub const GROUP_AT_MESSAGE_CREATE: &str = "GROUP_AT_MESSAGE_CREATE";
 /// 群全量消息事件。2026 年起部分账号的 @ 消息也走这个事件
@@ -107,6 +109,7 @@ impl IncomingMessage {
     /// sender 保留裸 openid 兼容旧会话。
     pub fn meta(&self) -> Value {
         let mut meta = serde_json::json!({
+            "source": "qq",
             "message_id": self.message_id,
             "chat_id": self.chat_id,
             "chat_type": self.chat_type.as_str(),
@@ -124,21 +127,16 @@ impl IncomingMessage {
         meta
     }
 
-    /// 仅本轮注入给模型的来源提示，不落盘。
-    /// 带上 msg_idx，模型想引用这条消息时才知道该传什么
-    pub fn source_hint_with(&self, text: &str) -> String {
-        let scene = if self.is_group() {
-            "QQ群聊"
-        } else {
-            "QQ私聊"
-        };
-        match &self.msg_idx {
-            Some(idx) => format!(
-                "[{scene} | qq:{} | msg_idx:{idx}]\n{text}",
-                self.sender_open_id
-            ),
-            None => format!("[{scene} | qq:{}]\n{text}", self.sender_open_id),
-        }
+    /// 结构化来源。可信级别由 engine 结合通讯录判定
+    pub fn origin(&self) -> MessageOrigin {
+        MessageOrigin::from_value(self.meta())
+    }
+
+    /// 仅本轮注入给模型的引用索引；历史不保留，避免每轮重复计费。
+    pub fn msg_idx_hint(&self) -> Option<String> {
+        self.msg_idx
+            .as_ref()
+            .map(|idx| format!("[当前消息 msg_idx: {idx}]"))
     }
 }
 
@@ -418,7 +416,9 @@ mod tests {
         let msg = parse_message(GROUP_AT_MESSAGE_CREATE, &d).expect("应解析成功");
         assert_eq!(msg.msg_idx.as_deref(), Some("REFIDX_abc"));
         assert_eq!(msg.meta()["msg_idx"], "REFIDX_abc");
-        assert!(msg.source_hint_with("hi").contains("msg_idx:REFIDX_abc"));
+        assert!(msg
+            .msg_idx_hint()
+            .is_some_and(|hint| hint.contains("REFIDX_abc")));
     }
 
     #[test]

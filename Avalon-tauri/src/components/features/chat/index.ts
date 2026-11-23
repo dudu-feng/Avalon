@@ -1,5 +1,4 @@
 export { useChat } from './useChat';
-export type { UseChatOptions } from './useChat';
 
 export { MessageList } from './MessageList';
 export type { MessageListProps } from './MessageList';

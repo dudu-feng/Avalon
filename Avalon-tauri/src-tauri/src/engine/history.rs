@@ -8,7 +8,7 @@
 use serde_json::Value;
 
 use crate::llm::ChatResult;
-use crate::session::{ArtifactRef, Message};
+use crate::session::{ArtifactRef, Message, MessageOrigin};
 
 /// 消息时间戳：%Y-%m-%d-%H:%M:%S（冒号，对齐 Python get_current_time）
 /// 与 session_id 的 %Y-%m-%d-%H_%M_%S（下划线，文件名安全）格式不同，分别定义。
@@ -16,17 +16,17 @@ pub fn now_str() -> String {
     chrono::Local::now().format("%Y-%m-%d-%H:%M:%S").to_string()
 }
 
-/// 用户消息（本轮输入）。meta 承载渠道来源，桌面端传 None
-pub fn user_entry(content: &str, meta: Option<serde_json::Value>) -> Message {
+/// 用户消息（本轮输入）。meta 承载来源与附件，桌面端也会写入默认 desktop origin
+pub fn user_entry(content: &str, meta: Option<MessageOrigin>, time: &str) -> Message {
     Message::User {
-        time: now_str(),
+        time: time.to_string(),
         content: content.to_string(),
         meta,
     }
 }
 
 /// 助手消息（一轮 chat_stream 的结果：reasoning + content + tool_calls + usage）
-pub fn assistant_entry(result: &ChatResult) -> Message {
+pub fn assistant_entry(result: &ChatResult, origin: &MessageOrigin) -> Message {
     Message::Assistant {
         time: now_str(),
         content: result.message.clone(),
@@ -36,6 +36,7 @@ pub fn assistant_entry(result: &ChatResult) -> Message {
         tool_calls: (!result.tool_calls.is_empty()).then(|| result.tool_calls.clone()),
         token_usage: result.usage.clone(),
         model: result.model.clone(),
+        origin: Some(origin.clone()),
     }
 }
 
@@ -47,6 +48,7 @@ pub fn tool_entry(
     success: bool,
     content: &str,
     artifact: Option<ArtifactRef>,
+    origin: &MessageOrigin,
 ) -> Message {
     Message::Tool {
         time: now_str(),
@@ -56,5 +58,6 @@ pub fn tool_entry(
         success,
         content: content.to_string(),
         artifact,
+        origin: Some(origin.clone()),
     }
 }

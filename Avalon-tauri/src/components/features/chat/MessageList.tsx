@@ -72,11 +72,16 @@ export function MessageList({
     initializedRef.current = true;
   }, [messages]);
 
-  // 对话更新：仅当用户接近底部时才平滑跟随（上滚阅读历史时保持原位）
+  // 对话更新：仅当用户接近底部时才跟随（上滚阅读历史时保持原位）。
+  // 流式生成期间用 auto：每个增量都启动一次 smooth 动画会持续占用主线程，
+  // 而且动画还没结束就被下一次打断，观感反而更卡。
+  const streaming = messages.some((m) => m.role === 'assistant' && m.status === 'streaming');
   useEffect(() => {
     if (!initializedRef.current) return;
-    if (nearBottom()) endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages]);
+    if (nearBottom()) {
+      endRef.current?.scrollIntoView({ behavior: streaming ? 'auto' : 'smooth', block: 'end' });
+    }
+  }, [messages, streaming]);
 
   // 滚轮缓冲触发：到顶后继续上滑累积缓冲，超阈值主动加载更早一块
   useEffect(() => {

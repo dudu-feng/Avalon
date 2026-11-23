@@ -2,6 +2,7 @@
 //
 // 后端 ScheduleType 用 #[serde(tag = "type", rename_all = "snake_case")]，
 // 所以 schedule 是带 type 判别字段的联合；TaskSource / RunStatus 用 snake_case。
+// 任务不再拥有独立会话：执行结果写入统一主会话（source=task），通知渠道单独配置。
 
 /** 触发时间（判别联合，type 字段区分） */
 export type ScheduleType =
@@ -15,16 +16,20 @@ export type TaskSource = 'user' | 'agent';
 /** 执行状态 */
 export type RunStatus = 'succeeded' | 'failed';
 
-/** 每次执行的轻量元数据（完整消息走 session） */
+/** 结果通知渠道（none = 只写入主会话，不主动发送） */
+export type TaskNotifyChannel = 'none' | 'desktop' | 'feishu' | 'qq';
+
+/** 每次执行的轻量元数据（完整对话在统一主会话时间线里） */
 export interface TaskRunMeta {
   triggered_at: string;
   status: RunStatus;
   read: boolean;
+  /** 通知投递失败原因（不影响任务本身的成功状态） */
+  notify_error?: string;
 }
 
 /** 定时任务定义 */
 export interface ScheduledTask {
-  /** 任务 id，同时作为会话 channel（task_ 前缀） */
   id: string;
   source: TaskSource;
   name: string;
@@ -34,4 +39,7 @@ export interface ScheduledTask {
   created_at: string;
   last_run_at: string | null;
   runs: TaskRunMeta[];
+  notify_channel: TaskNotifyChannel;
+  /** 可选通知目标；缺省时发给主人 */
+  notify_target?: string | null;
 }

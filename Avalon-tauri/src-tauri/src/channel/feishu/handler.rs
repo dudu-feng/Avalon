@@ -7,7 +7,7 @@
 // 之所以要自己去重：ws.rs 是「收到就 ACK」，但网络抖动、服务端重投都可能让同一个
 // event_id 到达两次，没有去重就会把同一句话跑两遍 ReAct。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -21,7 +21,8 @@ use super::stream;
 use crate::channel::common::{sanitize_channel, Dedup, PendingImages, SlotRegistry, MAX_WAITING};
 use crate::channel::contact::ContactStore;
 use crate::config::{FeishuConfig, FeishuSessionMode};
-use crate::engine::{Engine, EngineEvent, UserInput};
+use crate::engine::{Engine, EngineEvent, ReplyTarget, RunContext, UserInput};
+use crate::session::MessageOrigin;
 use crate::file::{FileSource, SaveRequest};
 use crate::vision::ChatAttachment;
 
@@ -77,40 +78,22 @@ impl IncomingMessage {
         sanitize_channel(&format!("feishu_chat_{}", self.chat_id))
     }
 
-    /// 落盘用的结构化来源信息，对齐 Python 版 _build_meta。
+    /// 落盘用的结构化来源信息。
     ///
-    /// 只存 open_id 不查通讯录 —— 姓名交给通讯录工具按需维护。
-    /// sender_id 是带渠道前缀的规范 id（feishu:ou_xxx），供通讯录工具判断
-    /// 「当前是谁」；sender 保留裸 open_id 兼容旧会话。
-    ///
-    /// 这份 meta 会随每条历史消息进 system prompt，所以恒定值一律不存：
-    /// is_bot 恒为 false（parse_message 已过滤非真人消息）；渠道名不单独存 ——
-    /// sender_id 的前缀已经标明了来源。
-    fn meta(&self) -> Value {
-        json!({
+    /// 只存 open_id 不查通讯录 —— 姓名交给通讯录工具按需维护；
+    /// 可信级别由 engine 在构造工具上下文前结合通讯录判定。
+    /// sender_id 是带渠道前缀的规范 id（feishu:ou_xxx）；sender 保留裸 open_id
+    /// 兼容旧会话。content_type 等旧字段进 extra，不进入模型正文。
+    fn origin(&self) -> MessageOrigin {
+        MessageOrigin::from_value(json!({
+            "source": "feishu",
             "message_id": self.message_id,
             "chat_id": self.chat_id,
             "chat_type": self.chat_type,
             "sender": self.sender_open_id,
             "sender_id": format!("feishu:{}", self.sender_open_id),
             "content_type": self.message_type,
-        })
-    }
-
-    /// 仅本轮注入给模型的来源提示，不落盘。
-    ///
-    /// 历史消息的来源由 meta 随会话进 system prompt 自动可见，但「当前这一条」
-    /// 尚未落盘，system prompt 里没有它，所以要在正文前临时挂一行。
-    /// 不含 message_id —— 表情回应、消息引用这类工具应由代码从当前消息注入 id，
-    /// 让模型转抄 32 位哈希既费 token 又容易出错。
-    /// 指定正文的来源提示。图片消息正文为空时，调用方会换成「发来一张图片」
-    fn source_hint_with(&self, text: &str) -> String {
-        let scene = if self.is_group() {
-            "飞书群聊"
-        } else {
-            "飞书私聊"
-        };
-        format!("[{scene} | feishu:{}]\n{}", self.sender_open_id, text)
+        }))
     }
 }
 
@@ -388,9 +371,16 @@ impl MessageHandler {
         pending: Vec<ChatAttachment>,
     ) -> Result<()> {
         // 幂等：已有 active 会话就复用，没有才新建
-        self.engine.init_session(channel)?;
+        self.engine.init_session()?;
 
-        let cancel: Arc<AtomicBool> = self.engine.begin_chat(channel);
+        let run = RunContext::new(
+            Engine::new_run_id("feishu"),
+            msg.origin(),
+            ReplyTarget::Feishu {
+                chat_id: msg.chat_id.clone(),
+                message_id: Some(msg.message_id.clone()),
+            },
+        );
 
         // 图片消息没有文字：给模型和会话补一句占位，否则历史里只剩一个附件
         let mut history_text = if msg.text.trim().is_empty() {
@@ -411,12 +401,12 @@ impl MessageHandler {
             }
         }
 
-        // 来源提示只喂给模型，落盘存原文 —— 否则 open_id 会在正文和 meta 里各存一份
-        let hinted = msg.source_hint_with(&history_text);
+        // 来源由 origin 结构化承载，正文不再重复拼提示；engine 会在当前轮
+        // user 消息上统一渲染 [时间 · 来源 · 场景 · 发言人 · 可信级别] 前缀。
         let input = UserInput {
-            for_model: &hinted,
+            for_model: &history_text,
             for_history: &history_text,
-            meta: Some(msg.meta()),
+            meta: Some(msg.origin()),
             attachments,
         };
 
@@ -427,7 +417,7 @@ impl MessageHandler {
 
         let run_result = self
             .engine
-            .run_with_input(input, channel, cancel, move |ev| {
+            .run_with_input(input, run, move |ev| {
                 // 只做转发，绝不阻塞 ReAct；接收端提前没了也无所谓
                 let _ = tx.send(ev);
             })

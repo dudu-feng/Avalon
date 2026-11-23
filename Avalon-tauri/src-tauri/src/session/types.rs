@@ -6,8 +6,226 @@
 #![allow(dead_code)] // session 模块供未来 engine/tool 引用，当前无调用方，接入后移除
 
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
 
 use crate::llm::{TokenUsage, ToolCall};
+
+/// 消息来源。渠道只作为消息属性存在，不再参与会话文件分区。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageSource {
+    #[default]
+    Desktop,
+    Feishu,
+    Qq,
+    Task,
+}
+
+impl MessageSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Desktop => "桌面",
+            Self::Feishu => "飞书",
+            Self::Qq => "QQ",
+            Self::Task => "定时任务",
+        }
+    }
+
+    /// 渠道前缀：feishu / qq；桌面与任务没有渠道前缀
+    pub fn channel_prefix(self) -> Option<&'static str> {
+        match self {
+            Self::Feishu => Some("feishu"),
+            Self::Qq => Some("qq"),
+            _ => None,
+        }
+    }
+
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "desktop" | "app" => Some(Self::Desktop),
+            "feishu" => Some(Self::Feishu),
+            "qq" => Some(Self::Qq),
+            "task" | "scheduler" => Some(Self::Task),
+            _ => None,
+        }
+    }
+}
+
+/// 当前发言人的可信级别。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TrustLevel {
+    Owner,
+    Known,
+    External,
+    /// 旧数据无法判断主人身份时使用；新写入的消息不允许 Unknown
+    #[default]
+    Unknown,
+}
+
+impl TrustLevel {
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            Self::Owner => Some("主人"),
+            Self::Known => Some("联系人"),
+            Self::External => Some("非主人"),
+            Self::Unknown => None,
+        }
+    }
+
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "owner" => Some(Self::Owner),
+            "known" => Some(Self::Known),
+            "external" | "non_owner" | "non-owner" => Some(Self::External),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+
+/// 一条消息或一次 run 的来源描述。
+///
+/// 字段名在存储层继续叫 `meta`，旧会话文件可直接读取；未知字段（附件快照等）
+/// 收进 `extra`，序列化时原样展开，前端仍然能读到 `meta.attachments`。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MessageOrigin {
+    pub source: MessageSource,
+    #[serde(default)]
+    pub trust: TrustLevel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_name: Option<String>,
+    /// 旧字段与附件快照等扩展信息；不做强类型约束
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for MessageOrigin {
+    fn default() -> Self {
+        Self {
+            source: MessageSource::Desktop,
+            trust: TrustLevel::Owner,
+            run_id: None,
+            chat_id: None,
+            chat_type: None,
+            sender_id: None,
+            sender_name: None,
+            message_id: None,
+            task_id: None,
+            task_name: None,
+            extra: Map::new(),
+        }
+    }
+}
+
+impl MessageOrigin {
+    pub fn new(source: MessageSource, trust: TrustLevel) -> Self {
+        Self {
+            source,
+            trust,
+            ..Self::default()
+        }
+    }
+
+    pub fn desktop_owner() -> Self {
+        Self::new(MessageSource::Desktop, TrustLevel::Owner)
+    }
+
+    pub fn task_owner(task_id: Option<String>, task_name: Option<String>) -> Self {
+        Self {
+            task_id,
+            task_name,
+            ..Self::new(MessageSource::Task, TrustLevel::Owner)
+        }
+    }
+
+    pub fn with_trust(mut self, trust: TrustLevel) -> Self {
+        self.trust = trust;
+        self
+    }
+
+    /// 从旧 `meta` JSON 反序列化：识别已知字段，其余原样保留。
+    pub fn from_value(value: Value) -> Self {
+        let Value::Object(mut map) = value else {
+            return Self::default();
+        };
+
+        let sender_id = take_string(&mut map, "sender_id");
+        let sender = take_string(&mut map, "sender");
+        let task_id = take_string(&mut map, "task_id");
+        let explicit_source = take_string(&mut map, "source");
+
+        let source = explicit_source
+            .as_deref()
+            .and_then(MessageSource::parse)
+            .or_else(|| {
+                sender_id
+                    .as_deref()
+                    .or(sender.as_deref())
+                    .and_then(|raw| raw.split_once(':').map(|(prefix, _)| prefix))
+                    .and_then(MessageSource::parse)
+            })
+            .or_else(|| task_id.is_some().then_some(MessageSource::Task))
+            .unwrap_or(MessageSource::Desktop);
+
+        let trust = take_string(&mut map, "trust")
+            .as_deref()
+            .and_then(TrustLevel::parse)
+            .unwrap_or(match source {
+                MessageSource::Desktop | MessageSource::Task => TrustLevel::Owner,
+                _ => TrustLevel::Unknown,
+            });
+
+        // 旧字段 sender 与 sender_id 语义重复；保留进 extra 以兼容历史展示
+        if let Some(sender) = sender {
+            map.entry("sender".to_string())
+                .or_insert(Value::String(sender));
+        }
+
+        Self {
+            source,
+            trust,
+            run_id: take_string(&mut map, "run_id"),
+            chat_id: take_string(&mut map, "chat_id"),
+            chat_type: take_string(&mut map, "chat_type"),
+            sender_id,
+            sender_name: take_string(&mut map, "sender_name"),
+            message_id: take_string(&mut map, "message_id"),
+            task_id,
+            task_name: take_string(&mut map, "task_name"),
+            extra: map,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MessageOrigin {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self::from_value(Value::deserialize(deserializer)?))
+    }
+}
+
+fn take_string(map: &mut Map<String, Value>, key: &str) -> Option<String> {
+    map.remove(key)
+        .and_then(|v| v.as_str().map(str::trim).map(str::to_string))
+        .filter(|s| !s.is_empty())
+}
 
 /// 会话状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -245,10 +463,11 @@ pub enum Message {
     User {
         time: String,
         content: String,
-        /// 渠道来源元信息：飞书消息带 message_id / chat_id / chat_type / sender，
-        /// 桌面端为 None 不落盘。投影为模型消息时由 context 层渲染成来源前缀。
+        /// 来源元信息（字段名沿用 meta 以兼容旧文件）：飞书消息带 message_id /
+        /// chat_id / chat_type / sender_id，附件快照放在 extra 的 attachments 里。
+        /// 桌面端没有渠道来源时仍会写入 desktop/owner 的默认 origin。
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        meta: Option<serde_json::Value>,
+        meta: Option<MessageOrigin>,
     },
     /// 智能体回复（对齐 OpenAI assistant 消息：正文 + 思考 + 工具调用 + 用量）
     Assistant {
@@ -265,6 +484,9 @@ pub enum Message {
         /// 生成该回复的模型名（供各模型 token 报表归集）
         #[serde(default)]
         model: String,
+        /// 只供前端归组/回复路由，不进入模型上下文
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<MessageOrigin>,
     },
     /// 工具执行结果（对齐 OpenAI tool 消息；大结果 content 存预览，全文见 artifact）
     Tool {
@@ -279,6 +501,9 @@ pub enum Message {
         /// 大体积结果落盘后的引用；短结果或旧数据为 None
         #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact: Option<ArtifactRef>,
+        /// 只供前端归组/回复路由，不进入模型上下文
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<MessageOrigin>,
     },
 }
 

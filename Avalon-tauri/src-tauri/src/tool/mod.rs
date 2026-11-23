@@ -24,7 +24,7 @@ pub mod web_tools;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::channel::contact::ContactStore;
+use crate::session::{MessageOrigin, MessageSource, TrustLevel};
 
 /// 一次工具调用所在的上下文。
 ///
@@ -47,74 +47,33 @@ impl ToolContext {
     pub fn owner_desktop() -> Self {
         Self {
             channel: "desktop".to_string(),
-            session_key: "app".to_string(),
+            session_key: "main".to_string(),
             sender_id: None,
             is_owner: true,
         }
     }
 
-    /// 从会话 key + 消息 meta + 通讯录推导工具上下文
-    pub fn from_input(channel: &str, meta: Option<&Value>, contacts: &ContactStore) -> Self {
-        let raw_sender = meta
-            .and_then(|m| m.get("sender_id").or_else(|| m.get("sender")))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-
-        // 渠道优先看 sender_id 前缀：统一到 main 会话后，channel 参数可能不再带
-        // feishu/qq，但当前消息的 sender_id 一定标明来源。
-        let sender_kind = raw_sender.as_deref().and_then(|raw| {
-            if raw.starts_with("feishu:") {
-                Some("feishu")
-            } else if raw.starts_with("qq:") {
-                Some("qq")
-            } else {
-                None
-            }
-        });
-        let channel_kind = if channel.starts_with("feishu") {
-            Some("feishu")
-        } else if channel.starts_with("qq") {
-            Some("qq")
-        } else {
-            None
+    /// 从已判定的消息来源构造工具上下文。
+    ///
+    /// 信任级别在 engine 层结合通讯录判定后写入 origin；工具层只消费结论，
+    /// 不再重复查询通讯录，避免两处判断口径不一致。
+    pub fn from_origin(origin: &MessageOrigin) -> Self {
+        let channel_kind = match origin.source {
+            MessageSource::Feishu => "feishu",
+            MessageSource::Qq => "qq",
+            MessageSource::Task => "scheduler",
+            MessageSource::Desktop => "desktop",
         };
-        let prefix = sender_kind.or(channel_kind);
-
-        let Some(prefix) = prefix else {
-            let kind = if channel.starts_with("task_") {
-                "scheduler"
-            } else {
-                "desktop"
-            };
-            return Self {
-                channel: kind.to_string(),
-                session_key: channel.to_string(),
-                sender_id: None,
-                is_owner: true,
-            };
-        };
-
-        let sender_id = raw_sender.as_deref().map(|raw| {
-            if raw.starts_with("feishu:") || raw.starts_with("qq:") {
-                raw.to_string()
-            } else {
-                format!("{prefix}:{raw}")
-            }
-        });
-
-        // 主人身份只认通讯录：渠道 handler 在首次私聊时写入，桌面端手工更正也写这里
-        let is_owner = raw_sender
-            .as_deref()
-            .map(|raw| contacts.is_owner(prefix, raw))
-            .unwrap_or(false);
+        let channel_kind = origin
+            .source
+            .channel_prefix()
+            .unwrap_or(channel_kind);
 
         Self {
-            channel: prefix.to_string(),
-            session_key: channel.to_string(),
-            sender_id,
-            is_owner,
+            channel: channel_kind.to_string(),
+            session_key: "main".to_string(),
+            sender_id: origin.sender_id.clone(),
+            is_owner: origin.trust == TrustLevel::Owner,
         }
     }
 
@@ -124,6 +83,26 @@ impl ToolContext {
             "feishu" | "qq" => Some(self.channel.as_str()),
             _ => None,
         }
+    }
+}
+
+/// 工具权限级别：非主人白名单只能放行 NonOwnerSafe。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolScope {
+    NonOwnerSafe,
+    OwnerOnly,
+}
+
+/// 工具名 → 权限级别。新增工具时必须在这里归类，默认按 OwnerOnly 处理。
+pub fn tool_scope(name: &str) -> ToolScope {
+    match name {
+        "web_search"
+        | "read_web_page"
+        | "search_session_memory"
+        | "list_session_history"
+        | "read_session_history"
+        | "read_tool_result" => ToolScope::NonOwnerSafe,
+        _ => ToolScope::OwnerOnly,
     }
 }
 
@@ -146,59 +125,52 @@ pub use sandbox::resolve_allowed_command;
 mod tests {
     use super::*;
 
-    fn contacts_with_owners() -> ContactStore {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "avalon-tool-context-test-{}-{stamp}.json",
-            std::process::id()
-        ));
-        let store = ContactStore::new(path);
-        store.record_owner("feishu", "ou_owner", "").unwrap();
-        store.record_owner("qq", "qq_owner", "").unwrap();
-        store
-    }
-
     #[test]
-    fn sender_prefix_wins_when_channel_is_unified() {
-        // 统一到 main 会话后 channel 不再带渠道名，仍应靠 sender_id 识别来源与权限
-        let contacts = contacts_with_owners();
-        let meta = serde_json::json!({"sender_id": "feishu:ou_owner"});
-        let ctx = ToolContext::from_input("main", Some(&meta), &contacts);
+    fn origin_drives_channel_and_owner() {
+        // 统一到 main 会话后 channel 不再带渠道名，工具上下文靠 origin 识别来源与权限
+        let origin = MessageOrigin::from_value(serde_json::json!({
+            "source": "feishu",
+            "sender_id": "feishu:ou_owner",
+        }))
+        .with_trust(TrustLevel::Owner);
+        let ctx = ToolContext::from_origin(&origin);
         assert_eq!(ctx.channel, "feishu");
+        assert_eq!(ctx.session_key, "main");
         assert_eq!(ctx.sender_id.as_deref(), Some("feishu:ou_owner"));
         assert!(ctx.is_owner);
     }
 
     #[test]
-    fn non_owner_is_detected_from_sender_id() {
-        let contacts = contacts_with_owners();
-        let meta = serde_json::json!({"sender_id": "qq:someone_else"});
-        let ctx = ToolContext::from_input("main", Some(&meta), &contacts);
+    fn non_owner_origin_is_not_owner() {
+        let origin = MessageOrigin::from_value(serde_json::json!({
+            "source": "qq",
+            "sender_id": "qq:someone_else",
+        }))
+        .with_trust(TrustLevel::External);
+        let ctx = ToolContext::from_origin(&origin);
         assert_eq!(ctx.channel, "qq");
         assert!(!ctx.is_owner);
     }
 
     #[test]
-    fn bare_sender_gets_channel_prefix() {
-        let contacts = contacts_with_owners();
-        let meta = serde_json::json!({"sender": "ou_owner"});
-        let ctx = ToolContext::from_input("feishu_unified", Some(&meta), &contacts);
-        assert_eq!(ctx.sender_id.as_deref(), Some("feishu:ou_owner"));
+    fn scheduler_and_desktop_have_no_sender() {
+        let task = MessageOrigin::task_owner(Some("daily".into()), Some("每日提醒".into()));
+        let ctx = ToolContext::from_origin(&task);
+        assert_eq!(ctx.channel, "scheduler");
+        assert!(ctx.is_owner);
+
+        let desktop = MessageOrigin::desktop_owner();
+        let ctx = ToolContext::from_origin(&desktop);
+        assert_eq!(ctx.channel, "desktop");
         assert!(ctx.is_owner);
     }
 
     #[test]
-    fn scheduler_and_desktop_have_no_sender() {
-        let contacts = contacts_with_owners();
-        let ctx = ToolContext::from_input("task_daily", None, &contacts);
-        assert_eq!(ctx.channel, "scheduler");
-        assert!(ctx.is_owner);
-
-        let ctx = ToolContext::from_input("desktop", None, &contacts);
-        assert_eq!(ctx.channel, "desktop");
-        assert!(ctx.is_owner);
+    fn whitelist_only_accepts_non_owner_safe_tools() {
+        assert_eq!(tool_scope("web_search"), ToolScope::NonOwnerSafe);
+        assert_eq!(tool_scope("read_tool_result"), ToolScope::NonOwnerSafe);
+        assert_eq!(tool_scope("write_file"), ToolScope::OwnerOnly);
+        assert_eq!(tool_scope("feishu_send_message"), ToolScope::OwnerOnly);
+        assert_eq!(tool_scope("unknown_tool"), ToolScope::OwnerOnly);
     }
 }

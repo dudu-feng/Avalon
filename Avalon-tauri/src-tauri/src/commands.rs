@@ -13,14 +13,16 @@ use tauri::State;
 use crate::channel::contact::{Contact, ContactStore, OwnerContact};
 use crate::channel::{ChannelKind, ChannelManager, ChannelStatus};
 use crate::config::{AppConfig, ConfigStore};
-use crate::engine::{Engine, EngineEvent};
+use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::file::{
     CleanupReport, FileSource, FileStore, SaveRequest, StoredFile, MAX_FILE_BYTES,
     QUARANTINE_TTL_DAYS, TEMP_TTL_HOURS,
 };
 use crate::llm::{CompressResult, LlmState};
 use crate::prompt::{build_compress_prompt, PromptAssembler};
-use crate::scheduler::{parse_schedule, ScheduledTask, TaskSource, TaskStore};
+use crate::scheduler::{
+    parse_schedule, ScheduledTask, TaskNotifyChannel, TaskSource, TaskStore,
+};
 use crate::session::{ContextUsage, LoadHistoryResult, SessionData, SessionMeta};
 use crate::skill::{Skill, SkillDetail, SkillRegistry};
 use crate::soul::{EntryCategory, SoulEntry, SoulEntryDetail, SoulRegistry};
@@ -247,123 +249,110 @@ pub async fn llm_compress(
 // ============ Engine 编排 ============
 
 /// 主聊天入口：跑完整 ReAct 双层循环，中间态经 Channel<EngineEvent> 逐事件推送。
-/// 会话生命周期：调用方先 invoke("init_session")，chat 后 invoke("save_session")（决策 D3）。
+/// 所有来源写入同一个 main 会话；会话生命周期由前端按需调用 init/save。
 #[tauri::command]
 pub async fn chat(
     user_input: String,
-    channel_name: String,
     attachments: Option<Vec<ChatAttachment>>,
+    run_id: Option<String>,
     engine: State<'_, Arc<Engine>>,
     on_event: Channel<EngineEvent>,
 ) -> Result<(), String> {
-    let cancel = engine.begin_chat(&channel_name);
+    let run = match run_id {
+        Some(id) if !id.trim().is_empty() => RunContext::desktop(id),
+        _ => RunContext::desktop(Engine::new_run_id("desktop")),
+    };
     let input = crate::engine::UserInput {
         for_model: &user_input,
         for_history: &user_input,
-        meta: None,
+        meta: Some(run.origin.clone()),
         attachments: attachments.unwrap_or_default(),
     };
     engine
-        .run_with_input(input, &channel_name, cancel, move |ev| {
+        .run_with_input(input, run, move |ev| {
             let _ = on_event.send(ev);
         })
         .await
         .map_err(|e| e.to_string())
 }
 
-/// 停止当前 channel 正在进行的流式生成（置位取消标志，chat 提前收尾返回部分结果）
+/// 停止指定 run 的流式生成（置位取消标志，chat 提前收尾返回部分结果）
 #[tauri::command]
-pub fn stop_chat(channel_name: String, engine: State<'_, Arc<Engine>>) -> Result<(), String> {
-    engine.stop_chat(&channel_name);
+pub fn stop_chat(run_id: String, engine: State<'_, Arc<Engine>>) -> Result<(), String> {
+    engine.stop_chat(&run_id);
     Ok(())
 }
 
-/// 初始化会话（channel 维度）：active 复用 / 否则新建
+/// 当前执行中 / 排队中的 run（前端据此显示处理中各来源与禁用会话操作）
+#[derive(serde::Serialize)]
+pub struct ActiveRuns {
+    pub pending: usize,
+    pub runs: Vec<RunContext>,
+}
+
 #[tauri::command]
-pub fn init_session(channel_name: String, engine: State<'_, Arc<Engine>>) -> Result<(), String> {
-    engine
-        .init_session(&channel_name)
-        .map_err(|e| e.to_string())
+pub fn active_runs(engine: State<'_, Arc<Engine>>) -> Result<ActiveRuns, String> {
+    Ok(ActiveRuns {
+        pending: engine.pending_count(),
+        runs: engine.active_runs(),
+    })
+}
+
+/// 初始化会话：active 复用 / 否则新建 main
+#[tauri::command]
+pub fn init_session(engine: State<'_, Arc<Engine>>) -> Result<(), String> {
+    engine.init_session().map_err(|e| e.to_string())
 }
 
 /// 新建会话：归档当前（若非空），创建新的 active 会话，返回新会话完整数据
 #[tauri::command]
-pub async fn create_session(
-    channel_name: String,
-    engine: State<'_, Arc<Engine>>,
-) -> Result<SessionData, String> {
-    engine
-        .create_session(&channel_name)
-        .await
-        .map_err(|e| e.to_string())
+pub async fn create_session(engine: State<'_, Arc<Engine>>) -> Result<SessionData, String> {
+    ensure_idle(&engine, "新建会话")?;
+    engine.create_session().await.map_err(|e| e.to_string())
 }
 
 /// 读取当前会话完整数据（供前端加载历史 / 判断状态）
 #[tauri::command]
-pub fn get_current_session(
-    channel_name: String,
-    engine: State<'_, Arc<Engine>>,
-) -> Result<SessionData, String> {
-    engine
-        .get_current_session(&channel_name)
-        .map_err(|e| e.to_string())
+pub fn get_current_session(engine: State<'_, Arc<Engine>>) -> Result<SessionData, String> {
+    engine.get_current_session().map_err(|e| e.to_string())
 }
 
 /// 读取当前会话上下文用量（最大输入 token vs 压缩阈值，供前端圆形进度条展示）
 #[tauri::command]
-pub fn get_context_usage(
-    channel_name: String,
-    engine: State<'_, Arc<Engine>>,
-) -> Result<ContextUsage, String> {
-    engine
-        .get_context_usage(&channel_name)
-        .map_err(|e| e.to_string())
+pub fn get_context_usage(engine: State<'_, Arc<Engine>>) -> Result<ContextUsage, String> {
+    engine.get_context_usage().map_err(|e| e.to_string())
 }
 
 /// 归档当前会话（压缩 + 移入 history）
 #[tauri::command]
-pub async fn save_session(
-    channel_name: String,
-    engine: State<'_, Arc<Engine>>,
-) -> Result<(), String> {
-    engine
-        .save_session(&channel_name)
-        .await
-        .map_err(|e| e.to_string())
+pub async fn save_session(engine: State<'_, Arc<Engine>>) -> Result<(), String> {
+    engine.save_session().await.map_err(|e| e.to_string())
 }
 
 /// 主动压缩当前会话上下文（不归档），返回是否实际压缩（空会话返回 false）
 #[tauri::command]
-pub async fn compress_session(
-    channel_name: String,
-    engine: State<'_, Arc<Engine>>,
-) -> Result<bool, String> {
+pub async fn compress_session(engine: State<'_, Arc<Engine>>) -> Result<bool, String> {
     engine
-        .compress_session(&channel_name)
+        .compress_session()
         .await
         .map_err(|e| e.to_string())
 }
 
 /// 列出全部会话元信息（active 置顶 + 归档按时间倒序），供会话历史列表
 #[tauri::command]
-pub fn list_sessions(
-    channel_name: String,
-    engine: State<'_, Arc<Engine>>,
-) -> Result<Vec<SessionMeta>, String> {
-    engine
-        .list_sessions(&channel_name)
-        .map_err(|e| e.to_string())
+pub fn list_sessions(engine: State<'_, Arc<Engine>>) -> Result<Vec<SessionMeta>, String> {
+    engine.list_sessions().map_err(|e| e.to_string())
 }
 
 /// 切换会话：归档当前（若非空），将目标历史会话设为 active 并返回其完整数据
 #[tauri::command]
 pub async fn switch_session(
-    channel_name: String,
     id: String,
     engine: State<'_, Arc<Engine>>,
 ) -> Result<SessionData, String> {
+    ensure_idle(&engine, "切换会话")?;
     engine
-        .switch_session(&channel_name, &id)
+        .switch_session(&id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -383,20 +372,31 @@ pub fn load_session_history(
 /// 删除归档会话（目录 + 向量库该会话 chunk 一并清理）
 #[tauri::command]
 pub fn delete_session(id: String, engine: State<'_, Arc<Engine>>) -> Result<(), String> {
+    ensure_idle(&engine, "删除会话")?;
     engine.delete_session(&id).map_err(|e| e.to_string())
 }
 
 /// 重命名会话标题（活跃或归档均可）
 #[tauri::command]
 pub fn rename_session(
-    channel_name: String,
     id: String,
     title: String,
     engine: State<'_, Arc<Engine>>,
 ) -> Result<(), String> {
     engine
-        .rename_session(&channel_name, &id, &title)
+        .rename_session(&id, &title)
         .map_err(|e| e.to_string())
+}
+
+/// 有执行中或排队中的消息时拒绝会话控制操作（后端最终校验）。
+fn ensure_idle(engine: &Engine, action: &str) -> Result<(), String> {
+    let pending = engine.pending_count();
+    if pending > 0 {
+        return Err(format!(
+            "当前有 {pending} 条消息正在执行或排队，暂不能{action}"
+        ));
+    }
+    Ok(())
 }
 
 /// 重建会话向量库：清空 + 重扫 history/current + 重新入库（设置页维护操作）
@@ -565,11 +565,23 @@ pub fn create_scheduled_task(
     prompt: String,
     schedule_type: String,
     schedule_value: String,
+    notify_channel: Option<String>,
+    notify_target: Option<String>,
     store: State<'_, Arc<TaskStore>>,
 ) -> Result<ScheduledTask, String> {
     let schedule = parse_schedule(&schedule_type, &schedule_value).map_err(|e| e.to_string())?;
+    let notify_channel =
+        TaskNotifyChannel::parse(notify_channel.as_deref().unwrap_or("none"))
+            .map_err(|e| e.to_string())?;
     store
-        .create(TaskSource::User, &name, &prompt, schedule)
+        .create(
+            TaskSource::User,
+            &name,
+            &prompt,
+            schedule,
+            notify_channel,
+            notify_target.as_deref(),
+        )
         .map_err(|e| e.to_string())
 }
 
@@ -608,11 +620,23 @@ pub fn update_scheduled_task(
     prompt: String,
     schedule_type: String,
     schedule_value: String,
+    notify_channel: Option<String>,
+    notify_target: Option<String>,
     store: State<'_, Arc<TaskStore>>,
 ) -> Result<ScheduledTask, String> {
     let schedule = parse_schedule(&schedule_type, &schedule_value).map_err(|e| e.to_string())?;
+    let notify_channel =
+        TaskNotifyChannel::parse(notify_channel.as_deref().unwrap_or("none"))
+            .map_err(|e| e.to_string())?;
     store
-        .update(&task_id, &name, &prompt, schedule)
+        .update(
+            &task_id,
+            &name,
+            &prompt,
+            schedule,
+            notify_channel,
+            notify_target.as_deref(),
+        )
         .map_err(|e| e.to_string())
 }
 

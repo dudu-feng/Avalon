@@ -4,12 +4,13 @@
 // 返回原始消息。读写都走 SessionStore，不经过文件沙箱，所以不会因为
 // data/memory/session 不在工作区而失败。
 //
-// 仅主人可用：统一记忆下所有渠道共用一份会话，原文里可能包含私聊内容。
+// 工具本身对非主人可白名单放行，但返回内容仍按会话原文展示；
+// 非主人是否能读到私聊内容由白名单配置决定（默认不开放工具）。
 
 use serde_json::Value;
 
 use crate::session::artifact::{DEFAULT_READ_LIMIT, MAX_READ_LIMIT};
-use crate::session::{Message, SessionStatus, SessionStore};
+use crate::session::{Message, MessageOrigin, SessionStatus, SessionStore};
 
 use super::ToolContext;
 
@@ -112,7 +113,7 @@ pub fn read_session_history(args: &Value, session: &dyn SessionStore, ctx: &Tool
                 None => return format!("会话历史读取失败: 会话 '{id}' 不存在"),
             }
         }
-        None => match session.get_current_session(&ctx.session_key) {
+        None => match session.get_current_session() {
             Ok(data) if !data.id.is_empty() => (data.id, data.title, data.status),
             Ok(_) => return "当前没有进行中的会话".to_string(),
             Err(e) => return format!("会话历史读取失败: {e:#}"),
@@ -210,7 +211,7 @@ pub fn read_session_history(args: &Value, session: &dyn SessionStore, ctx: &Tool
 ///
 /// artifact id 来自工具消息末尾的 `[完整结果: artifact:xxx]`。只允许读
 /// 当前会话：切换会话后旧 artifact 不再暴露，避免跨会话越权读取。
-pub fn read_tool_result(args: &Value, session: &dyn SessionStore, ctx: &ToolContext) -> String {
+pub fn read_tool_result(args: &Value, session: &dyn SessionStore) -> String {
     let Some(raw_id) = str_arg(args, "artifact_id").or_else(|| str_arg(args, "id")) else {
         return "参数错误: 缺少 artifact_id（来自工具消息里的 [完整结果: artifact:xxx]）"
             .to_string();
@@ -225,7 +226,7 @@ pub fn read_tool_result(args: &Value, session: &dyn SessionStore, ctx: &ToolCont
         .unwrap_or(DEFAULT_READ_LIMIT)
         .clamp(1, MAX_READ_LIMIT);
 
-    let read = match session.read_tool_artifact(&ctx.session_key, artifact_id, offset, limit) {
+    let read = match session.read_tool_artifact(artifact_id, offset, limit) {
         Ok(read) => read,
         Err(e) => return format!("读取工具结果失败: {e:#}"),
     };
@@ -310,15 +311,18 @@ fn format_message(message: &Message, include_reasoning: bool) -> String {
 }
 
 /// 用户消息的来源标签：优先 sender_name，其次规范 id
-fn sender_label(meta: Option<&Value>) -> String {
-    let Some(meta) = meta else {
+fn sender_label(origin: Option<&MessageOrigin>) -> String {
+    let Some(origin) = origin else {
         return String::new();
     };
-    let name = meta.get("sender_name").and_then(Value::as_str);
-    let id = meta
-        .get("sender_id")
-        .or_else(|| meta.get("sender"))
-        .and_then(Value::as_str);
+    let name = origin.sender_name.as_deref().filter(|s| !s.trim().is_empty());
+    let id = origin.sender_id.as_deref().or_else(|| {
+        origin
+            .extra
+            .get("sender")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+    });
     match (name, id) {
         (Some(name), Some(id)) => format!(" {name}（{id}）"),
         (Some(name), None) => format!(" {name}"),
@@ -345,7 +349,9 @@ mod tests {
         Message::User {
             time: "2026-11-01-10_00_00".to_string(),
             content: content.to_string(),
-            meta: Some(serde_json::json!({"sender_id": id})),
+            meta: Some(MessageOrigin::from_value(
+                serde_json::json!({"sender_id": id}),
+            )),
         }
     }
 
@@ -357,6 +363,7 @@ mod tests {
             tool_calls: None,
             token_usage: Default::default(),
             model: "test".to_string(),
+            origin: None,
         }
     }
 

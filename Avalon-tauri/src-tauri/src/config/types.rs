@@ -461,6 +461,10 @@ pub struct ToolsConfig {
     /// 或带插件机制的工具（git 的 -c core.pager、npm 的 run 脚本），
     /// 限制就从「防恶意」退化成「防误操作」—— 一行代码即可绕开全部约束。
     pub shell_allowlist: Vec<String>,
+    /// 非主人轮次允许调用的工具名。默认空 = 完全无工具；
+    /// 只有安全工具集（ToolScope::NonOwnerSafe）中的名字会生效，危险工具写入也不会放行。
+    #[serde(default)]
+    pub non_owner_allowlist: Vec<String>,
 }
 
 impl Default for ToolsConfig {
@@ -489,6 +493,7 @@ impl Default for ToolsConfig {
                     .map(|s| s.to_string())
                     .collect()
             },
+            non_owner_allowlist: Vec::new(),
         }
     }
 }

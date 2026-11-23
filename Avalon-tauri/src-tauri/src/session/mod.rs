@@ -27,34 +27,32 @@ pub use types::*;
 /// 会话存储契约：engine 通过此 trait 操作会话（不依赖具体实现）
 #[async_trait]
 pub trait SessionStore: Send + Sync {
-    /// 初始化：active 则复用，否则新建空会话（id = {channel}_{timestamp}）
-    fn init_session(&self, channel: &str) -> Result<()>;
+    /// 初始化：active 则复用，否则新建空会话（id = main_{timestamp}）
+    fn init_session(&self) -> Result<()>;
     /// 新建会话：归档当前（若非空），再创建新的 active 会话（写 current + history 初始存档），返回新会话
-    async fn create_session(&self, channel: &str) -> Result<SessionData>;
+    async fn create_session(&self) -> Result<SessionData>;
     /// 读取当前会话完整数据（供前端加载历史消息 / 判断会话状态）
-    fn get_current_session(&self, channel: &str) -> Result<SessionData>;
+    fn get_current_session(&self) -> Result<SessionData>;
     /// 当前会话上下文用量（最近真实输入 vs 预算触发线），供前端圆形进度条展示
-    fn get_context_usage(&self, channel: &str) -> Result<ContextUsage>;
+    fn get_context_usage(&self) -> Result<ContextUsage>;
     /// 持久化本轮 chat_history（追加到 messages 字段）
-    fn update_current_session(&self, channel: &str, chat_history: &[Message]) -> Result<()>;
+    fn update_current_session(&self, chat_history: &[Message]) -> Result<()>;
     /// 记录一次真实请求用量（下一次请求的锚点）
     fn record_request_usage(
         &self,
-        channel: &str,
         model: &str,
         usage: &crate::llm::TokenUsage,
     ) -> Result<()>;
     /// 自动压缩检查：输入锚点超过预算触发线（或 force）时压缩，返回是否触发
     async fn auto_compress_check(
         &self,
-        channel: &str,
         anchor_tokens: usize,
         force: bool,
     ) -> Result<bool>;
     /// 主动压缩当前会话（不归档，仅压缩未压缩消息并入库），返回是否实际压缩（空会话返回 false）
-    async fn compress_session(&self, channel: &str) -> Result<bool>;
+    async fn compress_session(&self) -> Result<bool>;
     /// 归档当前会话（先压缩，写 history/{id}/index.json，重置 current）
-    async fn save_current_session(&self, channel: &str) -> Result<()>;
+    async fn save_current_session(&self) -> Result<()>;
     /// 重建向量索引：清空 + 重扫 history/current + 重新入库（维护操作，设置页触发）
     /// 逐 session 处理时经 on_progress 上报进度（跨 spawn_blocking 线程，回调须 Send + Sync）
     fn rebuild_index(
@@ -62,9 +60,9 @@ pub trait SessionStore: Send + Sync {
         on_progress: &(dyn Fn(RebuildProgress) + Send + Sync),
     ) -> Result<RebuildStats>;
     /// 列出全部会话元信息（active 置顶 + 归档按时间倒序），供会话历史列表
-    fn list_sessions(&self, channel: &str) -> Result<Vec<SessionMeta>>;
+    fn list_sessions(&self) -> Result<Vec<SessionMeta>>;
     /// 切换会话：归档当前（若非空），将目标历史会话设为 active 并返回其完整数据
-    async fn switch_session(&self, channel: &str, id: &str) -> Result<SessionData>;
+    async fn switch_session(&self, id: &str) -> Result<SessionData>;
     /// 渐进式加载历史块：before_chunk=None 读最新块，否则读更早一块；返回块号 + 消息 + 是否还有更早
     fn load_session_history(
         &self,
@@ -86,7 +84,6 @@ pub trait SessionStore: Send + Sync {
     /// 读取当前会话的工具结果 artifact（只允许当前会话，防止跨会话读取）
     fn read_tool_artifact(
         &self,
-        channel: &str,
         artifact_id: &str,
         offset: usize,
         limit: usize,
@@ -94,9 +91,9 @@ pub trait SessionStore: Send + Sync {
     /// 删除归档会话（目录 + 向量库该会话 chunk 一并清理）
     fn delete_session(&self, id: &str) -> Result<()>;
     /// 重命名会话标题（活跃或归档均可）
-    fn rename_session(&self, channel: &str, id: &str, title: &str) -> Result<()>;
+    fn rename_session(&self, id: &str, title: &str) -> Result<()>;
     /// 设置当前活跃会话标题（ensure_active 后写入；幂等，标题不变则不落盘）
-    fn set_current_title(&self, channel: &str, title: &str) -> Result<()>;
+    fn set_current_title(&self, title: &str) -> Result<()>;
 }
 
 /// 会话 ID 时间戳：YYYY-MM-DD-HH_MM_SS（下划线，文件名安全，字典序 = 时间序）

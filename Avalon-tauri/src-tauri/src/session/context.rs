@@ -12,7 +12,9 @@
 use serde_json::{json, Value};
 
 use crate::config::{ModelConfig, SessionMemoryConfig};
-use crate::session::{CompressedChunk, Message, SessionData};
+use crate::session::{
+    CompressedChunk, Message, MessageOrigin, MessageSource, SessionData, TrustLevel,
+};
 
 /// 上下文预算：把「窗口 - 输出预留 - 安全余量」拆成固定部分、长期记忆和最近对话。
 #[derive(Debug, Clone, Copy)]
@@ -247,10 +249,14 @@ pub fn build_history_messages(data: &SessionData) -> Vec<Value> {
 
     for message in &data.messages {
         match message {
-            Message::User { content, meta, .. } => {
+            Message::User {
+                time,
+                content,
+                meta,
+            } => {
                 out.push(json!({
                     "role": "user",
-                    "content": render_user_content(content, meta.as_ref()),
+                    "content": render_user_content(content, meta.as_ref(), time),
                 }));
             }
             Message::Assistant {
@@ -314,83 +320,145 @@ fn render_tool_message(tool_call_id: &str, success: bool, content: &str) -> Valu
     })
 }
 
-/// 历史 user 消息：把 meta 里的来源与附件投影成正文前缀/数据块。
+/// 历史 user 消息：把 origin 与附件投影成正文前缀/数据块。
 ///
-/// 压缩转录复用同一套渲染，保证摘要能看到来源与图片观察。
-pub(crate) fn render_user_content(content: &str, meta: Option<&Value>) -> String {
-    let mut parts: Vec<String> = Vec::new();
+/// 压缩转录复用同一套渲染，保证摘要能看到时间、来源、可信级别与图片观察。
+pub(crate) fn render_user_content(
+    content: &str,
+    origin: Option<&MessageOrigin>,
+    time: &str,
+) -> String {
+    render_user_content_inner(content, origin, time, false, None)
+}
 
-    if let Some(meta) = meta {
-        if let Some(source) = render_source(meta) {
-            parts.push(source);
+/// 当前轮 user 消息：与历史轮使用同一前缀，非主人轮次再追加一行动态限制。
+pub fn render_current_user_content(
+    content: &str,
+    origin: &MessageOrigin,
+    time: &str,
+    restriction: Option<&str>,
+) -> String {
+    render_user_content_inner(content, Some(origin), time, true, restriction)
+}
+
+/// 当前轮可能是图文多段内容（Value::Array），前缀与限制按文本段插入。
+pub fn apply_current_user_prefix(
+    mut content: Value,
+    origin: &MessageOrigin,
+    time: &str,
+    restriction: Option<&str>,
+) -> Value {
+    let prefix = render_origin_prefix(origin, time);
+    if let Some(text) = content.as_str() {
+        let text = render_current_user_content(text, origin, time, restriction);
+        return Value::String(text);
+    }
+    if let Some(parts) = content.as_array_mut() {
+        parts.insert(0, json!({"type": "text", "text": prefix}));
+        if let Some(restriction) = restriction {
+            parts.push(json!({"type": "text", "text": restriction}));
         }
     }
+    content
+}
 
+fn render_user_content_inner(
+    content: &str,
+    origin: Option<&MessageOrigin>,
+    time: &str,
+    current: bool,
+    restriction: Option<&str>,
+) -> String {
+    let default_origin = MessageOrigin::desktop_owner();
+    let origin = origin.unwrap_or(&default_origin);
+
+    let mut parts: Vec<String> = vec![render_origin_prefix(origin, time)];
     if !content.is_empty() {
         parts.push(content.to_string());
     }
-
-    if let Some(meta) = meta {
-        if let Some(attachments) = render_attachments(meta) {
-            parts.push(attachments);
+    // 限制只对当前轮生效：历史前缀保持稳定，避免每轮改写已生成的消息
+    if current {
+        if let Some(restriction) = restriction {
+            parts.push(restriction.to_string());
         }
+    }
+    if let Some(attachments) = render_attachments(origin) {
+        parts.push(attachments);
     }
 
     parts.join("\n\n")
 }
 
-/// 把渠道元信息渲染成一行来源提示，例如：
-/// `[来源: 飞书 · 群聊 · 张三 (feishu:ou_xxx)]`
-fn render_source(meta: &Value) -> Option<String> {
-    let sender_id = meta.get("sender_id").and_then(Value::as_str);
-    let source = meta
-        .get("source")
-        .and_then(Value::as_str)
-        .or_else(|| sender_id.and_then(|id| id.split(':').next()))
-        .or_else(|| meta.get("task_id").is_some().then_some("task"));
+/// 统一来源前缀，例如：
+/// `[2026-11-03 12:35 · 飞书 · 群聊 · 张三 (feishu:ou_xxx) · 非主人]`
+pub fn render_origin_prefix(origin: &MessageOrigin, time: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
 
-    let label = match source? {
-        "feishu" => "飞书",
-        "qq" => "QQ",
-        "desktop" => "桌面",
-        "task" => "定时任务",
-        other => other,
-    };
+    if !time.is_empty() {
+        parts.push(display_time(time));
+    }
+    parts.push(origin.source.label().to_string());
 
-    let scene = match meta.get("chat_type").and_then(Value::as_str) {
-        Some("group") => Some("群聊"),
-        Some("p2p") | Some("c2c") => Some("私聊"),
-        _ => None,
-    };
+    if matches!(origin.source, MessageSource::Feishu | MessageSource::Qq) {
+        if let Some(scene) = match origin.chat_type.as_deref() {
+            Some("group") => Some("群聊"),
+            Some("p2p") | Some("c2c") => Some("私聊"),
+            _ => None,
+        } {
+            parts.push(scene.to_string());
+        }
+        if let Some(who) = render_sender(origin) {
+            parts.push(who);
+        }
+    }
 
-    let sender_name = meta.get("sender_name").and_then(Value::as_str);
-    let sender = sender_name
-        .map(str::to_string)
-        .or_else(|| sender_id.map(str::to_string))
+    if origin.source == MessageSource::Task {
+        if let Some(name) = origin.task_name.as_deref().filter(|s| !s.trim().is_empty()) {
+            parts.push(name.to_string());
+        } else if let Some(id) = origin.task_id.as_deref().filter(|s| !s.trim().is_empty()) {
+            parts.push(id.to_string());
+        }
+    } else if let Some(label) = origin.trust.label() {
+        parts.push(label.to_string());
+    }
+
+    format!("[{}]", parts.join(" · "))
+}
+
+/// 显示时间：存储格式 `YYYY-MM-DD-HH:MM:SS` → `YYYY-MM-DD HH:MM`
+fn display_time(time: &str) -> String {
+    if time.len() >= 16 {
+        format!("{} {}", &time[..10], &time[11..16])
+    } else {
+        time.to_string()
+    }
+}
+
+fn render_sender(origin: &MessageOrigin) -> Option<String> {
+    let name = origin.sender_name.as_deref().filter(|s| !s.trim().is_empty());
+    let id = origin
+        .sender_id
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
         .or_else(|| {
-            meta.get("sender")
+            origin
+                .extra
+                .get("sender")
                 .and_then(Value::as_str)
-                .map(str::to_string)
+                .filter(|s| !s.trim().is_empty())
         });
 
-    let mut parts = vec![format!("来源: {label}")];
-    if let Some(scene) = scene {
-        parts.push(scene.to_string());
+    match (name, id) {
+        (Some(name), Some(id)) if name != id => Some(format!("{name} ({id})")),
+        (Some(name), _) => Some(name.to_string()),
+        (None, Some(id)) => Some(id.to_string()),
+        (None, None) => None,
     }
-    if let Some(sender) = sender {
-        // 有昵称时附上规范 id，方便通讯录工具直接使用；两者相同则只留一个。
-        let who = match (sender_name, sender_id) {
-            (Some(name), Some(id)) if name != id => format!("{name} ({id})"),
-            _ => sender,
-        };
-        parts.push(who);
-    }
-    Some(format!("[{}]", parts.join(" · ")))
 }
 
 /// 历史附件：只渲染模型需要的白名单字段，并放进明确的数据边界。
-fn render_attachments(meta: &Value) -> Option<String> {
-    let attachments = meta.get("attachments").and_then(Value::as_array)?;
+fn render_attachments(origin: &MessageOrigin) -> Option<String> {
+    let attachments = origin.extra.get("attachments").and_then(Value::as_array)?;
     let mut blocks = Vec::new();
 
     for attachment in attachments {

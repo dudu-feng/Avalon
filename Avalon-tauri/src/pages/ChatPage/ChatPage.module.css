@@ -45,3 +45,45 @@
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
+
+/* 来源筛选：全部 / 桌面 / 飞书 / QQ / 定时任务 */
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.filterChip {
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: 500 12px/1.4 var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.filterChip:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.filterChipActive {
+  color: var(--foreground);
+  border-color: var(--border);
+  background: var(--muted);
+}
+
+/* 正在处理其它来源：给用户一个「不是卡住」的信号 */
+.runStatus {
+  margin-left: auto;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--muted-foreground);
+  font: 500 12px/1.4 var(--font-sans);
+  white-space: nowrap;
+}

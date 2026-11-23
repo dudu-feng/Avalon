@@ -1,17 +1,34 @@
-// 定时任务页面：任务卡片列表 + 创建表单（Modal）+ 执行历史（Modal 复用 MessageList）。
+// 定时任务页面：任务卡片列表 + 创建表单（Modal）+ 执行历史（Modal）。
 //
-// 任务 = 自动驱动的会话：执行过程落 session（channel = task.id，ensure_active 自动建会话），
-// 点「历史」读取该会话消息并以会话式回放；新执行经全局事件 task-finished 刷新未读角标。
+// 任务不再是独立会话：每次触发以 source=task 的 user 消息写入统一主会话，
+// 「历史」从主会话中按 origin.task_id 筛出该任务的轮次回放；
+// 新执行经全局事件 task-finished 刷新未读角标，结果按 notify_channel 主动通知。
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PageContainer, Badge, Button, Input, Modal, ConfirmDialog } from '../../components/ui';
-import { MessageList, ChatInput, useChat } from '../../components/features/chat';
+import { MessageList } from '../../components/features/chat';
+import { loadTaskMessages } from '../../components/features/chat/useChatStore';
 import { useScheduler } from '../../hooks/useSchedulerStore';
 import type { ScheduleKind } from '../../lib/schedulerApi';
-import type { ScheduledTask, ScheduleType } from '../../types/scheduler';
+import type { ChatMessage } from '../../types/chat';
+import type {
+  ScheduledTask,
+  ScheduleType,
+  TaskNotifyChannel,
+} from '../../types/scheduler';
 import styles from './SchedulePage.module.css';
 
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+/** 新建/编辑表单的提交契约（通知目标空串在提交前归一为 null） */
+type TaskFormSubmit = (
+  name: string,
+  prompt: string,
+  scheduleType: ScheduleKind,
+  value: string,
+  notifyChannel: TaskNotifyChannel,
+  notifyTarget: string | null,
+) => Promise<void>;
 
 /** 触发方式 → 人类可读 */
 function humanSchedule(s: ScheduleType): string {
@@ -34,7 +51,8 @@ function unreadOf(task: ScheduledTask): number {
 function lastRunText(task: ScheduledTask): string {
   if (task.runs.length === 0) return '尚未执行';
   const last = task.runs[task.runs.length - 1];
-  return `上次执行 ${last.triggered_at} · ${last.status === 'succeeded' ? '成功' : '失败'}`;
+  const base = `上次执行 ${last.triggered_at} · ${last.status === 'succeeded' ? '成功' : '失败'}`;
+  return last.notify_error ? `${base} · 通知失败` : base;
 }
 
 export function SchedulePage() {
@@ -66,11 +84,11 @@ export function SchedulePage() {
   };
 
   // 提交：编辑走 update，新建走 create（TaskFormModal 内部处理校验/loading/错误）
-  const submitForm = editing
-    ? (name: string, prompt: string, scheduleType: ScheduleKind, value: string) =>
-        update(editing.id, name, prompt, scheduleType, value)
-    : (name: string, prompt: string, scheduleType: ScheduleKind, value: string) =>
-        create(name, prompt, scheduleType, value);
+  const submitForm: TaskFormSubmit = editing
+    ? (name, prompt, scheduleType, value, notifyChannel, notifyTarget) =>
+        update(editing.id, name, prompt, scheduleType, value, notifyChannel, notifyTarget)
+    : (name, prompt, scheduleType, value, notifyChannel, notifyTarget) =>
+        create(name, prompt, scheduleType, value, notifyChannel, notifyTarget);
 
   const viewHistory = (task: ScheduledTask) => {
     setViewing(task);
@@ -158,7 +176,7 @@ export function SchedulePage() {
         />
       )}
 
-      {/* 执行历史：独立会话视图，用户可继续对话（channel = task.id） */}
+      {/* 执行历史：从统一主会话中筛出该任务的轮次 */}
       {viewing && (
         <TaskHistoryModal key={viewing.id} task={viewing} onClose={() => setViewing(null)} />
       )}
@@ -186,18 +204,17 @@ function TaskFormModal({
 }: {
   title: string;
   initial?: ScheduledTask;
-  onSubmit: (
-    name: string,
-    prompt: string,
-    scheduleType: ScheduleKind,
-    value: string,
-  ) => Promise<void>;
+  onSubmit: TaskFormSubmit;
   onClose: () => void;
 }) {
   const init = initial?.schedule;
   const [name, setName] = useState(initial?.name ?? '');
   const [prompt, setPrompt] = useState(initial?.prompt ?? '');
   const [scheduleType, setScheduleType] = useState<ScheduleKind>(init?.type ?? 'once');
+  const [notifyChannel, setNotifyChannel] = useState<TaskNotifyChannel>(
+    initial?.notify_channel ?? 'none',
+  );
+  const [notifyTarget, setNotifyTarget] = useState(initial?.notify_target ?? '');
   const [onceValue, setOnceValue] = useState(
     init && init.type === 'once' ? init.at.replace(' ', 'T') : '',
   );
@@ -243,7 +260,14 @@ function TaskFormModal({
     }
     setSubmitting(true);
     try {
-      await onSubmit(name.trim(), prompt.trim(), scheduleType, value);
+      await onSubmit(
+        name.trim(),
+        prompt.trim(),
+        scheduleType,
+        value,
+        notifyChannel,
+        notifyTarget.trim() || null,
+      );
       onClose();
     } catch (e) {
       setError(String(e));
@@ -350,29 +374,72 @@ function TaskFormModal({
           )}
         </div>
 
+        <span className={styles.fieldLabel}>结果通知</span>
+        <div className={styles.scheduleValueRow}>
+          <select
+            className={styles.select}
+            value={notifyChannel}
+            onChange={(e) => setNotifyChannel(e.currentTarget.value as TaskNotifyChannel)}
+          >
+            <option value="none">不通知（只写入会话）</option>
+            <option value="desktop">桌面通知</option>
+            <option value="feishu">飞书</option>
+            <option value="qq">QQ</option>
+          </select>
+          {(notifyChannel === 'feishu' || notifyChannel === 'qq') && (
+            <input
+              className={styles.field}
+              value={notifyTarget}
+              placeholder={
+                notifyChannel === 'feishu'
+                  ? '会话 chat_id 或 open_id，留空发给主人'
+                  : '群号（group:群号）或 QQ 号，留空发给主人'
+              }
+              onChange={(e) => setNotifyTarget(e.currentTarget.value)}
+            />
+          )}
+        </div>
+        <p className={styles.formHint}>
+          任务结果同时写入统一会话；若任务内容里已自行调用发送工具，这里选「不通知」以免重复。
+        </p>
+
         {error && <p className={styles.error}>{error}</p>}
       </div>
     </Modal>
   );
 }
 
-/** 执行历史模态框：以 task.id 为 channel 的独立会话，复用 useChat + MessageList + ChatInput，用户可继续对话 */
+/** 执行历史模态框：从统一主会话中按 origin.task_id 筛出该任务的轮次回放。
+ *  任务内容与模型结论都在主会话时间线里；这里只读，继续对话请回主会话。 */
 function TaskHistoryModal({ task, onClose }: { task: ScheduledTask; onClose: () => void }) {
-  const { messages, isBusy, send, stop, loading, hasEarlier, loadingEarlier, loadEarlier } =
-    useChat({ channelName: task.id });
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    loadTaskMessages(task.id)
+      .then((msgs) => {
+        if (alive) setMessages(msgs);
+      })
+      .catch((e) => console.error('加载任务历史失败:', e))
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [task.id]);
 
   return (
     <Modal open onClose={onClose} title={`执行历史 · ${task.name}`} width={680}>
       <div className={styles.historyView}>
-        <MessageList
-          messages={messages}
-          loading={loading}
-          resetKey={task.id}
-          hasEarlier={hasEarlier}
-          loadingEarlier={loadingEarlier}
-          onLoadEarlier={loadEarlier}
-        />
-        <ChatInput onSubmit={send} onStop={stop} isBusy={isBusy} />
+        {!loading && messages.length === 0 ? (
+          <p className={styles.formHint}>
+            该任务较早的执行已压缩进会话历史，可在主会话中查看；当前未压缩段暂无记录。
+          </p>
+        ) : (
+          <MessageList messages={messages} loading={loading} resetKey={task.id} />
+        )}
       </div>
     </Modal>
   );

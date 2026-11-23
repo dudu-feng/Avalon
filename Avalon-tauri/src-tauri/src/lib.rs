@@ -117,6 +117,25 @@ pub fn run() {
             format!("清理旧会话工具链失败: {e:#}"),
         )),
     }
+    // 旧的分渠道 current 一次性迁移到统一 main；失败只提示，不阻断启动
+    match file_session_store.migrate_to_main_session() {
+        Ok(report) if report.archived > 0 || report.merged_messages > 0 => boot_log.push((
+            log::Level::Info,
+            format!(
+                "统一会话迁移完成：归档 {} 个旧会话，合并 {} 条消息",
+                report.archived, report.merged_messages
+            ),
+        )),
+        Ok(report) if report.failures > 0 => boot_log.push((
+            log::Level::Warn,
+            format!("统一会话迁移未完成（{} 个文件失败），下次启动重试", report.failures),
+        )),
+        Ok(_) => {}
+        Err(e) => boot_log.push((
+            log::Level::Warn,
+            format!("统一会话迁移失败: {e:#}"),
+        )),
+    }
     let session_store: Arc<dyn session::SessionStore> = Arc::new(file_session_store);
     // 灵魂注册表：统一管理灵魂/画像条目（registry.json），首次启动时从旧分节 .md 迁移
     let soul_registry: Arc<soul::SoulRegistry> = Arc::new(
@@ -207,6 +226,12 @@ pub fn run() {
         tool_set = tool_set.with_search(tool::web_tools::SearchClient::new(cfg.search.clone()));
         boot_log.push((log::Level::Info, "联网搜索工具已启用".to_string()));
     }
+    // session_mode 在统一会话后不再影响存储位置：所有来源都写入 main。
+    // 字段保留解析只为兼容旧配置，启动时提示一次（不按值判断，避免默认配置每次告警）
+    boot_log.push((
+        log::Level::Info,
+        "feishu.session_mode / qq.session_mode 已废弃：所有来源统一写入 main 会话".to_string(),
+    ));
     let tool_registry: Arc<dyn tool::ToolRegistry> = Arc::new(tool_set);
     let engine = Arc::new(engine::Engine::new(
         store.clone(),
@@ -222,8 +247,13 @@ pub fn run() {
     // 供 setup 里启动心跳循环（manage 会 move 原句柄，这里提前 clone）
     let scheduler_engine = engine.clone();
     let scheduler_store = task_store.clone();
+    let engine_handle = engine.clone();
 
     // 渠道对接层：与 scheduler 一样，拿 engine 句柄在后台驱动 ReAct
+    // 定时任务通知复用同一组渠道句柄与通讯录（ChannelManager::new 会 move 原句柄）
+    let scheduler_feishu = feishu_handle.clone();
+    let scheduler_qq = qq_handle.clone();
+    let scheduler_contacts = contact_store.clone();
     let channels = Arc::new(channel::ChannelManager::new(
         feishu_handle,
         qq_handle,
@@ -279,6 +309,7 @@ pub fn run() {
             commands::llm_compress,
             commands::chat,
             commands::stop_chat,
+            commands::active_runs,
             commands::init_session,
             commands::create_session,
             commands::save_session,
@@ -339,6 +370,9 @@ pub fn run() {
                 log::log!(target: "boot", level, "{message}");
             }
 
+            // Engine 拿到 AppHandle 后，所有来源的 run 事件都会广播为 session-event
+            engine_handle.attach_app(app.handle().clone());
+
             // eager 预热：启动时后台加载，不阻塞主线程；失败降级（首次使用时 get_sync 再试）
             if cfg.embedding.load_mode == config::EmbeddingLoadMode::Eager {
                 let handle = handle.clone();
@@ -349,8 +383,18 @@ pub fn run() {
                 });
             }
             // 启动定时任务心跳循环（30s tick，静默执行 + 全局事件通知）
-            let scheduler =
-                scheduler::Scheduler::new(scheduler_engine, scheduler_store, app.handle().clone());
+            let notifier = Arc::new(scheduler::DefaultTaskNotifier::new(
+                app.handle().clone(),
+                scheduler_feishu,
+                scheduler_qq,
+                scheduler_contacts,
+            ));
+            let scheduler = scheduler::Scheduler::new(
+                scheduler_engine,
+                scheduler_store,
+                app.handle().clone(),
+                notifier,
+            );
             tauri::async_runtime::spawn(async move {
                 scheduler.run_loop(std::time::Duration::from_secs(30)).await;
             });

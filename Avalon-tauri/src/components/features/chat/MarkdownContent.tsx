@@ -9,7 +9,7 @@
 // 代码块右上角提供三态配色切换（经典白 ☀ / 深色 ☾ / 奶油 ☁），
 // 状态由 useCodeTheme 全局共享并持久化，所有代码块同步切换。
 
-import type { SVGProps } from 'react';
+import { memo, type SVGProps } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -138,7 +138,7 @@ function CodeThemeIcon({ mode }: { mode: ThemeMode }) {
   );
 }
 
-export function MarkdownContent({ children, streaming = false }: MarkdownContentProps) {
+function MarkdownContentImpl({ children, streaming = false }: MarkdownContentProps) {
   const { codeTheme, cycle } = useCodeTheme();
   const content = normalizeMathDelimiters(children);
 
@@ -173,3 +173,6 @@ export function MarkdownContent({ children, streaming = false }: MarkdownContent
     </div>
   );
 }
+
+// 正文只在 children / streaming 变化时重新解析；父组件因其它消息更新而重渲染时跳过。
+export const MarkdownContent = memo(MarkdownContentImpl);

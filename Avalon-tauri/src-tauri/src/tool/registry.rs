@@ -32,7 +32,7 @@ use super::skill_tools;
 use super::soul_tools;
 use super::vision_tools;
 use super::web_tools::SearchClient;
-use super::{ToolContext, ToolRegistry};
+use super::{tool_scope, ToolContext, ToolRegistry, ToolScope};
 use crate::vision::VisionService;
 
 /// 工具元数据（名字 + 描述 + 参数 JSON Schema，供 get_tools_schema 使用）
@@ -300,7 +300,9 @@ fn scheduler_tool_defs() -> Vec<ToolDef> {
                     "name": {"type": "string", "description": "任务名称（简短标题）"},
                     "prompt": {"type": "string", "description": "任务内容（每次触发时喂给 agent 的输入）"},
                     "schedule_type": {"type": "string", "enum": ["once", "daily", "weekly"], "description": "触发方式"},
-                    "schedule_value": {"type": "string", "description": "触发时间：once=YYYY-MM-DD HH:MM；daily=HH:MM；weekly=N HH:MM"}
+                    "schedule_value": {"type": "string", "description": "触发时间：once=YYYY-MM-DD HH:MM；daily=HH:MM；weekly=N HH:MM"},
+                    "notify_channel": {"type": "string", "enum": ["none", "desktop", "feishu", "qq"], "description": "结果通知渠道：none 只写入会话；desktop 桌面通知；feishu / qq 发给主人。任务内容已自行通知时选 none"},
+                    "notify_target": {"type": "string", "description": "可选通知目标（飞书 chat_id/open_id、QQ openid 或 group:群id）；缺省发给主人"}
                 },
                 "required": ["name", "prompt", "schedule_type", "schedule_value"]
             }),
@@ -331,7 +333,9 @@ fn scheduler_tool_defs() -> Vec<ToolDef> {
                     "name": {"type": "string", "description": "任务名称（简短标题）"},
                     "prompt": {"type": "string", "description": "任务内容（每次触发时喂给 agent 的输入）"},
                     "schedule_type": {"type": "string", "enum": ["once", "daily", "weekly"], "description": "触发方式"},
-                    "schedule_value": {"type": "string", "description": "触发时间：once=YYYY-MM-DD HH:MM；daily=HH:MM；weekly=N HH:MM"}
+                    "schedule_value": {"type": "string", "description": "触发时间：once=YYYY-MM-DD HH:MM；daily=HH:MM；weekly=N HH:MM"},
+                    "notify_channel": {"type": "string", "enum": ["none", "desktop", "feishu", "qq"], "description": "结果通知渠道：none 只写入会话；desktop 桌面通知；feishu / qq 发给主人"},
+                    "notify_target": {"type": "string", "description": "可选通知目标；缺省发给主人"}
                 },
                 "required": ["task_id", "name", "prompt", "schedule_type", "schedule_value"]
             }),
@@ -679,22 +683,6 @@ fn ocr_tool_def() -> ToolDef {
     }
 }
 
-/// 只对主人/后台任务开放的工具名。
-/// schema 层已经过滤，这层用于兜住模型凭历史记忆直接调用未暴露工具名的情况。
-fn is_owner_only_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "list_users"
-            | "get_owner_contact"
-            | "list_session_history"
-            | "read_session_history"
-            | "feishu_notify_owner"
-            | "feishu_send_to"
-            | "qq_notify_owner"
-            | "qq_send_to"
-    )
-}
-
 /// 工具注册表实现：基础文件/终端工具 + 可选记忆检索（注入 MemoryIndex 后启用）
 pub struct ToolSet {
     /// 记忆检索后端（None 则不暴露 search_session_memory 工具）
@@ -855,11 +843,12 @@ impl ToolSet {
             defs.push(memory_tool_def());
         }
         if self.session.is_some() {
-            defs.extend(history_tool_defs(ctx.is_owner));
+            // 先构建完整集合，再按调用方身份过滤：非主人白名单可能放行只读历史工具
+            defs.extend(history_tool_defs(true));
             defs.push(read_tool_result_def());
         }
         if self.contacts.is_some() {
-            defs.extend(contact_tool_defs(ctx.is_owner));
+            defs.extend(contact_tool_defs(true));
         }
         if self.scheduler.is_some() {
             defs.extend(scheduler_tool_defs());
@@ -867,11 +856,10 @@ impl ToolSet {
         if self.search.is_some() {
             defs.extend(web_tool_defs());
         }
-        // 渠道发送类工具只给主人/后台任务：群友和非主人私聊不应能借机器人主动发消息
-        if self.feishu.is_some() && ctx.is_owner {
+        if self.feishu.is_some() {
             defs.extend(feishu_tool_defs());
         }
-        if self.qq.is_some() && ctx.is_owner {
+        if self.qq.is_some() {
             defs.extend(qq_tool_defs());
         }
         if self.soul.is_some() {
@@ -893,7 +881,23 @@ impl ToolSet {
         if vision_enabled && self.vision.as_ref().is_some_and(|v| v.ocr_available()) {
             defs.push(ocr_tool_def());
         }
-        defs
+
+        if ctx.is_owner {
+            return defs;
+        }
+
+        // 非主人：默认无工具；只放行配置白名单 ∩ NonOwnerSafe
+        let allow = self
+            .config
+            .as_ref()
+            .map(|c| c.get().tools.non_owner_allowlist.clone())
+            .unwrap_or_default();
+        defs.into_iter()
+            .filter(|t| {
+                tool_scope(t.name) == ToolScope::NonOwnerSafe
+                    && allow.iter().any(|name| name == t.name)
+            })
+            .collect()
     }
 
     /// 调用灵魂条目变更工具（create/update/delete），成功后刷新提示词缓存（下一轮对话即生效）。
@@ -931,9 +935,19 @@ impl ToolRegistry for ToolSet {
     }
 
     async fn invoke_tool(&self, ctx: &ToolContext, name: &str, args: &Value) -> String {
-        // schema 已经按上下文隐藏，这里再兜一层：模型可能凭历史记忆硬调工具名
-        if !ctx.is_owner && is_owner_only_tool(name) {
-            return "权限不足: 该工具只对主人开放".to_string();
+        // schema 已经按上下文隐藏，这里再兜一层：模型可能凭历史记忆硬调工具名。
+        // 非主人默认一个都不放行；白名单也只对 NonOwnerSafe 生效。
+        if !ctx.is_owner {
+            let allow = self
+                .config
+                .as_ref()
+                .map(|c| c.get().tools.non_owner_allowlist.clone())
+                .unwrap_or_default();
+            let permitted = tool_scope(name) == ToolScope::NonOwnerSafe
+                && allow.iter().any(|allowed| allowed == name);
+            if !permitted {
+                return "权限不足: 该工具未对非主人开放".to_string();
+            }
         }
 
         match name {
@@ -991,7 +1005,7 @@ impl ToolRegistry for ToolSet {
                 None => "会话历史未配置".to_string(),
             },
             "read_tool_result" => match &self.session {
-                Some(s) => history_tools::read_tool_result(args, s.as_ref(), ctx),
+                Some(s) => history_tools::read_tool_result(args, s.as_ref()),
                 None => "会话历史未配置".to_string(),
             },
             "create_scheduled_task" => match &self.scheduler {
@@ -1144,7 +1158,7 @@ mod tests {
     }
 
     #[test]
-    fn 非主人不暴露渠道发送工具与通讯录枚举() {
+    fn 非主人默认没有任何工具() {
         let set = ToolSet::new()
             .with_config(ConfigStore::from_config(crate::config::default_config()))
             .with_contacts(Arc::new(ContactStore::new(
@@ -1158,23 +1172,39 @@ mod tests {
             sender_id: Some("feishu:ou_guest".to_string()),
             is_owner: false,
         };
-        let names = tool_names(&set, &ctx);
-        assert!(names.contains(&"record_user".to_string()));
-        assert!(names.contains(&"update_user".to_string()));
-        assert!(names.contains(&"get_user".to_string()));
-        assert!(!names.contains(&"list_users".to_string()));
-        assert!(!names.contains(&"get_owner_contact".to_string()));
-        assert!(!names.contains(&"feishu_notify_owner".to_string()));
-        assert!(!names.contains(&"qq_notify_owner".to_string()));
+        assert!(tool_names(&set, &ctx).is_empty());
     }
 
     #[test]
-    fn 会话历史工具只对主人定义() {
+    fn 非主人白名单只放行安全工具() {
+        let mut cfg = crate::config::default_config();
+        cfg.tools.non_owner_allowlist = vec![
+            "web_search".to_string(),
+            "read_file".to_string(),
+            "list_session_history".to_string(),
+        ];
+        let set = ToolSet::new()
+            .with_config(ConfigStore::from_config(cfg.clone()))
+            .with_search(SearchClient::new(cfg.search));
+        let ctx = ToolContext {
+            channel: "feishu".to_string(),
+            session_key: "feishu_unified".to_string(),
+            sender_id: Some("feishu:ou_guest".to_string()),
+            is_owner: false,
+        };
+        let names = tool_names(&set, &ctx);
+        assert!(names.contains(&"web_search".to_string()));
+        // 危险工具即使写进白名单也不生效
+        assert!(!names.contains(&"read_file".to_string()));
+    }
+
+    #[test]
+    fn 会话历史工具定义始终完整构建() {
         assert!(history_tool_defs(false).is_empty());
         let names: Vec<&str> = history_tool_defs(true).iter().map(|d| d.name).collect();
         assert_eq!(names, vec!["list_session_history", "read_session_history"]);
-        assert!(is_owner_only_tool("list_session_history"));
-        assert!(is_owner_only_tool("read_session_history"));
+        assert_eq!(tool_scope("list_session_history"), ToolScope::NonOwnerSafe);
+        assert_eq!(tool_scope("read_session_history"), ToolScope::NonOwnerSafe);
     }
 
     #[test]

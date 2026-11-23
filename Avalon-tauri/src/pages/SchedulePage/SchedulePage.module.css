@@ -210,6 +210,12 @@
   border-color: var(--ring);
 }
 
+.formHint {
+  margin: -6px 0 0;
+  font: 400 12px/1.5 var(--font-sans);
+  color: var(--muted-foreground);
+}
+
 .error {
   margin: 0;
   font: 400 12px/1.5 var(--font-sans);

@@ -1,27 +1,20 @@
-// 聊天状态机的对外 hook —— 状态本体在 useChatStore（模块级分桶单例）。
+// 聊天状态机的对外 hook —— 状态本体在 useChatStore（模块级单例）。
 //
-// 这里只做三件事：取桶、订阅、把动作包成稳定引用。组件里不持有任何对话状态，
-// 所以切页卸载不会丢失正在流式累积的输出。
+// 这里只做三件事：取 store、订阅、把动作包成稳定引用。组件里不持有任何对话状态，
+// 所以切页卸载不会丢失正在流式累积的输出。统一会话后全局只有一个 store，
+// 飞书 / QQ / 定时任务的消息在 run 结束后经 session-updated 回填同一时间线。
 
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
-import { DEFAULT_CHANNEL } from '../../../lib/chatApi';
+import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import type { MessageAttachment } from '../../../types/chat';
 import * as chatStore from './useChatStore';
 
-export interface UseChatOptions {
-  channelName?: string;
-}
-
-export function useChat(options: UseChatOptions = {}) {
-  const { channelName = DEFAULT_CHANNEL } = options;
-
-  // useMemo 固化桶引用：同一次挂载内 getSnapshot 与 subscribe 必须来自同一个 store 对象，
-  // 否则会出现「读的是新桶、订阅的是旧桶」→ 永不重渲染。
-  const store = useMemo(() => chatStore.getChatStore(channelName), [channelName]);
+export function useChat() {
+  const store = chatStore.getChatStore();
   const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
 
   useEffect(() => {
     chatStore.ensureInit(store); // 一次性：历史只拉一次，否则每次回页都会冲掉正在累积的流式内容
+    chatStore.initSessionEvents(); // 后台来源结束后回填时间线（幂等，全局只订阅一次）
     void chatStore.refreshSessions(store); // 每次挂载都刷：列表/用量是「轻」状态，不覆盖 messages
     void chatStore.refreshUsage(store);
   }, [store]);
@@ -42,6 +35,7 @@ export function useChat(options: UseChatOptions = {}) {
     earliestChunk: s.earliestChunk,
     hasEarlier: s.hasEarlier,
     loadingEarlier: s.loadingEarlier,
+    activeSource: s.activeSource,
     send: useCallback(
       (text: string, attachments?: MessageAttachment[]) => chatStore.send(store, text, attachments),
       [store],

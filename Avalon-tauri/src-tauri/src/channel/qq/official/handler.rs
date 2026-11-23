@@ -8,7 +8,7 @@
 // 把图片挂在 PendingImages 里；下一条文字消息再一起送进 Engine。
 // 这是为了不在用户还没提问时先跑一次视觉理解。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -21,7 +21,7 @@ use super::proto::{self, GatewayEvent, IncomingMessage, Target};
 use crate::channel::common::{sanitize_channel, Dedup, PendingImages, SlotRegistry, MAX_WAITING};
 use crate::channel::contact::ContactStore;
 use crate::config::{QqConfig, QqSessionMode};
-use crate::engine::{Engine, EngineEvent, UserInput};
+use crate::engine::{Engine, EngineEvent, ReplyTarget, RunContext, UserInput};
 use crate::file::{FileSource, SaveRequest};
 use crate::vision::ChatAttachment;
 
@@ -255,8 +255,15 @@ impl MessageHandler {
         channel: &str,
         pending: Vec<ChatAttachment>,
     ) -> Result<()> {
-        self.engine.init_session(channel)?;
-        let cancel: Arc<AtomicBool> = self.engine.begin_chat(channel);
+        self.engine.init_session()?;
+        let run = RunContext::new(
+            Engine::new_run_id("qq"),
+            msg.origin(),
+            ReplyTarget::Qq {
+                chat_id: msg.chat_id.clone(),
+                msg_idx: msg.msg_idx.clone(),
+            },
+        );
 
         let mut history_text = if msg.text.trim().is_empty() {
             "发来一张图片".to_string()
@@ -278,11 +285,15 @@ impl MessageHandler {
             }
         }
 
-        let hinted = msg.source_hint_with(&history_text);
+        // 来源由 origin 统一渲染；msg_idx 只在本轮提示，供引用回复使用
+        let model_text = match msg.msg_idx_hint() {
+            Some(hint) => format!("{history_text}\n\n{hint}"),
+            None => history_text.clone(),
+        };
         let input = UserInput {
-            for_model: &hinted,
+            for_model: &model_text,
             for_history: &history_text,
-            meta: Some(msg.meta()),
+            meta: Some(msg.origin()),
             attachments,
         };
 
@@ -307,7 +318,7 @@ impl MessageHandler {
 
         let run_result = self
             .engine
-            .run_with_input(input, channel, cancel, move |ev| {
+            .run_with_input(input, run, move |ev| {
                 let _ = tx.send(ev);
             })
             .await;

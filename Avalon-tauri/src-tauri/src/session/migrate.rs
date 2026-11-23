@@ -9,7 +9,122 @@
 
 use std::collections::HashSet;
 
-use crate::session::Message;
+use crate::session::{Message, MessageOrigin, MessageSource, TrustLevel};
+
+/// 统一会话迁移统计（启动日志用）
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MigrationReport {
+    /// 成功归档的旧 current 数
+    pub archived: usize,
+    /// 合并进 main 的未压缩消息数
+    pub merged_messages: usize,
+    /// 因 token 预算未合并的轮次数
+    pub skipped_turns: usize,
+    /// 解析/写入失败的旧 current 数
+    pub failures: usize,
+}
+
+impl MigrationReport {
+    pub fn is_clean(&self) -> bool {
+        self.failures == 0
+    }
+}
+
+/// 把一个旧 current 的未压缩消息按轮次分组：user 开启一组，后续 assistant/tool 属于同组。
+pub fn group_turns(messages: &[Message]) -> Vec<Vec<Message>> {
+    let mut groups: Vec<Vec<Message>> = Vec::new();
+    for message in messages {
+        if matches!(message, Message::User { .. }) || groups.is_empty() {
+            groups.push(vec![message.clone()]);
+        } else if let Some(last) = groups.last_mut() {
+            last.push(message.clone());
+        }
+    }
+    groups
+}
+
+/// 回填一组消息的 origin：
+/// - user 缺失时按桌面主人补齐；
+/// - assistant/tool 缺失时继承该轮 user 的 origin；
+/// - 旧外部消息的 trust 保持 Unknown，避免误标「非主人」。
+pub fn fill_group_origin(group: &mut [Message]) {
+    let group_origin = group
+        .iter()
+        .find_map(|m| match m {
+            Message::User { meta, .. } => meta.clone(),
+            _ => None,
+        })
+        .unwrap_or_else(MessageOrigin::desktop_owner);
+
+    for message in group.iter_mut() {
+        match message {
+            Message::User { meta, .. } => {
+                if meta.is_none() {
+                    *meta = Some(MessageOrigin::desktop_owner());
+                }
+            }
+            Message::Assistant { origin, .. } | Message::Tool { origin, .. } => {
+                if origin.is_none() {
+                    *origin = Some(group_origin.clone());
+                }
+            }
+        }
+    }
+}
+
+/// 合并去重键：来源 + 时间 + 角色 + 正文。
+pub fn dedup_key(message: &Message) -> (MessageSource, String, &'static str, String) {
+    match message {
+        Message::User {
+            time,
+            content,
+            meta,
+        } => {
+            let source = meta
+                .as_ref()
+                .map(|m| m.source)
+                .unwrap_or(MessageSource::Desktop);
+            (source, time.clone(), "user", content.clone())
+        }
+        Message::Assistant {
+            time,
+            content,
+            origin,
+            ..
+        } => {
+            let source = origin
+                .as_ref()
+                .map(|m| m.source)
+                .unwrap_or(MessageSource::Desktop);
+            (source, time.clone(), "assistant", content.clone())
+        }
+        Message::Tool {
+            time,
+            content,
+            origin,
+            ..
+        } => {
+            let source = origin
+                .as_ref()
+                .map(|m| m.source)
+                .unwrap_or(MessageSource::Desktop);
+            (source, time.clone(), "tool", content.clone())
+        }
+    }
+}
+
+/// 旧数据里外部来源缺少可信级别时，统一落成 Unknown；任务/桌面按主人。
+pub fn normalize_legacy_trust(origin: &mut MessageOrigin) {
+    if origin.trust != TrustLevel::Unknown {
+        return;
+    }
+    if matches!(
+        origin.source,
+        MessageSource::Desktop | MessageSource::Task
+    ) {
+        origin.trust = TrustLevel::Owner;
+    }
+}
 
 /// 清理不完整工具链，返回删除的消息数。
 ///
@@ -113,6 +228,7 @@ mod tests {
             }),
             token_usage: Default::default(),
             model: "test".to_string(),
+            origin: None,
         }
     }
 
@@ -125,6 +241,7 @@ mod tests {
             success: true,
             content: content.to_string(),
             artifact: None,
+            origin: None,
         }
     }
 

@@ -9,7 +9,7 @@
 // 切区间只重取用量，且不清空旧数据 —— 否则会闪骨架屏。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_CHANNEL, getContextUsage, listSessions } from '../../../lib/chatApi';
+import { getContextUsage, listSessions } from '../../../lib/chatApi';
 import { listScheduledTasks, onTaskFinished } from '../../../lib/schedulerApi';
 import { getConfig } from '../../../lib/settingsApi';
 import { queryDailyUsage } from '../../../lib/usageApi';
@@ -117,8 +117,8 @@ export function useDashboard(): UseDashboardResult {
     (async () => {
       try {
         const [sess, ctx, cfg, tk] = await Promise.all([
-          listSessions(DEFAULT_CHANNEL),
-          getContextUsage(DEFAULT_CHANNEL),
+          listSessions(),
+          getContextUsage(),
           getConfig(),
           listScheduledTasks(),
         ]);
@@ -144,7 +144,7 @@ export function useDashboard(): UseDashboardResult {
   }, [rangeDays, fetchUsage]);
 
   // 任务跑完会产生新用量并追加 runs，两者都要刷；静默进行，避免图表抖动。
-  // 任务跑在 task_ 渠道，不影响 app 渠道的上下文与会话，故不重取那两项。
+  // 任务写入统一主会话，上下文用量会变化，下一轮进入页面时自然刷新。
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;

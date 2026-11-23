@@ -7,7 +7,7 @@
 
 use serde_json::Value;
 
-use crate::scheduler::{parse_schedule, TaskSource, TaskStore};
+use crate::scheduler::{parse_schedule, TaskNotifyChannel, TaskSource, TaskStore};
 
 /// 创建定时任务（source=Agent）。返回任务 id 或错误文本。
 pub fn create_scheduled_task(args: &Value, store: &TaskStore) -> String {
@@ -29,7 +29,24 @@ pub fn create_scheduled_task(args: &Value, store: &TaskStore) -> String {
         Err(e) => return format!("参数错误: {e}"),
     };
 
-    match store.create(TaskSource::Agent, name, prompt, schedule) {
+    let notify_channel = match TaskNotifyChannel::parse(
+        args.get("notify_channel")
+            .and_then(Value::as_str)
+            .unwrap_or("none"),
+    ) {
+        Ok(channel) => channel,
+        Err(e) => return format!("参数错误: {e}"),
+    };
+    let notify_target = args.get("notify_target").and_then(Value::as_str);
+
+    match store.create(
+        TaskSource::Agent,
+        name,
+        prompt,
+        schedule,
+        notify_channel,
+        notify_target,
+    ) {
         Ok(task) => format!("已创建定时任务，id = {}", task.id),
         Err(e) => format!("创建定时任务失败: {e}"),
     }
@@ -88,7 +105,24 @@ pub fn update_scheduled_task(args: &Value, store: &TaskStore) -> String {
         Err(e) => return format!("参数错误: {e}"),
     };
 
-    match store.update(task_id, name, prompt, schedule) {
+    let notify_channel = match TaskNotifyChannel::parse(
+        args.get("notify_channel")
+            .and_then(Value::as_str)
+            .unwrap_or("none"),
+    ) {
+        Ok(channel) => channel,
+        Err(e) => return format!("参数错误: {e}"),
+    };
+    let notify_target = args.get("notify_target").and_then(Value::as_str);
+
+    match store.update(
+        task_id,
+        name,
+        prompt,
+        schedule,
+        notify_channel,
+        notify_target,
+    ) {
         Ok(task) => format!("已更新定时任务 {}（{}）", task.id, task.name),
         Err(e) => format!("更新定时任务失败: {e}"),
     }

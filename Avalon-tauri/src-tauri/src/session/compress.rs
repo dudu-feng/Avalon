@@ -18,9 +18,11 @@ pub fn build_transcript(messages: &[Message]) -> String {
     for message in messages {
         match message {
             Message::User {
-                content, meta, ..
+                time,
+                content,
+                meta,
             } => {
-                let body = render_user_content(content, meta.as_ref());
+                let body = render_user_content(content, meta.as_ref(), time);
                 if !body.trim().is_empty() {
                     blocks.push(format!("[user]\n{body}"));
                 }
@@ -120,16 +122,19 @@ fn clip_chars(text: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use crate::llm::{TokenUsage, ToolCall};
+    use crate::session::MessageOrigin;
 
     fn user(content: &str) -> Message {
         Message::User {
             time: "2026-11-01-10:00:00".to_string(),
             content: content.to_string(),
-            meta: Some(serde_json::json!({
+            meta: Some(MessageOrigin::from_value(serde_json::json!({
+                "source": "feishu",
                 "sender_id": "feishu:ou_1",
                 "sender_name": "张三",
-                "chat_type": "group"
-            })),
+                "chat_type": "group",
+                "trust": "external"
+            }))),
         }
     }
 
@@ -148,6 +153,7 @@ mod tests {
                 }]),
                 token_usage: TokenUsage::default(),
                 model: "test".to_string(),
+                origin: None,
             },
             Message::Tool {
                 time: "2026-11-01-10:00:02".to_string(),
@@ -161,12 +167,13 @@ mod tests {
                     chars: 12_000,
                     bytes: 36_000,
                 }),
+                origin: None,
             },
         ];
 
         let text = build_transcript(&messages);
         assert!(text.contains("[user]"));
-        assert!(text.contains("来源: 飞书"));
+        assert!(text.contains("飞书"));
         assert!(text.contains("张三"));
         assert!(text.contains("read_file({\"path\":\"a.txt\"})"));
         assert!(text.contains("[tool result call_1] read_file"));
@@ -186,6 +193,7 @@ mod tests {
             success: false,
             content: "字".repeat(COMPRESS_TOOL_PREVIEW_CHARS + 10),
             artifact: None,
+            origin: None,
         }];
         let text = build_transcript(&messages);
         assert!(text.contains("（失败）"));

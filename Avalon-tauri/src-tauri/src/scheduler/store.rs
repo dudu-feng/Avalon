@@ -8,7 +8,9 @@ use std::sync::Mutex;
 
 use anyhow::{anyhow, Context, Result};
 
-use super::{RunStatus, ScheduleType, ScheduledTask, TaskSource, TaskRunMeta};
+use super::{
+    RunStatus, ScheduleType, ScheduledTask, TaskNotifyChannel, TaskSource, TaskRunMeta,
+};
 
 /// agent 创建的任务数量上限（护栏）
 pub const AGENT_TASK_LIMIT: usize = 10;
@@ -16,6 +18,14 @@ pub const AGENT_TASK_LIMIT: usize = 10;
 pub const PROMPT_MAX_CHARS: usize = 500;
 /// 任务名称最大长度（字符）
 pub const NAME_MAX_CHARS: usize = 50;
+
+/// 通知目标去空白；空字符串视为未指定（走主人默认）
+fn normalize_target(target: Option<&str>) -> Option<String> {
+    target
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+}
 
 /// 校验 name/prompt 非空与长度，返回 trim 后的 (name, prompt)
 fn validate_name_prompt(name: &str, prompt: &str) -> Result<(String, String)> {
@@ -68,8 +78,11 @@ impl TaskStore {
         name: &str,
         prompt: &str,
         schedule: ScheduleType,
+        notify_channel: TaskNotifyChannel,
+        notify_target: Option<&str>,
     ) -> Result<ScheduledTask> {
         let (name, prompt) = validate_name_prompt(name, prompt)?;
+        let notify_target = normalize_target(notify_target);
 
         let mut tasks = self.inner.lock().unwrap();
         if source == TaskSource::Agent {
@@ -93,6 +106,8 @@ impl TaskStore {
             created_at: now.format("%Y-%m-%d %H:%M:%S").to_string(),
             last_run_at: None,
             runs: Vec::new(),
+            notify_channel,
+            notify_target,
         };
         tasks.push(task.clone());
         self.write_locked(&tasks[..])?;
@@ -129,8 +144,11 @@ impl TaskStore {
         name: &str,
         prompt: &str,
         schedule: ScheduleType,
+        notify_channel: TaskNotifyChannel,
+        notify_target: Option<&str>,
     ) -> Result<ScheduledTask> {
         let (name, prompt) = validate_name_prompt(name, prompt)?;
+        let notify_target = normalize_target(notify_target);
 
         let mut tasks = self.inner.lock().unwrap();
         let task = tasks
@@ -143,6 +161,8 @@ impl TaskStore {
         task.name = name;
         task.prompt = prompt;
         task.schedule = schedule;
+        task.notify_channel = notify_channel;
+        task.notify_target = notify_target;
         let updated = task.clone();
         self.write_locked(&tasks[..])?;
         Ok(updated)
@@ -161,7 +181,7 @@ impl TaskStore {
     }
 
     /// 记录一次执行结果：追加 run 元数据 + 更新 last_run_at，写回
-    pub fn mark_ran(&self, id: &str, status: RunStatus) -> Result<()> {
+    pub fn mark_ran(&self, id: &str, status: RunStatus, notify_error: Option<String>) -> Result<()> {
         let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let mut tasks = self.inner.lock().unwrap();
         let task = tasks
@@ -173,6 +193,7 @@ impl TaskStore {
             triggered_at: ts,
             status,
             read: false,
+            notify_error,
         });
         self.write_locked(&tasks[..])
     }

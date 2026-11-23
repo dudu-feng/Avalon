@@ -88,9 +88,7 @@ domain = "https://open.feishu.cn"         # Lark 国际版填 https://open.larks
 group_require_mention = true              # 群聊需 @ 机器人才响应
 allow_users = []                          # open_id 白名单，留空 = 不限制
 # 主人 open_id 已迁入通讯录（设置 → 通讯录），由首次私聊自动记录
-# 会话隔离粒度：
-#   isolated = 每个聊天独立上下文（私聊按人、群聊按群）
-#   unified  = 所有飞书消息汇入同一个永恒会话，跨群跨私聊记忆连贯
+# 已废弃：统一会话后所有来源都写入 main，此字段仅为兼容旧配置保留解析
 session_mode = "isolated"
 # 图片消息先回一句询问，等用户下一条文字再一起处理；留空 = 收到图片立即处理
 image_ack_text = "已收到图片，请问需要我做什么？可以直接回复你的问题，我会结合这张图回答。"
@@ -111,7 +109,7 @@ rejected_reaction = "Sigh"                # 积压超限，本条不处理
 [qq]
 enabled = false                           # 开关，关闭时启动不建立任何连接
 backend = "official"                      # official（已实现）| onebot（仅预留，未实现）
-session_mode = "isolated"                 # isolated = 每群/私聊独立；unified = 全部汇入一个会话
+session_mode = "isolated"                 # 已废弃：统一会话，所有来源写入 main
 group_require_mention = true              # 群聊只响应 @ 机器人的消息
 allow_users = []                          # openid 白名单，留空 = 不限制
 # 主人 openid 已迁入通讯录（设置 → 通讯录），由首次私聊自动记录
@@ -170,6 +168,11 @@ extract_limit = 8000                      # 网页正文截断字符数（接口
 # 同理不建议加 findstr：它的 /f: 参数能读任意文件，而这功能 read_file 已覆盖。
 # dir / type 加了也没用，它们是 cmd 内建命令，没有对应的可执行文件。
 shell_allowlist = ["where", "ping", "ipconfig", "tasklist", "systeminfo", "hostname"]
+
+# 非主人（群聊成员、陌生人）允许调用的工具名。默认空 = 完全无工具。
+# 只有安全工具会生效：web_search、read_web_page、search_session_memory、
+# list_session_history、read_session_history、read_tool_result。
+non_owner_allowlist = []
 
 # ============================================================
 #  视觉输入（图片理解）

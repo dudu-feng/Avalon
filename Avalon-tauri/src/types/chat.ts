@@ -42,6 +42,55 @@ export interface MessageAttachment {
   observed_at?: string;
 }
 
+export type MessageSource = 'desktop' | 'feishu' | 'qq' | 'task';
+export type TrustLevel = 'owner' | 'known' | 'external' | 'unknown';
+
+/**
+ * 消息来源（对齐后端 MessageOrigin）。
+ * 渠道只作为消息属性存在；未知字段原样保留（附件快照等）。
+ */
+export interface MessageOrigin {
+  source: MessageSource;
+  trust?: TrustLevel;
+  run_id?: string;
+  chat_id?: string;
+  chat_type?: string;
+  sender_id?: string;
+  sender_name?: string;
+  message_id?: string;
+  task_id?: string;
+  task_name?: string;
+  attachments?: MessageAttachment[];
+  [key: string]: unknown;
+}
+
+/** 本次 run 的回复目标（对齐后端 ReplyTarget） */
+export type ReplyTarget =
+  | { channel: 'desktop' }
+  | { channel: 'feishu'; chat_id: string; message_id?: string | null }
+  | { channel: 'qq'; chat_id: string; msg_idx?: string | null }
+  | { channel: 'none' };
+
+/** 一次 ReAct 执行的上下文（对齐后端 RunContext） */
+export interface RunContext {
+  run_id: string;
+  origin: MessageOrigin;
+  reply: ReplyTarget;
+}
+
+/** active_runs 命令返回：正在执行 + 排队中的 run 快照 */
+export interface ActiveRuns {
+  pending: number;
+  runs: RunContext[];
+}
+
+/** 后端广播的 session-event 负载：后台来源的流式事件按 run_id 归组 */
+export interface SessionEventPayload {
+  run_id: string;
+  origin: MessageOrigin;
+  event: EngineEvent;
+}
+
 /** 工具调用（对齐后端 ToolCall） */
 export interface ToolCall {
   id: string;
@@ -66,7 +115,7 @@ export type HistoryMessage =
       time: string;
       content: string;
       /** 渠道来源与附件快照（后端 Message::User.meta） */
-      meta?: { attachments?: MessageAttachment[]; [key: string]: unknown } | null;
+      meta?: MessageOrigin | null;
     }
   | {
       role: 'assistant';
@@ -76,6 +125,8 @@ export type HistoryMessage =
       tool_calls?: ToolCall[] | null;
       token_usage: TokenUsage;
       model?: string;
+      /** 只供前端归组/回复路由，不进入模型上下文 */
+      origin?: MessageOrigin | null;
     }
   | {
       role: 'tool';
@@ -88,6 +139,7 @@ export type HistoryMessage =
       content: string;
       /** 大结果落盘后的引用（后端 Message::Tool.artifact） */
       artifact?: { id: string; chars: number; bytes: number } | null;
+      origin?: MessageOrigin | null;
     };
 
 /** get_current_session 返回（精简，前端只用这些字段） */
@@ -164,6 +216,10 @@ export type ChatMessage =
       content: string;
       /** 本轮图片附件（历史消息从 meta.attachments 恢复） */
       attachments?: MessageAttachment[];
+      /** 消息来源（历史消息从 meta 恢复；统一时间线据此显示徽章） */
+      origin?: MessageOrigin | null;
+      /** 落盘时间（历史消息；实时消息可能没有） */
+      time?: string;
     }
   | {
       id: string;
@@ -173,8 +229,10 @@ export type ChatMessage =
       content: string;
       error?: string;
       tokenUsage?: TokenUsage;
+      origin?: MessageOrigin | null;
+      time?: string;
     }
-  | { id: string; role: 'tool'; tool: ToolCallRecord }
+  | { id: string; role: 'tool'; tool: ToolCallRecord; origin?: MessageOrigin | null; time?: string }
   | {
       id: string;
       /** 压缩上下文提示（运行时过程提示，不入历史）：running=压缩中 / done=完成 / error=失败 */

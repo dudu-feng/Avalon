@@ -1,10 +1,46 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useChat, MessageList, ChatInput, SessionList } from '../../components/features/chat';
 import { Button, Drawer } from '../../components/ui';
 import { visionStatus } from '../../lib/fileApi';
 import { getConfig, setActiveModel } from '../../lib/settingsApi';
+import type { ChatMessage, MessageSource } from '../../types/chat';
 import type { ModelConfig } from '../../types/config';
 import styles from './ChatPage.module.css';
+
+type SourceFilter = 'all' | MessageSource;
+
+const SOURCE_NAMES: Record<MessageSource, string> = {
+  desktop: '桌面',
+  feishu: '飞书',
+  qq: 'QQ',
+  task: '定时任务',
+};
+
+const FILTERS: [SourceFilter, string][] = [
+  ['all', '全部'],
+  ['desktop', '桌面'],
+  ['feishu', '飞书'],
+  ['qq', 'QQ'],
+  ['task', '定时任务'],
+];
+
+/** 按来源筛选时间线：以 user 消息为组边界，assistant / tool 跟随所在组。
+ *  实时流式消息没有 origin 时沿用上一组的来源，避免筛选后凭空消失。 */
+function filterBySource(messages: ChatMessage[], filter: SourceFilter): ChatMessage[] {
+  if (filter === 'all') return messages;
+  const out: ChatMessage[] = [];
+  let current: MessageSource = 'desktop';
+  for (const m of messages) {
+    const origin = 'origin' in m ? m.origin : undefined;
+    if (m.role === 'user') {
+      current = origin?.source ?? 'desktop';
+    } else if (origin?.source) {
+      current = origin.source;
+    }
+    if (current === filter) out.push(m);
+  }
+  return out;
+}
 
 export function ChatPage() {
   const {
@@ -26,13 +62,21 @@ export function ChatPage() {
     hasEarlier,
     loadingEarlier,
     loadEarlier,
+    activeSource,
   } = useChat();
+  // 有执行中 / 排队中的轮次时禁止会话控制操作（后端同样会拒绝）
+  const sessionBusy = isBusy || activeSource !== null;
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [activeModel, setActiveModelName] = useState('');
   const [visionEnabled, setVisionEnabled] = useState(false);
   const [visionModel, setVisionModel] = useState('');
   const [confirmBeforeSend, setConfirmBeforeSend] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
+  const visibleMessages = useMemo(
+    () => filterBySource(messages, sourceFilter),
+    [messages, sourceFilter],
+  );
 
   // 模型能力开了、但视觉总开关没开：输入框给出提示，避免以为图片入口坏了
   const activeSupportsVision = models.some(
@@ -93,9 +137,28 @@ export function ChatPage() {
           >
             ☰ 会话
           </button>
+          <div className={styles.filters}>
+            {FILTERS.map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`${styles.filterChip} ${sourceFilter === key ? styles.filterChipActive : ''}`}
+                onClick={() => setSourceFilter(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {(isBusy || activeSource) && (
+            <span className={styles.runStatus}>
+              {isBusy
+                ? '正在处理桌面消息…'
+                : `正在处理来自${SOURCE_NAMES[activeSource as MessageSource]}的请求…`}
+            </span>
+          )}
         </div>
         <MessageList
-          messages={messages}
+          messages={visibleMessages}
           loading={loading}
           resetKey={activeId}
           hasEarlier={hasEarlier}
@@ -124,7 +187,13 @@ export function ChatPage() {
         onClose={() => setDrawerOpen(false)}
         title="会话"
         actions={
-          <Button variant="ghost" size="sm" onClick={newSession} title="新建会话">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={newSession}
+            title={sessionBusy ? '有消息正在执行或排队，暂不能新建会话' : '新建会话'}
+            disabled={sessionBusy}
+          >
             ＋ 新建
           </Button>
         }

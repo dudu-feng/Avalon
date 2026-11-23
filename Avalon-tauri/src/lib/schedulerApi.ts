@@ -6,7 +6,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ScheduledTask } from '../types/scheduler';
+import type { ScheduledTask, TaskNotifyChannel } from '../types/scheduler';
 
 export type ScheduleKind = 'once' | 'daily' | 'weekly';
 
@@ -16,12 +16,16 @@ export async function createScheduledTask(
   prompt: string,
   scheduleType: ScheduleKind,
   scheduleValue: string,
+  notifyChannel: TaskNotifyChannel = 'none',
+  notifyTarget: string | null = null,
 ): Promise<ScheduledTask> {
   return invoke<ScheduledTask>('create_scheduled_task', {
     name,
     prompt,
     scheduleType,
     scheduleValue,
+    notifyChannel,
+    notifyTarget,
   });
 }
 
@@ -47,6 +51,8 @@ export async function updateScheduledTask(
   prompt: string,
   scheduleType: ScheduleKind,
   scheduleValue: string,
+  notifyChannel: TaskNotifyChannel = 'none',
+  notifyTarget: string | null = null,
 ): Promise<ScheduledTask> {
   return invoke<ScheduledTask>('update_scheduled_task', {
     taskId,
@@ -54,6 +60,8 @@ export async function updateScheduledTask(
     prompt,
     scheduleType,
     scheduleValue,
+    notifyChannel,
+    notifyTarget,
   });
 }
 
@@ -70,4 +78,16 @@ export async function getUnreadTaskCount(): Promise<number> {
 /** 订阅任务完成事件，返回取消订阅函数 */
 export function onTaskFinished(cb: (taskId: string) => void): Promise<() => void> {
   return listen<string>('task-finished', (event) => cb(event.payload));
+}
+
+export interface TaskNotificationPayload {
+  title: string;
+  body: string;
+}
+
+/** 订阅桌面通知事件（任务的 notify_channel = desktop），返回取消订阅函数 */
+export function onTaskNotification(
+  cb: (payload: TaskNotificationPayload) => void,
+): Promise<() => void> {
+  return listen<TaskNotificationPayload>('task-notification', (event) => cb(event.payload));
 }

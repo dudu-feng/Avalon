@@ -5,7 +5,7 @@
 
 #![allow(dead_code)] // session 模块供未来 engine/tool 引用，当前无调用方，接入后移除
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -20,13 +20,25 @@ use crate::prompt::{build_compress_prompt, build_rolling_prompt};
 use crate::vector::{RebuildProgress, RebuildStats, VectorStore};
 
 use super::compress::{build_transcript, message_time_range};
-use super::context::{estimate_text_tokens, ContextBudget};
+use super::context::{
+    build_history_messages, estimate_messages_tokens, estimate_text_tokens, ContextBudget,
+};
+use super::migrate::{
+    dedup_key, fill_group_origin, group_turns, normalize_legacy_trust, MigrationReport,
+};
 use super::types::*;
 use super::{artifact, ArtifactRead};
 use super::{now_id_ts, SessionStore};
 
 /// 旧会话工具链清洗标记：存在即表示已扫描过，无需每次启动重复读全部历史
 const TOOLCHAIN_CLEANUP_MARKER: &str = ".toolchain_cleanup_v1";
+
+/// 统一会话的唯一活跃槽位文件（current/main.json）。
+/// channel 只作为消息属性存在，不再参与文件分区。
+pub(crate) const ACTIVE_SESSION_KEY: &str = "main";
+
+/// 统一会话迁移标记：存在即表示旧 current 已归档合并完毕
+const UNIFIED_SESSION_MARKER: &str = ".unified_session_v1";
 
 /// 会话文件存储实现
 pub struct FileSessionStore {
@@ -46,8 +58,11 @@ impl FileSessionStore {
         self.config.get().session_path()
     }
 
-    fn current_file(&self, channel: &str) -> PathBuf {
-        self.session_path().join("current").join(format!("{channel}.json"))
+    /// 当前会话固定写入 current/main.json（全局唯一活跃会话槽位）。
+    fn current_file(&self) -> PathBuf {
+        self.session_path()
+            .join("current")
+            .join(format!("{ACTIVE_SESSION_KEY}.json"))
     }
 
     fn history_dir(&self) -> PathBuf {
@@ -57,8 +72,8 @@ impl FileSessionStore {
     // ============ 文件读写 ============
 
     /// 读当前会话；文件不存在返回空会话（inactive）
-    fn read_current(&self, channel: &str) -> Result<SessionData> {
-        let path = self.current_file(channel);
+    fn read_current(&self) -> Result<SessionData> {
+        let path = self.current_file();
         if !path.exists() {
             return Ok(SessionData::empty());
         }
@@ -75,8 +90,8 @@ impl FileSessionStore {
     }
 
     /// 写当前会话（原子：tmp + rename，自动建目录）
-    fn write_current(&self, channel: &str, data: &SessionData) -> Result<()> {
-        let path = self.current_file(channel);
+    fn write_current(&self, data: &SessionData) -> Result<()> {
+        let path = self.current_file();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("创建会话目录失败: {}", parent.display()))?;
@@ -91,18 +106,18 @@ impl FileSessionStore {
     }
 
     /// 确保会话就绪：active 则复用，否则新建（含 history 初始存档）
-    fn ensure_active(&self, channel: &str) -> Result<SessionData> {
-        let data = self.read_current(channel)?;
+    fn ensure_active(&self) -> Result<SessionData> {
+        let data = self.read_current()?;
         if data.status == SessionStatus::Active && !data.id.is_empty() {
             return Ok(data);
         }
-        self.create_active_session(channel)
+        self.create_active_session()
     }
 
     /// 新建一个 active 会话：写 current + 写 history/{id}/index.json（初始存档）
-    fn create_active_session(&self, channel: &str) -> Result<SessionData> {
-        let fresh = SessionData::new_active(format!("{channel}_{}", now_id_ts()));
-        self.write_current(channel, &fresh)?;
+    fn create_active_session(&self) -> Result<SessionData> {
+        let fresh = SessionData::new_active(format!("{ACTIVE_SESSION_KEY}_{}", now_id_ts()));
+        self.write_current(&fresh)?;
         self.write_session_index(&fresh)?;
         Ok(fresh)
     }
@@ -112,8 +127,22 @@ impl FileSessionStore {
         let dir = self.history_dir().join(&data.id);
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("创建会话目录失败: {}", dir.display()))?;
+        self.write_session_file(&dir.join("index.json"), data)
+    }
+
+    /// 原子写任意会话文件（迁移与启动清洗按文件路径就地写回，避免全部落到 main）
+    fn write_session_file(&self, path: &Path, data: &SessionData) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("创建会话目录失败: {}", parent.display()))?;
+        }
         let content = serde_json::to_string_pretty(data).context("序列化会话数据失败")?;
-        std::fs::write(dir.join("index.json"), content).with_context(|| "写入 index.json 失败")
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, &content)
+            .with_context(|| format!("写入会话临时文件失败: {}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .with_context(|| format!("原子替换会话文件失败: {}", path.display()))?;
+        Ok(())
     }
 
     /// 一次性清洗旧版本取消留下的不完整工具链。
@@ -141,14 +170,12 @@ impl FileSessionStore {
                 if path.extension().and_then(|s| s.to_str()) != Some("json") {
                     continue;
                 }
-                let Some(channel) = path.file_stem().and_then(|s| s.to_str()) else {
-                    continue;
-                };
                 match self.read_session_file(&path) {
                     Ok(mut data) => {
                         let n = super::migrate::sanitize_tool_chains(&mut data.messages);
                         if n > 0 {
-                            self.write_current(channel, &data)?;
+                            // 迁移前 current 仍按渠道分文件，必须写回原路径而非 main
+                            self.write_session_file(&path, &data)?;
                             removed += n;
                             touched += 1;
                         }
@@ -232,6 +259,278 @@ impl FileSessionStore {
         Ok(removed)
     }
 
+    /// 一次性把旧的分渠道 current 迁移到统一会话 `current/main.json`。
+    ///
+    /// 步骤：app → main（保留原 id）→ 其余 current 归档为 Archived →
+    /// 合并未压缩消息（去重 + token 预算）→ 删除旧 current → 写标记。
+    /// 任何文件失败都不写标记，下次启动重试；失败文件不删除。
+    pub fn migrate_to_main_session(&self) -> Result<MigrationReport> {
+        let root = self.session_path();
+        let marker = root.join(UNIFIED_SESSION_MARKER);
+        if marker.is_file() {
+            return Ok(MigrationReport::default());
+        }
+
+        let current_dir = root.join("current");
+        if !current_dir.is_dir() {
+            std::fs::create_dir_all(&current_dir)
+                .with_context(|| format!("创建 current 目录失败: {}", current_dir.display()))?;
+        }
+
+        let main_path = current_dir.join(format!("{ACTIVE_SESSION_KEY}.json"));
+        let app_path = current_dir.join("app.json");
+        let mut report = MigrationReport::default();
+        let mut consumed_app: Option<PathBuf> = None;
+
+        // ① app → main：保留旧 id，raw / 向量 chunk / artifact 都不失效
+        if !main_path.is_file() && app_path.is_file() {
+            match self.read_session_file(&app_path) {
+                Ok(mut app) => {
+                    app.status = SessionStatus::Active;
+                    self.write_session_file(&main_path, &app)?;
+                    self.write_session_index(&app)?;
+                    consumed_app = Some(app_path.clone());
+                }
+                Err(e) => {
+                    log::warn!(
+                        target: "session",
+                        "迁移：解析 app 会话失败，本次不删除任何旧 current: {e:#}"
+                    );
+                    report.failures += 1;
+                }
+            }
+        }
+
+        // 没有可迁移的 app 时，创建全新的 main 槽位
+        if !main_path.is_file() {
+            let fresh = SessionData::new_active(format!("{ACTIVE_SESSION_KEY}_{}", now_id_ts()));
+            self.write_session_file(&main_path, &fresh)?;
+            self.write_session_index(&fresh)?;
+        }
+
+        let mut main_data = self.read_session_file(&main_path)?;
+        main_data.status = SessionStatus::Active;
+        if main_data.id.is_empty() {
+            anyhow::bail!("迁移失败：main 会话缺少 id");
+        }
+        let main_id = main_data.id.clone();
+
+        // ② 归档其余旧 current，并收集未压缩消息
+        let cfg = self.config.get();
+        let budget =
+            ContextBudget::from_config(cfg.active_model_config(), &cfg.session_memory).trigger_tokens;
+        let mut merge: Vec<(String, Vec<Message>)> = Vec::new();
+        let mut delete_paths: Vec<PathBuf> = consumed_app.into_iter().collect();
+
+        for entry in std::fs::read_dir(&current_dir)
+            .with_context(|| format!("读取 current 目录失败: {}", current_dir.display()))?
+        {
+            let path = entry.context("读取 current 条目失败")?.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            if path == main_path
+                || delete_paths.iter().any(|p| p == &path)
+            {
+                continue;
+            }
+
+            let mut data = match self.read_session_file(&path) {
+                Ok(data) => data,
+                Err(e) => {
+                    log::warn!(
+                        target: "session",
+                        "迁移：跳过无法解析的 session {}: {e:#}",
+                        path.display()
+                    );
+                    report.failures += 1;
+                    continue;
+                }
+            };
+            if data.id.is_empty() {
+                log::warn!(target: "session", "迁移：跳过缺少 id 的 session {}", path.display());
+                report.failures += 1;
+                continue;
+            }
+
+            let _ = super::migrate::sanitize_tool_chains(&mut data.messages);
+
+            // 空会话不产生归档
+            if data.messages.is_empty()
+                && data.compressed.is_empty()
+                && data.super_compressed.is_none()
+            {
+                match std::fs::remove_file(&path) {
+                    Ok(_) => delete_paths.push(path),
+                    Err(e) => {
+                        log::warn!(
+                            target: "session",
+                            "迁移：删除空会话失败 {}: {e:#}",
+                            path.display()
+                        );
+                        report.failures += 1;
+                    }
+                }
+                continue;
+            }
+
+            data.status = SessionStatus::Archived;
+            if let Err(e) = self.write_session_index(&data) {
+                log::warn!(
+                    target: "session",
+                    "迁移：归档会话 {} 失败: {e:#}",
+                    data.id
+                );
+                report.failures += 1;
+                continue;
+            }
+            report.archived += 1;
+
+            for group in group_turns(&data.messages) {
+                let mut group = group;
+                fill_group_origin(&mut group);
+                for message in group.iter_mut() {
+                    match message {
+                        Message::User { meta: Some(origin), .. }
+                        | Message::Assistant { origin: Some(origin), .. }
+                        | Message::Tool { origin: Some(origin), .. } => {
+                            normalize_legacy_trust(origin)
+                        }
+                        _ => {}
+                    }
+                }
+                merge.push((data.id.clone(), group));
+            }
+            delete_paths.push(path);
+        }
+
+        // ③ 按轮次时间排序，从新到旧在预算内选入；main 原有消息始终保留
+        merge.sort_by(|a, b| turn_time(&a.1).cmp(turn_time(&b.1)));
+        let mut seen: HashSet<_> = main_data.messages.iter().map(dedup_key).collect();
+        let main_tokens = estimate_messages_tokens(&build_history_messages(&main_data));
+        let mut remaining = budget.saturating_sub(main_tokens);
+        let mut selected_rev: Vec<(String, Vec<Message>)> = Vec::new();
+
+        for (idx, (old_id, group)) in merge.into_iter().enumerate().rev() {
+            let group: Vec<Message> = group
+                .into_iter()
+                .filter(|message| !seen.contains(&dedup_key(message)))
+                .collect();
+            if group.is_empty() {
+                continue;
+            }
+            let cost = estimate_text_tokens(&build_transcript(&group));
+            if cost > remaining {
+                // 选满即停止，更旧的轮次完整留在归档会话里
+                report.skipped_turns += idx + 1;
+                break;
+            }
+            remaining -= cost;
+            for message in &group {
+                seen.insert(dedup_key(message));
+            }
+            selected_rev.push((old_id, group));
+        }
+
+        let selected: Vec<(String, Vec<Message>)> = selected_rev.into_iter().rev().collect();
+        let mut merged_messages: Vec<Message> = Vec::new();
+        for (old_id, group) in &selected {
+            self.copy_artifacts_to(&main_id, old_id, group);
+            merged_messages.extend(group.iter().cloned());
+        }
+        report.merged_messages = merged_messages.len();
+
+        if !merged_messages.is_empty() {
+            merged_messages.extend(std::mem::take(&mut main_data.messages));
+            main_data.messages = merged_messages;
+            // 旧轮次的时间早于 main 原消息，锚点已失效，交给 provider 重新锚定
+            main_data.stats = SessionStats::default();
+        }
+        self.write_session_file(&main_path, &main_data)?;
+
+        // ④ 归档与合并都成功后删除旧 current
+        for path in delete_paths {
+            if let Err(e) = std::fs::remove_file(&path) {
+                log::warn!(
+                    target: "session",
+                    "迁移：删除旧 current 失败 {}: {e:#}",
+                    path.display()
+                );
+                report.failures += 1;
+            }
+        }
+
+        if report.is_clean() {
+            std::fs::write(
+                &marker,
+                format!(
+                    "archived={}\nmerged={}\nskipped={}\n",
+                    report.archived, report.merged_messages, report.skipped_turns
+                ),
+            )
+            .with_context(|| format!("写入迁移标记失败: {}", marker.display()))?;
+            log::info!(
+                target: "session",
+                "统一会话迁移完成：归档 {} 个旧会话，合并 {} 条消息，跳过 {} 个超预算轮次",
+                report.archived,
+                report.merged_messages,
+                report.skipped_turns
+            );
+        } else {
+            log::warn!(
+                target: "session",
+                "统一会话迁移未完全成功（{} 个文件失败），下次启动将重试",
+                report.failures
+            );
+        }
+
+        Ok(report)
+    }
+
+    /// 把合并轮次引用的 artifact 从旧会话目录复制到 main，已存在则跳过
+    fn copy_artifacts_to(&self, main_id: &str, old_id: &str, messages: &[Message]) {
+        if main_id == old_id {
+            return;
+        }
+        let src = self.session_path().join("artifacts").join(old_id);
+        let dst = self.session_path().join("artifacts").join(main_id);
+        for message in messages {
+            let Message::Tool {
+                artifact: Some(artifact),
+                ..
+            } = message
+            else {
+                continue;
+            };
+            let from = src.join(format!("{}.txt", artifact.id));
+            if !from.is_file() {
+                continue;
+            }
+            let to = dst.join(format!("{}.txt", artifact.id));
+            if to.exists() {
+                log::warn!(
+                    target: "session",
+                    "迁移：artifact {} 已存在于 main，跳过复制",
+                    artifact.id
+                );
+                continue;
+            }
+            if let Some(parent) = to.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    log::warn!(target: "session", "迁移：创建 artifact 目录失败: {e:#}");
+                    continue;
+                }
+            }
+            if let Err(e) = std::fs::copy(&from, &to) {
+                log::warn!(
+                    target: "session",
+                    "迁移：复制 artifact {} 失败: {e:#}",
+                    from.display()
+                );
+            }
+        }
+    }
+
     /// 清洗单个 raw 块：兼容信封结构与旧版裸数组，保留其余字段。
     fn cleanup_raw_file(&self, path: &Path) -> Result<usize> {
         let content = std::fs::read_to_string(path)
@@ -270,22 +569,25 @@ impl FileSessionStore {
         Ok(removed)
     }
 
-    /// 从 session_id 提取时间戳（去掉 {channel}_ 前缀）
-    fn doc_timestamp(&self, session_id: &str, channel: &str) -> String {
+    /// 从 session_id 提取时间戳（去掉任意 `{prefix}_` 前缀）
+    ///
+    /// 旧 id 可能以 app / feishu / qq 开头，迁移后仍保留原 id，不能按 main_ 硬切。
+    fn doc_timestamp(&self, session_id: &str) -> String {
         session_id
-            .strip_prefix(&format!("{channel}_"))
+            .split_once('_')
+            .map(|(_, ts)| ts)
             .unwrap_or(session_id)
             .to_string()
     }
 
     /// 标题为「初始时间戳占位」或空时，用首条 user 消息截断生成（归档前调用，因 compress 会清空 messages）
-    fn ensure_title(&self, channel: &str) -> Result<()> {
-        let mut data = self.read_current(channel)?;
+    fn ensure_title(&self) -> Result<()> {
+        let mut data = self.read_current()?;
         if data.id.is_empty() {
             return Ok(());
         }
         // 标题为空或等于初始时间戳占位（用户未手动改名）时，才用首条消息覆盖
-        let default_ts = self.doc_timestamp(&data.id, channel);
+        let default_ts = self.doc_timestamp(&data.id);
         if !data.title.is_empty() && data.title != default_ts {
             return Ok(());
         }
@@ -295,7 +597,7 @@ impl FileSessionStore {
         });
         if let Some(content) = first {
             data.title = truncate_title(&content);
-            self.write_current(channel, &data)?;
+            self.write_current(&data)?;
         }
         Ok(())
     }
@@ -307,8 +609,8 @@ impl FileSessionStore {
     /// 写侧保证 messages 一定是完整轮次，因此这里不再选择保留边界；
     /// 压缩成功后 messages 清空，锚点清零，下一次请求直接发送并由 provider 重新锚定。
     /// 返回是否实际写入压缩块；空会话或摘要为空时返回 false。
-    async fn compress(&self, channel: &str) -> Result<bool> {
-        let mut data = self.read_current(channel)?;
+    async fn compress(&self) -> Result<bool> {
+        let mut data = self.read_current()?;
         if data.messages.is_empty() {
             log::debug!(target: "session", "当前会话为空，无需压缩。");
             return Ok(false);
@@ -364,13 +666,13 @@ impl FileSessionStore {
         data.messages.clear();
         data.stats.last_input_tokens = 0;
         data.stats.last_output_tokens = 0;
-        self.write_current(channel, &data)?;
+        self.write_current(&data)?;
 
         // 6. 同步向量库
         let index_text = chunk.index_text();
         if !index_text.is_empty() {
             let doc_id = format!("{}_chunk_{round}", data.id);
-            let timestamp = self.doc_timestamp(&data.id, channel);
+            let timestamp = self.doc_timestamp(&data.id);
             self.vector
                 .insert(&doc_id, &index_text, &chunk.keywords, &timestamp)?;
         }
@@ -383,7 +685,7 @@ impl FileSessionStore {
         );
 
         // 7. 滚动摘要检查
-        self.progressive_summarize(channel, &mut data).await?;
+        self.progressive_summarize(&mut data).await?;
 
         Ok(true)
     }
@@ -391,7 +693,7 @@ impl FileSessionStore {
     /// 滚动摘要：compressed 超 max_chunks 时，把旧滚动状态 + 最旧块合并成新的滚动状态。
     ///
     /// `super_compressed` 只有一层，不再对摘要反复做二级嵌套。
-    async fn progressive_summarize(&self, channel: &str, data: &mut SessionData) -> Result<()> {
+    async fn progressive_summarize(&self, data: &mut SessionData) -> Result<()> {
         let max_chunks = self.config.get().session_memory.max_chunks;
         // max_chunks < 2 时 merge_batch < 1，无意义，跳过
         if max_chunks < 2 || data.compressed.len() <= max_chunks {
@@ -456,7 +758,7 @@ impl FileSessionStore {
         // 更新数据 + 落盘
         data.super_compressed = Some(merged_chunk.clone());
         data.compressed = recent_chunks;
-        self.write_current(channel, data)?;
+        self.write_current(data)?;
 
         // 同步向量库：删旧块（含旧滚动摘要），插新滚动摘要
         let session_id = data.id.clone();
@@ -472,7 +774,7 @@ impl FileSessionStore {
         let merged_doc_id = format!("{session_id}_chunk_{merged_num}");
         let merged_text = merged_chunk.index_text();
         if !merged_text.is_empty() {
-            let timestamp = self.doc_timestamp(&session_id, channel);
+            let timestamp = self.doc_timestamp(&session_id);
             let _ = self.vector.insert(
                 &merged_doc_id,
                 &merged_text,
@@ -787,32 +1089,32 @@ impl FileSessionStore {
 
 #[async_trait]
 impl SessionStore for FileSessionStore {
-    fn init_session(&self, channel: &str) -> Result<()> {
-        let data = self.read_current(channel)?;
+    fn init_session(&self) -> Result<()> {
+        let data = self.read_current()?;
         if data.status == SessionStatus::Active && !data.id.is_empty() {
             log::debug!(target: "session", "已识别到上次会话，继续上次对话。");
             return Ok(());
         }
-        self.create_active_session(channel)?;
+        self.create_active_session()?;
         Ok(())
     }
 
-    async fn create_session(&self, channel: &str) -> Result<SessionData> {
+    async fn create_session(&self) -> Result<SessionData> {
         // ① 归档当前（若非空；空会话会被跳过）
-        let current = self.read_current(channel)?;
+        let current = self.read_current()?;
         if current.status == SessionStatus::Active && !current.id.is_empty() {
-            self.save_current_session(channel).await?;
+            self.save_current_session().await?;
         }
         // ② 新建 active 会话（写 current + history 初始存档）
-        self.create_active_session(channel)
+        self.create_active_session()
     }
 
-    fn get_current_session(&self, channel: &str) -> Result<SessionData> {
-        self.read_current(channel)
+    fn get_current_session(&self) -> Result<SessionData> {
+        self.read_current()
     }
 
-    fn get_context_usage(&self, channel: &str) -> Result<ContextUsage> {
-        let data = self.read_current(channel)?;
+    fn get_context_usage(&self) -> Result<ContextUsage> {
+        let data = self.read_current()?;
         let cfg = self.config.get();
         let budget =
             ContextBudget::from_config(cfg.active_model_config(), &cfg.session_memory);
@@ -831,19 +1133,18 @@ impl SessionStore for FileSessionStore {
         })
     }
 
-    fn update_current_session(&self, channel: &str, chat_history: &[Message]) -> Result<()> {
-        let mut data = self.ensure_active(channel)?;
+    fn update_current_session(&self, chat_history: &[Message]) -> Result<()> {
+        let mut data = self.ensure_active()?;
         data.messages.extend_from_slice(chat_history);
-        self.write_current(channel, &data)
+        self.write_current(&data)
     }
 
     fn record_request_usage(
         &self,
-        channel: &str,
         model: &str,
         usage: &crate::llm::TokenUsage,
     ) -> Result<()> {
-        let mut data = self.read_current(channel)?;
+        let mut data = self.read_current()?;
         if data.id.is_empty() {
             return Ok(());
         }
@@ -854,21 +1155,20 @@ impl SessionStore for FileSessionStore {
             last_model: model.to_string(),
             last_request_at: chrono::Local::now().to_rfc3339(),
         };
-        self.write_current(channel, &data)
+        self.write_current(&data)
     }
 
-    fn set_current_title(&self, channel: &str, title: &str) -> Result<()> {
-        let mut data = self.ensure_active(channel)?;
+    fn set_current_title(&self, title: &str) -> Result<()> {
+        let mut data = self.ensure_active()?;
         if data.title == title {
             return Ok(());
         }
         data.title = title.to_string();
-        self.write_current(channel, &data)
+        self.write_current(&data)
     }
 
     async fn auto_compress_check(
         &self,
-        channel: &str,
         anchor_tokens: usize,
         force: bool,
     ) -> Result<bool> {
@@ -881,19 +1181,19 @@ impl SessionStore for FileSessionStore {
                 "输入锚点({anchor_tokens}) >= 触发线({})（force={force}），触发自动压缩...",
                 budget.trigger_tokens
             );
-            self.compress(channel).await
+            self.compress().await
         } else {
             Ok(false)
         }
     }
 
-    async fn compress_session(&self, channel: &str) -> Result<bool> {
+    async fn compress_session(&self) -> Result<bool> {
         // 空会话无需压缩（compress 内部也会短路）
-        self.compress(channel).await
+        self.compress().await
     }
 
-    async fn save_current_session(&self, channel: &str) -> Result<()> {
-        let mut data = self.read_current(channel)?;
+    async fn save_current_session(&self) -> Result<()> {
+        let mut data = self.read_current()?;
         if data.id.is_empty() {
             log::debug!(target: "session", "当前无会话可归档。");
             return Ok(());
@@ -906,18 +1206,18 @@ impl SessionStore for FileSessionStore {
                 std::fs::remove_dir_all(&dir)
                     .with_context(|| format!("清理空会话目录失败: {}", dir.display()))?;
             }
-            self.write_current(channel, &SessionData::empty())?;
+            self.write_current(&SessionData::empty())?;
             log::debug!(target: "session", "当前会话为空，跳过归档。");
             return Ok(());
         }
 
-        self.ensure_title(channel)?;
+        self.ensure_title()?;
         // 归档时把全部未压缩消息压成摘要；压缩失败时保留原文随 index 一起存档
-        let _ = self.compress(channel).await?;
-        data = self.read_current(channel)?;
+        let _ = self.compress().await?;
+        data = self.read_current()?;
         data.status = SessionStatus::Archived;
         self.write_session_index(&data)?;
-        self.write_current(channel, &SessionData::empty())
+        self.write_current(&SessionData::empty())
     }
 
     fn rebuild_index(
@@ -927,11 +1227,10 @@ impl SessionStore for FileSessionStore {
         FileSessionStore::rebuild_index(self, on_progress)
     }
 
-    fn list_sessions(&self, channel: &str) -> Result<Vec<SessionMeta>> {
+    fn list_sessions(&self) -> Result<Vec<SessionMeta>> {
         let mut out = Vec::new();
         let history = self.history_dir();
         if history.is_dir() {
-            let prefix = format!("{channel}_");
             for entry in
                 std::fs::read_dir(&history).with_context(|| "读取 history 目录失败")?
             {
@@ -942,10 +1241,8 @@ impl SessionStore for FileSessionStore {
                 let index = dir.join("index.json");
                 if index.is_file() {
                     if let Ok(data) = self.read_session_file(&index) {
-                        // 统一遍历 history：active + archived 都在此存档，仅过滤当前 channel
-                        if data.id.starts_with(&prefix) {
-                            out.push(meta_from(&data));
-                        }
+                        // 统一会话：所有来源共用一个列表，不再按 channel 前缀过滤
+                        out.push(meta_from(&data));
                     }
                 }
             }
@@ -955,7 +1252,7 @@ impl SessionStore for FileSessionStore {
         Ok(out)
     }
 
-    async fn switch_session(&self, channel: &str, id: &str) -> Result<SessionData> {
+    async fn switch_session(&self, id: &str) -> Result<SessionData> {
         // ① 目标会话必须存在（archived index）
         let src = self.history_dir().join(id).join("index.json");
         if !src.is_file() {
@@ -963,7 +1260,7 @@ impl SessionStore for FileSessionStore {
         }
 
         // 已是当前会话则直接返回（防御性，前端已拦截）
-        let current = self.read_current(channel)?;
+        let current = self.read_current()?;
         if current.id == id {
             return Ok(current);
         }
@@ -972,13 +1269,13 @@ impl SessionStore for FileSessionStore {
 
         // ② 归档当前（若非空）
         if current.status == SessionStatus::Active && !current.id.is_empty() {
-            self.save_current_session(channel).await?;
+            self.save_current_session().await?;
         }
 
         // ③ 目标 status 改 active：写回 history index（存档备份，可容错回档）+ 写 current（进行中）
         target.status = SessionStatus::Active;
         self.write_session_index(&target)?;
-        self.write_current(channel, &target)?;
+        self.write_current(&target)?;
         Ok(target)
     }
 
@@ -1023,12 +1320,11 @@ impl SessionStore for FileSessionStore {
 
     fn read_tool_artifact(
         &self,
-        channel: &str,
         artifact_id: &str,
         offset: usize,
         limit: usize,
     ) -> Result<ArtifactRead> {
-        let data = self.read_current(channel)?;
+        let data = self.read_current()?;
         if data.id.is_empty() {
             anyhow::bail!("当前没有进行中的会话");
         }
@@ -1077,7 +1373,7 @@ impl SessionStore for FileSessionStore {
         Ok(())
     }
 
-    fn rename_session(&self, channel: &str, id: &str, title: &str) -> Result<()> {
+    fn rename_session(&self, id: &str, title: &str) -> Result<()> {
         let title = title.trim().to_string();
         if title.is_empty() {
             return Err(anyhow::anyhow!("标题不能为空"));
@@ -1093,11 +1389,11 @@ impl SessionStore for FileSessionStore {
         self.write_session_index(&data)?;
 
         // ② active 会话：同步 current（进行中副本）
-        let current = self.read_current(channel)?;
+        let current = self.read_current()?;
         if current.id == id {
             let mut c = current;
             c.title = title;
-            self.write_current(channel, &c)?;
+            self.write_current(&c)?;
         }
         Ok(())
     }
@@ -1252,6 +1548,16 @@ fn merge_rolling_chunk(
         source_message_ids: Vec::new(),
         time_range,
         token_count,
+    }
+}
+
+/// 一轮消息的排序时间（取首条消息的 time）
+fn turn_time(group: &[Message]) -> &str {
+    match group.first() {
+        Some(Message::User { time, .. })
+        | Some(Message::Assistant { time, .. })
+        | Some(Message::Tool { time, .. }) => time,
+        None => "",
     }
 }
 
