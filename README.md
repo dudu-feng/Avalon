@@ -4,7 +4,7 @@
 
 A lightweight personal intelligent assistant focused on individuals, humanized, low-threshold, and interaction-friendly.
 
-![Version](https://img.shields.io/badge/version-0.7.2-blue)
+![Version](https://img.shields.io/badge/version-0.7.6-blue)
 ![Tauri](https://img.shields.io/badge/Tauri-2-orange)
 ![React](https://img.shields.io/badge/React-19-61dafb)
 ![Rust](https://img.shields.io/badge/Rust-1.7x-dea584)
@@ -136,7 +136,7 @@ cd Avalon-tauri
 npx tauri build
 ```
 
-产物：`src-tauri/target/release/bundle/nsis/Avalon_0.7.2_x64-setup.exe`（Windows 安装包，双击安装，默认装到当前用户目录，无需管理员权限）。
+产物：`src-tauri/target/release/bundle/nsis/Avalon_0.7.6_x64-setup.exe`（Windows 安装包，双击安装，默认装到当前用户目录，无需管理员权限）。
 
 安装包统一发布在 [GitHub Releases](https://github.com/dudu-feng/Avalon/releases)，仓库不再跟踪 `exe_list/`；每个版本的发布说明归档在 `release-notes/`，新增版本时先写说明再打 tag 发布。
 
