@@ -306,7 +306,6 @@ pub fn run() {
             commands::analyze_image,
             commands::get_thumbnail,
             commands::get_thumbnail_data_url,
-            commands::llm_compress,
             commands::chat,
             commands::stop_chat,
             commands::active_runs,

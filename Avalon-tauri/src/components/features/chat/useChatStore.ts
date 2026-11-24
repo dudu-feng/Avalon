@@ -17,7 +17,9 @@ import type {
   MessageSource,
   SessionEventPayload,
   SessionMeta,
+  TokenUsage,
 } from '../../../types/chat';
+import * as streamPerf from '../../../lib/streamPerf';
 import {
   chat,
   compressSession,
@@ -92,105 +94,151 @@ function lastIndexByRole(messages: ChatMessage[], role: ChatMessage['role']): nu
   return -1;
 }
 
-/** 新建一条空的 streaming assistant 气泡（首轮由 send 预创建，后续轮由 round_start 触发） */
-function newAssistant(id: string): ChatMessage {
-  return { id, role: 'assistant', status: 'streaming', thought: '', content: '' };
+/** 新建一个空的流式气泡（首轮由 send 预创建，后续轮由 round_start 触发） */
+function newStream(id: string, source: MessageSource): StreamState {
+  return { id, content: '', thought: '', source };
 }
 
-/** 事件 → 新消息数组（纯函数，供消息列表函数式更新） */
-function applyEvent(prev: ChatMessage[], ev: EngineEvent, newId: () => string): ChatMessage[] {
-  // 轮次边界：封口上一轮 assistant、开新气泡（第一轮复用 send 预创建的空气泡）
-  if (ev.type === 'round_start') {
-    const idx = lastIndexByRole(prev, 'assistant');
-    if (idx < 0) return prev;
-    const current = prev[idx] as AssistantMessage;
-    const isEmpty = !current.thought && !current.content;
-    if (isEmpty) return prev;
-    const copy = [...prev];
-    copy[idx] = { ...current, status: 'done' };
-    return [...copy, newAssistant(newId())];
+/** 流式内容 → 提交后的 assistant 消息（done / error 时沿用同一个 id） */
+function streamToMessage(
+  stream: StreamState,
+  patch: { status?: 'done' | 'error'; content?: string; error?: string; usage?: TokenUsage },
+): AssistantMessage {
+  return {
+    id: stream.id,
+    role: 'assistant',
+    status: patch.status ?? 'done',
+    thought: stream.thought,
+    content: patch.content ?? stream.content,
+    error: patch.error,
+    tokenUsage: patch.usage,
+  };
+}
+
+/** 事件路由：增量只改 streaming；轮次边界 / 工具 / 压缩事件才写 messages。 */
+function applyEvent(store: ChatStore, ev: EngineEvent, source: MessageSource) {
+  const st = store.state;
+
+  // 增量：只替换流式对象，messages / ui 引用保持不变
+  if (ev.type === 'message_delta' || ev.type === 'thought_delta') {
+    const stream = st.streaming;
+    if (!stream) return;
+    const next: StreamState =
+      ev.type === 'message_delta'
+        ? { ...stream, content: stream.content + ev.delta }
+        : { ...stream, thought: stream.thought + ev.delta };
+    setState(store, { streaming: next });
+    return;
   }
 
-  // 工具发起：追加独立 tool 消息（running 状态，tool_result 再回填结果）
+  // 轮次边界：封口上一轮、开新气泡（第一轮复用 send 预创建的空气泡）
+  if (ev.type === 'round_start') {
+    const stream = st.streaming;
+    if (!stream) {
+      setState(store, { streaming: newStream(nextId(store), source) });
+      return;
+    }
+    if (!stream.content && !stream.thought) return;
+    setState(store, {
+      messages: [...st.messages, streamToMessage(stream, {})],
+      streaming: newStream(nextId(store), source),
+    });
+    return;
+  }
+
+  // 工具发起：先把当前轮 assistant 落成消息（保证 assistant → tool 的顺序），
+  // 再追加独立 tool 卡片；流式槽位留空，下一轮 round_start 再开新气泡。
   if (ev.type === 'tool_call') {
-    return [
-      ...prev,
-      {
-        id: newId(),
-        role: 'tool',
-        tool: { id: ev.id, toolName: ev.tool_name, arguments: ev.arguments, status: 'running' },
-      },
-    ];
+    const stream = st.streaming;
+    // 只有本轮真的产出了思考 / 正文才落成 assistant 消息；空气泡直接丢弃，
+    // 否则时间线里会多出一条没有任何内容的 assistant 气泡
+    const hasContent = !!stream && (!!stream.content || !!stream.thought);
+    const messages = stream && hasContent
+      ? [...st.messages, streamToMessage(stream, {})]
+      : st.messages;
+    setState(store, {
+      messages: [
+        ...messages,
+        {
+          id: nextId(store),
+          role: 'tool',
+          tool: { id: ev.id, toolName: ev.tool_name, arguments: ev.arguments, status: 'running' },
+        },
+      ],
+      streaming: null,
+    });
+    return;
   }
 
   // 工具结果：更新最后一条 tool 消息的状态与结果
   if (ev.type === 'tool_result') {
-    const idx = lastIndexByRole(prev, 'tool');
-    if (idx < 0) return prev;
-    const copy = [...prev];
+    const idx = lastIndexByRole(st.messages, 'tool');
+    if (idx < 0) return;
+    const copy = [...st.messages];
     const current = copy[idx] as ToolMessage;
     copy[idx] = {
       ...current,
       tool: { ...current.tool, result: ev.result, status: ev.success ? 'success' : 'error' },
     };
-    return copy;
+    setState(store, { messages: copy });
+    return;
   }
 
   // 压缩开始：追加独立提示气泡（running），compress_done 再回填完成/失败
   if (ev.type === 'compress_start') {
-    return [...prev, { id: newId(), role: 'compress', status: 'running' }];
+    setState(store, {
+      messages: [...st.messages, { id: nextId(store), role: 'compress', status: 'running' }],
+    });
+    return;
   }
 
   // 压缩结束：更新最后一条 compress 气泡的状态与错误信息
   if (ev.type === 'compress_done') {
-    const idx = lastIndexByRole(prev, 'compress');
-    if (idx < 0) return prev;
-    const copy = [...prev];
+    const idx = lastIndexByRole(st.messages, 'compress');
+    if (idx < 0) return;
+    const copy = [...st.messages];
     const current = copy[idx] as CompressMessage;
     copy[idx] = {
       ...current,
       status: ev.success ? 'done' : 'error',
       error: ev.error ?? undefined,
     };
-    return copy;
+    setState(store, { messages: copy });
+    return;
   }
 
-  // 其余事件作用于最后一条 assistant
-  const idx = lastIndexByRole(prev, 'assistant');
-  if (idx < 0) return prev;
-
-  const current = prev[idx] as AssistantMessage;
-  let next: AssistantMessage = current;
-
-  switch (ev.type) {
-    case 'thought_delta':
-      next = { ...current, thought: current.thought + ev.delta };
-      break;
-    case 'message_delta':
-      next = { ...current, content: current.content + ev.delta };
-      break;
-    case 'done':
-      next = {
-        ...current,
-        status: 'done',
-        tokenUsage: ev.result.usage,
-        content: ev.result.message || current.content,
-      };
-      break;
-    case 'error':
-      next = { ...current, error: ev.message };
-      break;
-    default:
-      return prev;
+  if (ev.type === 'done') {
+    const stream = st.streaming ?? newStream(nextId(store), source);
+    const message = streamToMessage(stream, {
+      content: ev.result.message || stream.content,
+      usage: ev.result.usage,
+    });
+    setState(store, { messages: [...st.messages, message], streaming: null });
+    return;
   }
 
-  const copy = [...prev];
-  copy[idx] = next;
-  return copy;
+  if (ev.type === 'error') {
+    const stream = st.streaming ?? newStream(nextId(store), source);
+    const message = streamToMessage(stream, { status: 'error', error: ev.message });
+    setState(store, { messages: [...st.messages, message], streaming: null });
+  }
+}
+
+/** 正在生成的 assistant 内容。与已提交的 messages 分开存放：
+ *  增量只替换这个对象，消息列表 / 工具栏 / 输入框的引用保持不变，不参与重渲染。 */
+export interface StreamState {
+  /** 与提交后的消息 id 一致，done / error 时直接沿用 */
+  id: string;
+  content: string;
+  thought: string;
+  source: MessageSource;
 }
 
 export interface ChatState {
+  /** 已提交消息（低频）：只在轮次边界 / 工具事件 / 压缩提示时变化 */
   messages: ChatMessage[];
+  /** 正在流式生成的内容（高频）：每次增量只替换它 */
+  streaming: StreamState | null;
   isBusy: boolean;
   compressing: boolean;
   contextUsage: ContextUsage | null;
@@ -210,8 +258,47 @@ export interface ChatState {
   activeSource: MessageSource | null;
 }
 
+/** UI 切片字段：这些字段低频变化，合并成一个稳定对象供 useChatUi 订阅 */
+const UI_KEYS = [
+  'isBusy',
+  'compressing',
+  'contextUsage',
+  'initialLoading',
+  'resetting',
+  'switching',
+  'sessions',
+  'sessionsLoading',
+  'earliestChunk',
+  'hasEarlier',
+  'loadingEarlier',
+  'activeId',
+  'activeSource',
+] as const;
+
+export type ChatUiState = Pick<ChatState, (typeof UI_KEYS)[number]>;
+
+function toUiSnapshot(state: ChatState): ChatUiState {
+  return {
+    isBusy: state.isBusy,
+    compressing: state.compressing,
+    contextUsage: state.contextUsage,
+    initialLoading: state.initialLoading,
+    resetting: state.resetting,
+    switching: state.switching,
+    sessions: state.sessions,
+    sessionsLoading: state.sessionsLoading,
+    earliestChunk: state.earliestChunk,
+    hasEarlier: state.hasEarlier,
+    loadingEarlier: state.loadingEarlier,
+    activeId: state.activeId,
+    activeSource: state.activeSource,
+  };
+}
+
 export interface ChatStore {
   state: ChatState;
+  /** UI 切片的缓存快照：只有 UI_KEYS 变化时才重建，增量更新不会让它换引用 */
+  uiSnapshot: ChatUiState;
   /** 当前正在执行的桌面 run_id（stop 时定位；后台来源不占用这个槽位） */
   currentRunId: string;
   listeners: Set<() => void>;
@@ -226,10 +313,14 @@ export interface ChatStore {
   stopRequested: boolean;
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => ChatState;
+  getMessagesSnapshot: () => ChatMessage[];
+  getStreamingSnapshot: () => StreamState | null;
+  getUiSnapshot: () => ChatUiState;
 }
 
 const INITIAL_STATE: ChatState = {
   messages: [],
+  streaming: null,
   isBusy: false,
   compressing: false,
   contextUsage: null,
@@ -249,6 +340,7 @@ function createStore(): ChatStore {
   const listeners = new Set<() => void>();
   const store: ChatStore = {
     state: INITIAL_STATE,
+    uiSnapshot: toUiSnapshot(INITIAL_STATE),
     currentRunId: '',
     listeners,
     initStarted: false,
@@ -267,6 +359,15 @@ function createStore(): ChatStore {
     getSnapshot() {
       return store.state;
     },
+    getMessagesSnapshot() {
+      return store.state.messages;
+    },
+    getStreamingSnapshot() {
+      return store.state.streaming;
+    },
+    getUiSnapshot() {
+      return store.uiSnapshot;
+    },
   };
   return store;
 }
@@ -284,8 +385,16 @@ function setState(
   store: ChatStore,
   patch: Partial<ChatState> | ((prev: ChatState) => Partial<ChatState>),
 ) {
-  const next = typeof patch === 'function' ? patch(store.state) : patch;
-  store.state = { ...store.state, ...next };
+  const prev = store.state;
+  const next = typeof patch === 'function' ? patch(prev) : patch;
+  const merged = { ...prev, ...next };
+
+  // UI 切片只在相关字段变化时重建引用：增量更新只换 streaming，不会惊动 useChatUi
+  if (UI_KEYS.some((key) => merged[key] !== prev[key])) {
+    store.uiSnapshot = toUiSnapshot(merged);
+  }
+
+  store.state = merged;
   store.listeners.forEach((l) => l());
 }
 
@@ -296,13 +405,6 @@ function setSessions(store: ChatStore, sessions: SessionMeta[]) {
     activeId: sessions.find((s) => s.status === 'active')?.id ?? '',
     sessionsLoading: false,
   });
-}
-
-/** 流式高频路径专用：applyEvent 未改变数组时跳过通知（round_start 复用空气泡、未知事件会走这条） */
-function updateMessages(store: ChatStore, updater: (prev: ChatMessage[]) => ChatMessage[]) {
-  const next = updater(store.state.messages);
-  if (next === store.state.messages) return;
-  setState(store, { messages: next });
 }
 
 /** 消息 id：桶内自增。唯一性只需在一个消息列表内成立，
@@ -324,7 +426,7 @@ function nextId(store: ChatStore): string {
 const STREAM_FLUSH_MS = 60;
 
 let desktopStream: { epoch: number; events: EngineEvent[] } | null = null;
-let bgStream: { runId: string; events: EngineEvent[] } | null = null;
+let bgStream: { runId: string; source: MessageSource; events: EngineEvent[] } | null = null;
 let streamTimer: number | undefined;
 
 /** 合并相邻同类增量：一次 setState 只做一次字符串拼接，减少中间态分配 */
@@ -357,15 +459,23 @@ function flushStreams() {
   // 会话已切换 / 用户已停止：缓冲内容属于作废轮次，直接丢弃
   if (desktop && desktop.epoch === store.epoch && !store.stopRequested) {
     const events = coalesceStreamEvents(desktop.events);
-    updateMessages(store, (prev) =>
-      events.reduce((acc, ev) => applyEvent(acc, ev, () => nextId(store)), prev),
-    );
+    const started = streamPerf.streamPerfEnabled ? performance.now() : 0;
+    for (const ev of events) {
+      applyEvent(store, ev, 'desktop');
+    }
+    if (streamPerf.streamPerfEnabled) {
+      streamPerf.noteFlush(performance.now() - started, events.length);
+    }
   }
   if (background) {
     const events = coalesceStreamEvents(background.events);
-    updateMessages(store, (prev) =>
-      events.reduce((acc, ev) => applyEvent(acc, ev, () => nextId(store)), prev),
-    );
+    const started = streamPerf.streamPerfEnabled ? performance.now() : 0;
+    for (const ev of events) {
+      applyEvent(store, ev, background.source);
+    }
+    if (streamPerf.streamPerfEnabled) {
+      streamPerf.noteFlush(performance.now() - started, events.length);
+    }
   }
 }
 
@@ -378,6 +488,7 @@ function scheduleStreamFlush() {
 function enqueueDesktopEvent(store: ChatStore, epoch: number, ev: EngineEvent) {
   if (store.stopRequested || store.epoch !== epoch) return;
   if (ev.type === 'message_delta' || ev.type === 'thought_delta') {
+    streamPerf.noteDeltaReceived();
     if (!desktopStream || desktopStream.epoch !== epoch) {
       desktopStream = { epoch, events: [] };
     }
@@ -386,7 +497,7 @@ function enqueueDesktopEvent(store: ChatStore, epoch: number, ev: EngineEvent) {
     return;
   }
   flushStreams();
-  updateMessages(store, (prev) => applyEvent(prev, ev, () => nextId(store)));
+  applyEvent(store, ev, 'desktop');
 }
 
 /** 桌面 run_id：优先 crypto.randomUUID，旧 WebView 回退时间戳 + 自增。 */
@@ -429,7 +540,8 @@ async function runInit(store: ChatStore) {
       messages = [...mapHistoryMessages(hist.messages, String(hist.chunk ?? 'cur')), ...base];
     }
     if (epoch === store.epoch) {
-      setState(store, { messages, earliestChunk, hasEarlier });
+      // 用后端权威历史整份替换时，任何未提交的流式内容都作废（停止 / 回填场景）
+      setState(store, { messages, streaming: null, earliestChunk, hasEarlier });
     } else {
       // 期间用户已发消息 / 切了会话：不覆盖 messages，只补游标（否则会冲掉新列表）
       setState(store, { earliestChunk, hasEarlier });
@@ -467,7 +579,13 @@ export async function newSession(store: ChatStore) {
   const st = store.state;
   if (st.isBusy || st.resetting || st.switching) return;
   ++store.epoch; // 整体替换消息列表，作废在飞的 init 写入
-  setState(store, { resetting: true, messages: [], earliestChunk: null, hasEarlier: false });
+  setState(store, {
+    resetting: true,
+    messages: [],
+    streaming: null,
+    earliestChunk: null,
+    hasEarlier: false,
+  });
   try {
     await createSession();
     await refreshSessions(store);
@@ -492,6 +610,7 @@ export async function switchSession(store: ChatStore, id: string) {
       earliestChunk: hist.chunk,
       hasEarlier: hist.has_earlier,
       messages: mapHistoryMessages(hist.messages, String(hist.chunk ?? 'cur')),
+      streaming: null,
     });
     await refreshSessions(store);
     void refreshUsage(store);
@@ -585,6 +704,7 @@ export async function send(
   }
 
   store.stopRequested = false;
+  const perfToken = streamPerf.beginStreamRun('desktop');
 
   const userMsg: ChatMessage = {
     id: nextId(store),
@@ -602,7 +722,9 @@ export async function send(
   const runId = newRunId();
   store.currentRunId = runId;
   setState(store, {
-    messages: [...st.messages, userMsg, newAssistant(assistantId)],
+    messages: [...st.messages, userMsg],
+    // 空流式气泡先占位：后续增量只更新它，不再复制 messages 数组
+    streaming: newStream(assistantId, 'desktop'),
     isBusy: true,
   });
 
@@ -618,16 +740,28 @@ export async function send(
       },
     );
   } catch (error) {
-    updateMessages(store, (prev) =>
-      prev.map((m) =>
-        m.id === assistantId && m.role === 'assistant'
-          ? { ...m, status: 'error', error: String(error) }
-          : m,
-      ),
-    );
+    // 命令本身失败（还没走到事件流）：把当前流式内容落成错误气泡
+    const stream = store.state.streaming;
+    if (stream) {
+      setState(store, {
+        messages: [
+          ...store.state.messages,
+          streamToMessage(stream, { status: 'error', error: String(error) }),
+        ],
+        streaming: null,
+      });
+    }
   } finally {
     // 收尾前把缓冲里的增量落进状态；已停止的轮次会在 flushStreams 内被丢弃
     flushStreams();
+    // 后端正常收尾一定会发 done；没收到时把已有内容落成普通消息，避免光标一直闪
+    if (!store.stopRequested && store.state.streaming) {
+      const stream = store.state.streaming;
+      setState(store, {
+        messages: [...store.state.messages, streamToMessage(stream, {})],
+        streaming: null,
+      });
+    }
     if (store.stopRequested) {
       store.stopRequested = false;
       // 后端不保存中断轮次；重拉当前会话，避免 UI 继续显示已丢弃的消息。
@@ -637,6 +771,10 @@ export async function send(
     setState(store, { isBusy: false });
     void refreshUsage(store);
     flushStaleRefresh();
+    // 等最后一帧绘制完再输出 summary（dev-only）
+    if (streamPerf.streamPerfEnabled) {
+      window.setTimeout(() => streamPerf.endStreamRun(perfToken), 0);
+    }
   }
 }
 
@@ -680,25 +818,31 @@ async function refreshFromServer() {
 
 /** 当前正在实时渲染的后台 run（飞书 / QQ / 任务） */
 let bgRunId = '';
+let bgPerfToken = 0;
 
 /** 后台来源的流式事件：以 run_id 归组追加到同一时间线；结束时从后端回填权威历史 */
 function applyBackgroundEvent(payload: SessionEventPayload) {
   const { run_id: runId, event } = payload;
-  // 新 run 先开一条空的 assistant 气泡，避免事件串进桌面轮次的气泡
+  // 新 run 先占一个流式槽位，避免事件串进桌面轮次的气泡
   if (runId !== bgRunId) {
     flushStreams(); // 上一轮（若有）残余增量先落进时间线
+    ++store.epoch; // 作废在飞的 runInit：它拿到的是上一轮结束时的历史，不能冲掉本轮流式内容
     bgRunId = runId;
-    const id = nextId(store);
+    bgPerfToken = streamPerf.beginStreamRun(payload.origin.source);
+    const stale = store.state.streaming;
     setState(store, {
-      messages: [...store.state.messages, newAssistant(id)],
+      // 单写者前提下一般不会有残留；存在时属于上一轮未收尾的内容，先落成消息
+      messages: stale ? [...store.state.messages, streamToMessage(stale, {})] : store.state.messages,
+      streaming: newStream(nextId(store), payload.origin.source),
       activeSource: payload.origin.source,
     });
   }
 
   // 与桌面流共用合帧策略：增量先进缓冲，done / error / 工具事件立即冲刷
   if (event.type === 'message_delta' || event.type === 'thought_delta') {
+    streamPerf.noteDeltaReceived();
     if (!bgStream || bgStream.runId !== runId) {
-      bgStream = { runId, events: [] };
+      bgStream = { runId, source: payload.origin.source, events: [] };
     }
     bgStream.events.push(event);
     scheduleStreamFlush();
@@ -706,11 +850,14 @@ function applyBackgroundEvent(payload: SessionEventPayload) {
   }
 
   flushStreams();
-  updateMessages(store, (prev) => applyEvent(prev, event, () => nextId(store)));
+  applyEvent(store, event, payload.origin.source);
 
   if (event.type === 'done' || event.type === 'error') {
     bgRunId = '';
     setState(store, { activeSource: null });
+    if (streamPerf.streamPerfEnabled) {
+      window.setTimeout(() => streamPerf.endStreamRun(bgPerfToken), 0);
+    }
     void refreshFromServer();
   }
 }

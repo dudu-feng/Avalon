@@ -5,7 +5,7 @@
 // 用 useSyncExternalStore 做成模块级单例 store——所有 MarkdownContent 实例
 // 读同一个值、任一处切换即全局同步，无需在组件树挂 Provider。
 
-import { useSyncExternalStore } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import type { ThemeMode } from '../types';
 
 const STORAGE_KEY = 'avalon-code-theme';
@@ -39,11 +39,13 @@ function getSnapshot(): ThemeMode {
 export function useCodeTheme() {
   const codeTheme = useSyncExternalStore(subscribe, getSnapshot);
 
-  const cycle = () => {
+  // 引用稳定：MarkdownContent 用它作为 components memo 的依赖，每次渲染换新函数会让
+  // 代码块组件在流式期间被反复重建。
+  const cycle = useCallback(() => {
     current = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length];
     localStorage.setItem(STORAGE_KEY, current);
     emit();
-  };
+  }, []);
 
   return { codeTheme, cycle };
 }

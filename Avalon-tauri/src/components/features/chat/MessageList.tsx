@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ChatMessage } from '../../../types/chat';
 import { MessageBubble } from './MessageBubble';
+import { StreamingBubble } from './StreamingBubble';
 import { ScrollArea, Skeleton } from '../../ui';
 import styles from './MessageList.module.css';
 
@@ -24,6 +25,10 @@ export interface MessageListProps {
   loadingEarlier?: boolean;
   /** 主动加载更早一块 */
   onLoadEarlier?: () => void;
+  /** 是否在列表末尾渲染实时流式气泡（只有主对话页需要；任务历史等静态视图不订阅高频状态） */
+  withStreaming?: boolean;
+  /** 当前来源筛选是否包含流式消息 */
+  streamingVisible?: boolean;
 }
 
 export function MessageList({
@@ -33,6 +38,8 @@ export function MessageList({
   hasEarlier = false,
   loadingEarlier = false,
   onLoadEarlier,
+  withStreaming = false,
+  streamingVisible = true,
 }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -54,34 +61,67 @@ export function MessageList({
   }, []);
 
   // 是否接近底部（用于对话更新时决定是否跟随滚动，避免打断用户上滚阅读）
-  const nearBottom = () => {
+  const nearBottom = useCallback(() => {
     const vp = viewportRef.current;
     if (!vp) return true;
     return vp.scrollHeight - vp.scrollTop - vp.clientHeight < 120;
-  };
+  }, []);
 
-  // 会话切换（resetKey 变化）：重置初始化标志，令下方 useLayoutEffect 重新 instant 定位到底
+  // 内容是否真的超出视口：内容短于视口时 scrollTop 恒为 0，
+  // 不能把「在顶部」当成可加载信号，否则 armed 提示条会永久停留。
+  const canScroll = useCallback(() => {
+    const vp = viewportRef.current;
+    return !!vp && vp.scrollHeight > vp.clientHeight + 1;
+  }, []);
+
+  // 流式气泡的存在性（每轮才变一次）；内容增长不走列表 state，避免每次增量重渲染整列
+  const [streamPresent, setStreamPresent] = useState(false);
+  const handleStreamPresence = useCallback((present: boolean) => setStreamPresent(present), []);
+
+  // 流式内容增长：流式气泡自己触发，而不是让列表订阅高频状态
+  const handleStreamGrow = useCallback(() => {
+    if (!initializedRef.current) return;
+    if (nearBottom()) {
+      endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    }
+  }, [nearBottom]);
+
+  // 复位滚轮缓冲状态（ref + state 同步改，避免事件回调读到旧值）
+  const resetPull = useCallback(() => {
+    window.clearTimeout(settleTimerRef.current);
+    pullRef.current = 0;
+    modeRef.current = 'idle';
+    setPullDistance(0);
+    setMode('idle');
+  }, []);
+
+  // 会话切换（resetKey 变化）：重置初始化标志，令下方 useLayoutEffect 重新 instant 定位到底；
+  // 同时撤掉上一会话可能残留的「加载更早」提示条。
   useLayoutEffect(() => {
     if (resetKey !== undefined) initializedRef.current = false;
-  }, [resetKey]);
+    resetPull();
+  }, [resetKey, resetPull]);
+
+  // 没有更早内容时，任何残留的 armed / loading 提示条都应立即消失
+  useEffect(() => {
+    if (!hasEarlier) resetPull();
+  }, [hasEarlier, resetPull]);
 
   // 首次加载历史：在绘制前 instant 定位到底，消除「先渲染顶部再滚到底」的闪烁与慢滚动
   useLayoutEffect(() => {
-    if (initializedRef.current || messages.length === 0) return;
+    if (initializedRef.current || (messages.length === 0 && !streamPresent)) return;
     endRef.current?.scrollIntoView({ block: 'end' });
     initializedRef.current = true;
-  }, [messages]);
+  }, [messages, streamPresent]);
 
-  // 对话更新：仅当用户接近底部时才跟随（上滚阅读历史时保持原位）。
-  // 流式生成期间用 auto：每个增量都启动一次 smooth 动画会持续占用主线程，
-  // 而且动画还没结束就被下一次打断，观感反而更卡。
-  const streaming = messages.some((m) => m.role === 'assistant' && m.status === 'streaming');
+  // 提交消息更新：仅当用户接近底部时才跟随（上滚阅读历史时保持原位）。
+  // 流式增量不走这里（由 StreamingBubble 的 onGrow 处理），用 auto 避免动画重启。
   useEffect(() => {
     if (!initializedRef.current) return;
     if (nearBottom()) {
-      endRef.current?.scrollIntoView({ behavior: streaming ? 'auto' : 'smooth', block: 'end' });
+      endRef.current?.scrollIntoView({ behavior: streamPresent ? 'auto' : 'smooth', block: 'end' });
     }
-  }, [messages, streaming]);
+  }, [messages, streamPresent, nearBottom]);
 
   // 滚轮缓冲触发：到顶后继续上滑累积缓冲，超阈值主动加载更早一块
   useEffect(() => {
@@ -103,7 +143,8 @@ export function MessageList({
         setPull(LOADING_HEIGHT, 'loading');
         onLoadEarlier?.();
       } else {
-        setPull(0, 'armed');
+        // 视口本来就装得下内容时，回弹后直接隐藏：没有「停在顶部」的滚动意义
+        setPull(0, canScroll() ? 'armed' : 'idle');
       }
     };
 
@@ -126,8 +167,13 @@ export function MessageList({
 
     const onScroll = () => {
       if (atTop()) {
-        if (hasEarlier && !loadingEarlier && modeRef.current !== 'loading') {
+        if (modeRef.current === 'loading') return;
+        if (modeRef.current === 'pulling') return; // 上滑过程中不打断
+        if (hasEarlier && !loadingEarlier && canScroll()) {
           setPull(0, 'armed');
+        } else if (modeRef.current === 'armed') {
+          // 已无可加载内容 / 内容装得下视口：撤掉停在顶部的提示条
+          setPull(0, 'idle');
         }
       } else if (modeRef.current !== 'idle') {
         // 离开顶部：回 idle，缓冲清零
@@ -159,10 +205,16 @@ export function MessageList({
     } else if (wasLoading && !loadingEarlier) {
       // 加载完成：把 scrollTop 加上新增高度，视口保持在原消息位置
       vp.scrollTop += vp.scrollHeight - prevScrollHeightRef.current;
-      setMode('idle');
+      window.clearTimeout(settleTimerRef.current);
+      pullRef.current = 0;
       setPullDistance(0);
+      // 仍停在顶部且还能滚动 / 还有更早块时才回到 armed，否则彻底隐藏
+      const stillArmed =
+        hasEarlier && vp.scrollTop <= 0 && vp.scrollHeight > vp.clientHeight + 1;
+      modeRef.current = stillArmed ? 'armed' : 'idle';
+      setMode(modeRef.current);
     }
-  }, [loadingEarlier, messages]);
+  }, [loadingEarlier, messages, hasEarlier]);
 
   if (loading) {
     return (
@@ -183,7 +235,7 @@ export function MessageList({
     );
   }
 
-  if (messages.length === 0) {
+  if (messages.length === 0 && !streamPresent) {
     return (
       <div className={styles.empty}>
         <p className={styles.emptyTitle}>开始和 Avalon 对话</p>
@@ -202,6 +254,13 @@ export function MessageList({
         {messages.map((m) => (
           <MessageBubble key={m.id} message={m} />
         ))}
+        {withStreaming && (
+          <StreamingBubble
+            visible={streamingVisible}
+            onGrow={handleStreamGrow}
+            onPresenceChange={handleStreamPresence}
+          />
+        )}
         <div ref={endRef} />
       </ScrollArea>
 

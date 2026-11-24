@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useChat, MessageList, ChatInput, SessionList } from '../../components/features/chat';
+import {
+  useChatActions,
+  useChatMessages,
+  useChatUi,
+  MessageList,
+  ChatInput,
+  SessionList,
+} from '../../components/features/chat';
 import { Button, Drawer } from '../../components/ui';
 import { visionStatus } from '../../lib/fileApi';
 import { getConfig, setActiveModel } from '../../lib/settingsApi';
@@ -43,27 +50,35 @@ function filterBySource(messages: ChatMessage[], filter: SourceFilter): ChatMess
 }
 
 export function ChatPage() {
+  // 分片订阅：messages / ui 低频，流式增量不会让整页重渲染（由 MessageList 内部的
+  // StreamingBubble 单独订阅）；动作引用稳定，不随状态变化。
+  const messages = useChatMessages();
+  const ui = useChatUi();
   const {
-    messages,
-    isBusy,
-    compressing,
     send,
     newSession,
     stop,
     compressNow,
-    contextUsage,
-    loading,
-    sessions,
-    sessionsLoading,
-    activeId,
     switchSession,
     deleteSession,
     renameSession,
+    loadEarlier,
+  } = useChatActions();
+  const {
+    isBusy,
+    compressing,
+    contextUsage,
+    initialLoading,
+    resetting,
+    switching,
+    sessions,
+    sessionsLoading,
+    activeId,
     hasEarlier,
     loadingEarlier,
-    loadEarlier,
     activeSource,
-  } = useChat();
+  } = ui;
+  const loading = initialLoading || resetting || switching;
   // 有执行中 / 排队中的轮次时禁止会话控制操作（后端同样会拒绝）
   const sessionBusy = isBusy || activeSource !== null;
   const [models, setModels] = useState<ModelConfig[]>([]);
@@ -77,6 +92,10 @@ export function ChatPage() {
     () => filterBySource(messages, sourceFilter),
     [messages, sourceFilter],
   );
+  // 流式气泡按同一来源筛选规则显示：桌面轮次用 isBusy 表示，后台轮次用 activeSource
+  const liveSource: MessageSource | null = isBusy ? 'desktop' : activeSource;
+  const streamingVisible =
+    sourceFilter === 'all' || liveSource === null || sourceFilter === liveSource;
 
   // 模型能力开了、但视觉总开关没开：输入框给出提示，避免以为图片入口坏了
   const activeSupportsVision = models.some(
@@ -164,6 +183,8 @@ export function ChatPage() {
           hasEarlier={hasEarlier}
           loadingEarlier={loadingEarlier}
           onLoadEarlier={loadEarlier}
+          withStreaming
+          streamingVisible={streamingVisible}
         />
         <ChatInput
           onSubmit={send}

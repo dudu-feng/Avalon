@@ -1,4 +1,10 @@
-export { useChat } from './useChat';
+export {
+  useChatActions,
+  useChatMessages,
+  useChatStreaming,
+  useChatUi,
+} from './useChat';
+export type { ChatUiState, StreamState } from './useChatStore';
 
 export { MessageList } from './MessageList';
 export type { MessageListProps } from './MessageList';

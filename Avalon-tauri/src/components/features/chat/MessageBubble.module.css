@@ -1,6 +1,9 @@
 .row {
   display: flex;
   flex-direction: column;
+  /* 把每条消息的布局 / 绘制限制在自身范围内：流式气泡增长时不会触发整列重排重绘。
+     不使用 content-visibility：气泡高度差异大，视口外占位尺寸估算会造成滚动跳动。 */
+  contain: layout paint;
 }
 
 .user {

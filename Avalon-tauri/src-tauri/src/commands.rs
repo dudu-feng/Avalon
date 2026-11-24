@@ -18,8 +18,7 @@ use crate::file::{
     CleanupReport, FileSource, FileStore, SaveRequest, StoredFile, MAX_FILE_BYTES,
     QUARANTINE_TTL_DAYS, TEMP_TTL_HOURS,
 };
-use crate::llm::{CompressResult, LlmState};
-use crate::prompt::{build_compress_prompt, PromptAssembler};
+use crate::prompt::PromptAssembler;
 use crate::scheduler::{
     parse_schedule, ScheduledTask, TaskNotifyChannel, TaskSource, TaskStore,
 };
@@ -222,28 +221,6 @@ pub async fn get_thumbnail_data_url(
         .thumbnail_data_url(&path)
         .await
         .map_err(|e| format!("{e:#}"))
-}
-
-// ============ LLM 调用 ============
-
-/// 会话压缩：非流式 JSON，返回 summary + keywords。
-#[tauri::command]
-pub async fn llm_compress(
-    session_data: String,
-    config: State<'_, ConfigStore>,
-    llm: State<'_, LlmState>,
-) -> Result<CompressResult, String> {
-    let cfg = config.get();
-    let model = cfg
-        .active_model_config()
-        .cloned()
-        .ok_or_else(|| "未配置活跃模型（active_model 无效）".to_string())?;
-    let client = llm.client(model, cfg.llm.clone());
-    let (system, user) = build_compress_prompt(&session_data);
-    client
-        .compress(&system, &user)
-        .await
-        .map_err(|e| e.to_string())
 }
 
 // ============ Engine 编排 ============
