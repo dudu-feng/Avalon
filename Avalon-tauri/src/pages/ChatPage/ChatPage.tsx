@@ -77,6 +77,7 @@ export function ChatPage() {
     hasEarlier,
     loadingEarlier,
     activeSource,
+    hasStreaming,
   } = ui;
   const loading = initialLoading || resetting || switching;
   // 有执行中 / 排队中的轮次时禁止会话控制操作（后端同样会拒绝）
@@ -96,6 +97,9 @@ export function ChatPage() {
   const liveSource: MessageSource | null = isBusy ? 'desktop' : activeSource;
   const streamingVisible =
     sourceFilter === 'all' || liveSource === null || sourceFilter === liveSource;
+  // 列表空态 / 滚动跟随需要知道「是否有一个可见的流式气泡」。
+  // 由 store 的存在性（低频布尔）+ 来源筛选推导，不能等气泡自己上报 —— 空列表里它压根不会挂载。
+  const streamPresent = hasStreaming && streamingVisible;
 
   // 模型能力开了、但视觉总开关没开：输入框给出提示，避免以为图片入口坏了
   const activeSupportsVision = models.some(
@@ -185,22 +189,29 @@ export function ChatPage() {
           onLoadEarlier={loadEarlier}
           withStreaming
           streamingVisible={streamingVisible}
+          streamPresent={streamPresent}
         />
-        <ChatInput
-          onSubmit={send}
-          onStop={stop}
-          isBusy={isBusy}
-          models={models}
-          activeModel={activeModel}
-          onModelChange={onModelChange}
-          contextUsage={contextUsage}
-          onCompress={compressNow}
-          compressing={compressing}
-          visionEnabled={visionEnabled}
-          visionCapableButDisabled={!visionEnabled && activeSupportsVision}
-          visionModel={models.find((m) => m.name === visionModel)?.modelname || visionModel}
-          confirmBeforeSend={confirmBeforeSend}
-        />
+        {sourceFilter === 'all' || sourceFilter === 'desktop' || isBusy ? (
+          <ChatInput
+            onSubmit={send}
+            onStop={stop}
+            isBusy={isBusy}
+            models={models}
+            activeModel={activeModel}
+            onModelChange={onModelChange}
+            contextUsage={contextUsage}
+            onCompress={compressNow}
+            compressing={compressing}
+            visionEnabled={visionEnabled}
+            visionCapableButDisabled={!visionEnabled && activeSupportsVision}
+            visionModel={models.find((m) => m.name === visionModel)?.modelname || visionModel}
+            confirmBeforeSend={confirmBeforeSend}
+          />
+        ) : (
+          <div className={styles.readonlyHint}>
+            仅查看{SOURCE_NAMES[sourceFilter]}历史消息；切回「全部」或「桌面」后可继续对话
+          </div>
+        )}
       </div>
 
       <Drawer

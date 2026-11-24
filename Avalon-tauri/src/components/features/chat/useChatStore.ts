@@ -112,6 +112,8 @@ function streamToMessage(
     content: patch.content ?? stream.content,
     error: patch.error,
     tokenUsage: patch.usage,
+    // 非桌面来源保留标记：done 提交后来源筛选 / 徽章不必等后端回填才正确
+    origin: stream.source === 'desktop' ? null : { source: stream.source },
   };
 }
 
@@ -275,7 +277,11 @@ const UI_KEYS = [
   'activeSource',
 ] as const;
 
-export type ChatUiState = Pick<ChatState, (typeof UI_KEYS)[number]>;
+export interface ChatUiState extends Pick<ChatState, (typeof UI_KEYS)[number]> {
+  /** 是否存在正在生成的流式气泡：只随「有/无」变化重建，不随增量变化。
+   *  供列表在消息为空时决定是否渲染流式气泡（不能靠气泡自己上报，否则空列表里永远不会挂载）。 */
+  hasStreaming: boolean;
+}
 
 function toUiSnapshot(state: ChatState): ChatUiState {
   return {
@@ -292,6 +298,7 @@ function toUiSnapshot(state: ChatState): ChatUiState {
     loadingEarlier: state.loadingEarlier,
     activeId: state.activeId,
     activeSource: state.activeSource,
+    hasStreaming: state.streaming !== null,
   };
 }
 
@@ -389,8 +396,10 @@ function setState(
   const next = typeof patch === 'function' ? patch(prev) : patch;
   const merged = { ...prev, ...next };
 
-  // UI 切片只在相关字段变化时重建引用：增量更新只换 streaming，不会惊动 useChatUi
-  if (UI_KEYS.some((key) => merged[key] !== prev[key])) {
+  // UI 切片只在相关字段变化时重建引用：增量更新只换 streaming，不会惊动 useChatUi。
+  // 流式气泡的「有/无」也是 UI 关注点，但比较的是存在性而非对象引用，增量不会触发重建。
+  const streamingPresenceChanged = (merged.streaming !== null) !== (prev.streaming !== null);
+  if (streamingPresenceChanged || UI_KEYS.some((key) => merged[key] !== prev[key])) {
     store.uiSnapshot = toUiSnapshot(merged);
   }
 

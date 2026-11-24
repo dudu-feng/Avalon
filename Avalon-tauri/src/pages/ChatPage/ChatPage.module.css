@@ -20,6 +20,17 @@
   gap: 8px;
 }
 
+/* 渠道历史只读提示：替代输入区域，避免误以为能在该渠道时间线里发消息 */
+.readonlyHint {
+  flex-shrink: 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--muted-foreground);
+  font: 400 12px/1.5 var(--font-sans);
+  text-align: center;
+}
+
 /* 会话历史入口（打开抽屉） */
 .menuToggle {
   display: inline-flex;

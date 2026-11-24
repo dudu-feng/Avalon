@@ -16,24 +16,11 @@ export interface StreamingBubbleProps {
   visible?: boolean;
   /** 内容增长 / 气泡首次出现时触发（MessageList 用于跟随滚动） */
   onGrow?: () => void;
-  /** 流式气泡出现 / 消失时通知列表（用于空态与滚动模式判断） */
-  onPresenceChange?: (present: boolean) => void;
 }
 
-export function StreamingBubble({
-  visible = true,
-  onGrow,
-  onPresenceChange,
-}: StreamingBubbleProps) {
+export function StreamingBubble({ visible = true, onGrow }: StreamingBubbleProps) {
   const streaming = useChatStreaming();
   const present = streaming !== null;
-  // 被来源筛选隐藏时，对列表而言等同于没有流式气泡（空态 / 滚动模式都按可见性判断）
-  const visiblePresent = present && visible;
-
-  // 存在性变化很低频（每轮或筛选切换一次），不会造成列表跟随增量重渲染
-  useEffect(() => {
-    onPresenceChange?.(visiblePresent);
-  }, [visiblePresent, onPresenceChange]);
 
   // 每次增量都会走到这里：只在用户本来就贴着底部时跟随
   const growth = streaming ? `${streaming.id}:${streaming.thought.length}:${streaming.content.length}` : '';

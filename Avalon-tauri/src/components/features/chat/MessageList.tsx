@@ -29,6 +29,9 @@ export interface MessageListProps {
   withStreaming?: boolean;
   /** 当前来源筛选是否包含流式消息 */
   streamingVisible?: boolean;
+  /** 是否存在可见的流式气泡（由外部按 store 存在性 + 来源筛选推导，低频）。
+   *  不能在列表内部等气泡上报：消息为空时气泡根本不会挂载。 */
+  streamPresent?: boolean;
 }
 
 export function MessageList({
@@ -40,6 +43,7 @@ export function MessageList({
   onLoadEarlier,
   withStreaming = false,
   streamingVisible = true,
+  streamPresent = false,
 }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -67,6 +71,13 @@ export function MessageList({
     return vp.scrollHeight - vp.scrollTop - vp.clientHeight < 120;
   }, []);
 
+  // 是否「粘」在底部：只由用户滚动事件维护。
+  // 不能在追加内容之后再测距 —— 新气泡先把 scrollHeight 撑大，测出来往往已超过阈值，
+  // 结果明明停在底部却不跟随；用追加前的 sticky 状态才能正确判断。
+  const stickToBottomRef = useRef(true);
+  // 上一次 scrollTop：用于区分「用户主动上滚」与「程序化滚到底 / 内容增长」
+  const lastScrollTopRef = useRef(0);
+
   // 内容是否真的超出视口：内容短于视口时 scrollTop 恒为 0，
   // 不能把「在顶部」当成可加载信号，否则 armed 提示条会永久停留。
   const canScroll = useCallback(() => {
@@ -74,17 +85,16 @@ export function MessageList({
     return !!vp && vp.scrollHeight > vp.clientHeight + 1;
   }, []);
 
-  // 流式气泡的存在性（每轮才变一次）；内容增长不走列表 state，避免每次增量重渲染整列
-  const [streamPresent, setStreamPresent] = useState(false);
-  const handleStreamPresence = useCallback((present: boolean) => setStreamPresent(present), []);
+  // 流式气泡的存在性由外部传入（低频），内容增长不走列表 state，避免每次增量重渲染整列
 
-  // 流式内容增长：流式气泡自己触发，而不是让列表订阅高频状态
+  // 流式内容增长：流式气泡自己触发，而不是让列表订阅高频状态。
+  // 判断用 sticky 状态：内容增长本身会把 scrollHeight 撑大，实时测距会误判成「用户上滚了」。
   const handleStreamGrow = useCallback(() => {
     if (!initializedRef.current) return;
-    if (nearBottom()) {
+    if (stickToBottomRef.current) {
       endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
     }
-  }, [nearBottom]);
+  }, []);
 
   // 复位滚轮缓冲状态（ref + state 同步改，避免事件回调读到旧值）
   const resetPull = useCallback(() => {
@@ -99,6 +109,7 @@ export function MessageList({
   // 同时撤掉上一会话可能残留的「加载更早」提示条。
   useLayoutEffect(() => {
     if (resetKey !== undefined) initializedRef.current = false;
+    stickToBottomRef.current = true; // 新会话默认从底部开始
     resetPull();
   }, [resetKey, resetPull]);
 
@@ -112,16 +123,18 @@ export function MessageList({
     if (initializedRef.current || (messages.length === 0 && !streamPresent)) return;
     endRef.current?.scrollIntoView({ block: 'end' });
     initializedRef.current = true;
+    stickToBottomRef.current = true;
   }, [messages, streamPresent]);
 
-  // 提交消息更新：仅当用户接近底部时才跟随（上滚阅读历史时保持原位）。
+  // 提交消息更新：仅当用户本来就在底部时才跟随（上滚阅读历史时保持原位）。
+  // 用追加前的 sticky 状态判断，避免「用户气泡本身很高」时被误判成已上滚。
   // 流式增量不走这里（由 StreamingBubble 的 onGrow 处理），用 auto 避免动画重启。
   useEffect(() => {
     if (!initializedRef.current) return;
-    if (nearBottom()) {
+    if (stickToBottomRef.current) {
       endRef.current?.scrollIntoView({ behavior: streamPresent ? 'auto' : 'smooth', block: 'end' });
     }
-  }, [messages, streamPresent, nearBottom]);
+  }, [messages, streamPresent]);
 
   // 滚轮缓冲触发：到顶后继续上滑累积缓冲，超阈值主动加载更早一块
   useEffect(() => {
@@ -166,6 +179,18 @@ export function MessageList({
     };
 
     const onScroll = () => {
+      // 只把「向上滚离底部」当作停止跟随的信号。
+      // 程序化滚到底（scrollTop 增大）或内容增长（scrollTop 不变）都不能取消跟随，
+      // 否则滚动动画途中流式内容继续增长时，会被误判成用户上滚而永久停止跟随。
+      const top = vp.scrollTop;
+      const prevTop = lastScrollTopRef.current;
+      lastScrollTopRef.current = top;
+      if (top < prevTop - 1) {
+        if (!nearBottom()) stickToBottomRef.current = false;
+      } else if (nearBottom()) {
+        stickToBottomRef.current = true;
+      }
+
       if (atTop()) {
         if (modeRef.current === 'loading') return;
         if (modeRef.current === 'pulling') return; // 上滑过程中不打断
@@ -189,7 +214,7 @@ export function MessageList({
       vp.removeEventListener('scroll', onScroll);
       window.clearTimeout(settleTimerRef.current);
     };
-  }, [hasEarlier, loadingEarlier, onLoadEarlier]);
+  }, [hasEarlier, loadingEarlier, onLoadEarlier, canScroll, nearBottom]);
 
   // 加载更早完成：恢复滚动位置（头部插入更早消息后保持视口稳定）+ 复位加载态
   useLayoutEffect(() => {
@@ -205,6 +230,7 @@ export function MessageList({
     } else if (wasLoading && !loadingEarlier) {
       // 加载完成：把 scrollTop 加上新增高度，视口保持在原消息位置
       vp.scrollTop += vp.scrollHeight - prevScrollHeightRef.current;
+      stickToBottomRef.current = nearBottom(); // 头部插入后按实际位置重新判定跟随
       window.clearTimeout(settleTimerRef.current);
       pullRef.current = 0;
       setPullDistance(0);
@@ -214,7 +240,7 @@ export function MessageList({
       modeRef.current = stillArmed ? 'armed' : 'idle';
       setMode(modeRef.current);
     }
-  }, [loadingEarlier, messages, hasEarlier]);
+  }, [loadingEarlier, messages, hasEarlier, nearBottom]);
 
   if (loading) {
     return (
@@ -255,11 +281,7 @@ export function MessageList({
           <MessageBubble key={m.id} message={m} />
         ))}
         {withStreaming && (
-          <StreamingBubble
-            visible={streamingVisible}
-            onGrow={handleStreamGrow}
-            onPresenceChange={handleStreamPresence}
-          />
+          <StreamingBubble visible={streamingVisible} onGrow={handleStreamGrow} />
         )}
         <div ref={endRef} />
       </ScrollArea>
