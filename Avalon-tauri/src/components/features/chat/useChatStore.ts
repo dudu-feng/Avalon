@@ -210,11 +210,31 @@ function applyEvent(store: ChatStore, ev: EngineEvent, source: MessageSource) {
   }
 
   if (ev.type === 'done') {
-    const stream = st.streaming ?? newStream(nextId(store), source);
-    const message = streamToMessage(stream, {
-      content: ev.result.message || stream.content,
-      usage: ev.result.usage,
-    });
+    const stream = st.streaming;
+    if (!stream) {
+      // 异常路径（未收到任何流式事件）：用最终结果兜底；空结果不落空气泡
+      if (!ev.result.message) {
+        setState(store, { streaming: null });
+        return;
+      }
+      const fallback = newStream(nextId(store), source);
+      setState(store, {
+        messages: [
+          ...st.messages,
+          streamToMessage(fallback, { content: ev.result.message, usage: ev.result.usage }),
+        ],
+        streaming: null,
+      });
+      return;
+    }
+    // 只提交「当前轮」的流式正文。result.message 是整个 ReAct 循环跨轮累加的正文，
+    // 前面的轮次已由 tool_call / round_start 提交过；再用它会重复渲染旧正文
+    // （最后一轮无正文时，甚至会落成一条与上一条完全相同的回复）。
+    if (!stream.content && !stream.thought) {
+      setState(store, { streaming: null });
+      return;
+    }
+    const message = streamToMessage(stream, { usage: ev.result.usage });
     setState(store, { messages: [...st.messages, message], streaming: null });
     return;
   }
@@ -522,6 +542,19 @@ function newRunId(): string {
   return `desktop_${Date.now()}_${(runSeq += 1)}`;
 }
 
+/** 桌面自己发起的 run_id：这些轮次由命令流渲染，session-event 广播一律忽略。
+ *  不能只靠 currentRunId 判断 —— send 收尾时会清空它，晚到的广播会被误当成后台轮次。 */
+const desktopRunIds = new Set<string>();
+const DESKTOP_RUN_ID_LIMIT = 32;
+function rememberDesktopRun(runId: string) {
+  desktopRunIds.add(runId);
+  while (desktopRunIds.size > DESKTOP_RUN_ID_LIMIT) {
+    const oldest = desktopRunIds.values().next().value;
+    if (oldest === undefined) break;
+    desktopRunIds.delete(oldest);
+  }
+}
+
 /** 幂等初始化：StrictMode 双挂载 / 切页回来自动复用同一桶，只在首次真正拉历史。
  *  同步置位 initStarted（在第一个 await 之前），第二次调用必然直接返回 —— 同 useSchedulerStore 的写法。
  *  原来那个只服务于卸载的 cancelled 标志刻意删掉：状态已不属于组件，卸载绝不能取消写入。 */
@@ -729,6 +762,7 @@ export async function send(
   // 调用方持有一份旧 send 就能并发发两条。
   const runEpoch = ++store.epoch; // 本条会追加消息，作废在飞的 init 写入
   const runId = newRunId();
+  rememberDesktopRun(runId); // 广播按这个 id 识别「自己的轮次」，不依赖会被提前清空的 currentRunId
   store.currentRunId = runId;
   setState(store, {
     messages: [...st.messages, userMsg],
@@ -736,6 +770,10 @@ export async function send(
     streaming: newStream(assistantId, 'desktop'),
     isBusy: true,
   });
+
+  // 本轮是否已收尾：invoke 回复与 Channel 事件没有严格先后保证，
+  // 收尾后晚到的 done / error 不能再落一次，否则同一条回复会出现两遍。
+  let finalized = false;
 
   try {
     await chat(
@@ -745,6 +783,7 @@ export async function send(
       (ev) => {
         // 已请求停止或代次已变：本轮消息不会再落盘，忽略陈旧事件，
         // 由 finally 从后端重拉，避免事件与重拉结果互相覆盖。
+        if (finalized && (ev.type === 'done' || ev.type === 'error')) return;
         enqueueDesktopEvent(store, runEpoch, ev);
       },
     );
@@ -771,6 +810,8 @@ export async function send(
         streaming: null,
       });
     }
+    // 兜底提交（或 done 已处理）之后本轮即告收尾：晚到的收尾事件一律丢弃
+    finalized = true;
     if (store.stopRequested) {
       store.stopRequested = false;
       // 后端不保存中断轮次；重拉当前会话，避免 UI 继续显示已丢弃的消息。
@@ -881,7 +922,9 @@ export function initSessionEvents() {
   listen<SessionEventPayload>('session-event', (event) => {
     const payload = event.payload;
     if (!payload) return;
-    if (payload.run_id === store.currentRunId) return; // 自己的命令流已在渲染
+    // 自己的命令流已在渲染：桌面 run 收尾后 currentRunId 会被清空，
+    // 必须用 desktopRunIds 再兜一层，避免晚到的收尾广播被当成后台轮次重复落库。
+    if (payload.run_id === store.currentRunId || desktopRunIds.has(payload.run_id)) return;
     if (store.state.isBusy) return;
     applyBackgroundEvent(payload);
   }).catch((e) => console.error('订阅 session-event 失败:', e));
