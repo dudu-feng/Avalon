@@ -67,3 +67,6 @@ Avalon-config.toml
 # 安装包统一走 GitHub Release，不再提交进仓库
 exe_list/
 Avalon_*_x64-setup.exe
+
+# Avalon 早期原型（Python / Web），仅本地留痕，不参与版本管控
+Avalon-prototype/

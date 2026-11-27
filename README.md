@@ -149,13 +149,14 @@ npx tauri build
 ```
 Avalon/
 ├── Avalon-tauri/        ← 当前主力版本（Tauri 2 桌面应用）✅ 推荐
-├── Avalon-python/       ← 早期飞书机器人版本（agent + server）⚠️ 已停止维护
-├── Avalon-web/          ← 早期 Vue 3 Web 版本 ⚠️ 已停止维护
+├── Avalon-prototype/    ← 早期原型归档（仅本地保留，不纳入 Git）
+│   ├── Avalon-python/   ←   飞书机器人版本（agent + server）
+│   └── Avalon-web/      ←   Vue 3 Web 版本
 ├── doc/                 ← 开发设计文档（v0.1 / v0.2 各模块）
 └── assets/              ← 界面截图等静态资源
 ```
 
-> ⚠️ **版本说明**：`Avalon-python/`（飞书机器人）与 `Avalon-web/`（Vue 3 Web 前端）为早期原型，功能已落后且不再维护。其中飞书渠道能力已于 v0.3.0 用 Rust 重写并合入 `Avalon-tauri/`。请使用最新的 **`Avalon-tauri/`** 版本。
+> ⚠️ **版本说明**：`Avalon-prototype/` 下的 `Avalon-python/`（飞书机器人）与 `Avalon-web/`（Vue 3 Web 前端）为早期原型，功能已落后且不再维护，仅作本地留痕、不参与版本管控。其中飞书渠道能力已于 v0.3.0 用 Rust 重写并合入 `Avalon-tauri/`。请使用最新的 **`Avalon-tauri/`** 版本。
 
 ## 📄 License
 
