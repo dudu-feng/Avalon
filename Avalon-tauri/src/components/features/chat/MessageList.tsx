@@ -47,6 +47,9 @@ export function MessageList({
 }: MessageListProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  // viewport 元素同时存一份 state：骨架屏 / 空状态不渲染 ScrollArea，元素挂载时机晚于首次 effect，
+  // 只存 ref 不会触发重跑，滚轮监听会一直绑不上。
+  const [viewportEl, setViewportEl] = useState<HTMLDivElement | null>(null);
   const initializedRef = useRef(false);
 
   // 渐进式加载：滚轮缓冲状态（mode 状态机 + 缓冲距离）
@@ -62,6 +65,7 @@ export function MessageList({
   // ScrollArea 透传的 viewport ref
   const setViewportRef = useCallback((el: HTMLDivElement | null) => {
     viewportRef.current = el;
+    setViewportEl(el);
   }, []);
 
   // 是否接近底部（用于对话更新时决定是否跟随滚动，避免打断用户上滚阅读）
@@ -138,7 +142,7 @@ export function MessageList({
 
   // 滚轮缓冲触发：到顶后继续上滑累积缓冲，超阈值主动加载更早一块
   useEffect(() => {
-    const vp = viewportRef.current;
+    const vp = viewportEl;
     if (!vp) return;
 
     const atTop = () => vp.scrollTop <= 0;
@@ -214,7 +218,7 @@ export function MessageList({
       vp.removeEventListener('scroll', onScroll);
       window.clearTimeout(settleTimerRef.current);
     };
-  }, [hasEarlier, loadingEarlier, onLoadEarlier, canScroll, nearBottom]);
+  }, [viewportEl, hasEarlier, loadingEarlier, onLoadEarlier, canScroll, nearBottom]);
 
   // 加载更早完成：恢复滚动位置（头部插入更早消息后保持视口稳定）+ 复位加载态
   useLayoutEffect(() => {
