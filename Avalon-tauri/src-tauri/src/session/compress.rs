@@ -220,4 +220,87 @@ mod tests {
             Some("2026-11-01 ~ 2026-11-03")
         );
     }
+
+    fn user_at(time: &str, content: &str) -> Message {
+        Message::User {
+            time: time.to_string(),
+            content: content.to_string(),
+            meta: None,
+        }
+    }
+
+    /// 单日会话只返回那一天，不加范围分隔符。
+    #[test]
+    fn time_range_single_date() {
+        let messages = vec![
+            user_at("2026-11-01-10:00:00", "a"),
+            user_at("2026-11-01-23:59:59", "b"),
+        ];
+        assert_eq!(
+            message_time_range(&messages).as_deref(),
+            Some("2026-11-01")
+        );
+    }
+
+    /// 旧数据 / 异常时间戳不能让压缩崩溃：取不到合法日期就跳过，
+    /// 全部非法时返回 None。
+    #[test]
+    fn time_range_ignores_malformed_times() {
+        let messages = vec![
+            user_at("", "a"),
+            user_at("2026", "b"),
+            user_at("2026-11-02-10:00:00", "c"),
+        ];
+        assert_eq!(
+            message_time_range(&messages).as_deref(),
+            Some("2026-11-02")
+        );
+
+        assert!(message_time_range(&[user_at("", "x")]).is_none());
+        assert!(message_time_range(&[]).is_none());
+    }
+
+    /// assistant 正文为空时不产生空块，但工具调用必须保留：
+    /// 压缩摘要需要知道「谁在什么时候调用了什么」。
+    #[test]
+    fn transcript_skips_blank_assistant_but_keeps_tool_calls() {
+        let messages = vec![Message::Assistant {
+            time: "2026-11-01-10:00:01".to_string(),
+            content: "  \n ".to_string(),
+            reasoning_content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"path": "a.txt"}),
+            }]),
+            token_usage: TokenUsage::default(),
+            model: "test".to_string(),
+            origin: None,
+        }];
+
+        let text = build_transcript(&messages);
+        assert!(!text.contains("[assistant]\n"), "空白正文不应成块");
+        assert!(text.contains("[assistant tool_calls]"));
+        assert!(text.contains("read_file"));
+    }
+
+    /// 用户消息即使正文为空，来源前缀仍要保留 —— 压缩摘要需要知道
+    /// 这一轮是谁在哪个渠道发的，不能因为没文字就整条丢掉。
+    #[test]
+    fn transcript_keeps_user_origin_when_content_is_blank() {
+        let messages = vec![user("")];
+        let text = build_transcript(&messages);
+        assert!(text.contains("[user]"));
+        assert!(text.contains("飞书"));
+        assert!(text.contains("2026-11-01 10:00"));
+    }
+
+    /// 截断边界：等于上限不动，超过才加提示。
+    #[test]
+    fn clip_chars_only_marks_when_over_limit() {
+        assert_eq!(clip_chars(&"x".repeat(10), 10), "x".repeat(10));
+        let clipped = clip_chars(&"x".repeat(11), 10);
+        assert!(clipped.starts_with(&"x".repeat(10)));
+        assert!(clipped.contains("已截断"));
+    }
 }

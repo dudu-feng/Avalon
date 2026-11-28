@@ -1652,3 +1652,51 @@ fn meta_from(data: &SessionData) -> SessionMeta {
         created_at: id_epoch(&data.id),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 会话 ID 会直接拼进 history/{id}/...：必须挡住路径穿越与绝对路径。
+    #[test]
+    fn ensure_safe_session_id_rejects_path_traversal() {
+        for id in [
+            "",
+            ".",
+            "..",
+            "../evil",
+            "..\\evil",
+            "a/b",
+            "a\\b",
+            "C:\\evil",
+            "a b",
+            "会话_1",
+        ] {
+            assert!(
+                ensure_safe_session_id(id).is_err(),
+                "{id:?} 应被拒绝"
+            );
+        }
+
+        for id in [
+            "main_2026-11-28-10_00_00",
+            "terminal_2026-08-17-10_00_00",
+            "abc-123",
+        ] {
+            assert!(
+                ensure_safe_session_id(id).is_ok(),
+                "{id:?} 应被接受"
+            );
+        }
+    }
+
+    /// 同目标并发写的临时文件必须互不相同，否则会互相截断。
+    #[test]
+    fn temp_path_is_unique_per_call() {
+        let base = Path::new("session.json");
+        let a = temp_path(base);
+        let b = temp_path(base);
+        assert_ne!(a, b);
+        assert!(a.to_string_lossy().ends_with(".tmp"));
+    }
+}

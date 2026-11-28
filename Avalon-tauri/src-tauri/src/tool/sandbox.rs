@@ -428,6 +428,17 @@ mod tests {
         }
     }
 
+    /// Windows 会先去掉文件名末尾的空格和点，再按设备名解析：
+    /// "CON." / "CON " / "NUL..." 与 "CON" 等价，必须一并拦住。
+    #[test]
+    fn 保留设备名的尾点尾空格与伪设备都命中() {
+        for name in ["CON.", "CON ", "NUL...", "conin$", "CONOUT$.log"] {
+            let p = workspace().join(name);
+            let err = sb().resolve(p.to_str().unwrap()).unwrap_err();
+            assert!(err.contains("保留设备名"), "{name} 应被拒");
+        }
+    }
+
     #[test]
     fn 空工作区等于全部禁止() {
         let sb = Sandbox::with(vec![], vec![]);

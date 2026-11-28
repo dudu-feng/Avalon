@@ -79,4 +79,14 @@ mod tests {
         assert!(d.accept("new"), "容量满时应先腾出空间");
         assert!(d.seen.len() <= 4);
     }
+
+    /// 容量已满时，TTL 过期的重复事件仍然必须按「新事件」处理：
+    /// 先淘汰再判重会把它误判为重复，导致该跑的一轮被静默丢掉。
+    #[test]
+    fn expired_entry_at_full_capacity_is_accepted() {
+        let mut d = Dedup::new(Duration::from_millis(1), 1);
+        assert!(d.accept("e1"));
+        std::thread::sleep(Duration::from_millis(3));
+        assert!(d.accept("e1"), "过期条目不应再挡住同一事件");
+    }
 }

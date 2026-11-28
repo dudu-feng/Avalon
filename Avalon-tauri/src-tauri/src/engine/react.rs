@@ -605,4 +605,228 @@ mod tests {
         assert!(messages.iter().all(|m| m.is_object()));
         assert!(messages.iter().all(|m| m.get("role").is_some()));
     }
+
+    /// 固定部分（system + tools + 当前输入）已超预算时必须直接报错，
+    /// 不能把必然 400/422 的请求发出去再等 provider 拒绝。
+    #[test]
+    fn plan_context_rejects_oversized_fixed_part() {
+        let session = SessionData::empty();
+        let budget = ContextBudget {
+            context_window: 10,
+            max_output_tokens: 1,
+            safety_margin: 1,
+            input_budget: 8,
+            trigger_tokens: 4,
+            memory_tokens: 2,
+        };
+        let err = plan_context(
+            &"x".repeat(100),
+            &session,
+            &json!("hello"),
+            &[],
+            budget,
+            0,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("超过模型输入预算"),
+            "应给出预算错误: {err}"
+        );
+    }
+
+    /// tools schema 每轮都随请求发送，必须计入预算：
+    /// 同样的 system + user 在预算够用时通过，加了工具后必须失败。
+    #[test]
+    fn plan_context_counts_tools_against_budget() {
+        let session = SessionData::empty();
+        let budget = ContextBudget {
+            context_window: 100,
+            max_output_tokens: 10,
+            safety_margin: 5,
+            input_budget: 30,
+            trigger_tokens: 20,
+            memory_tokens: 10,
+        };
+        assert!(
+            plan_context("s", &session, &json!("hi"), &[], budget, 0).is_ok(),
+            "无工具时固定部分应能放下"
+        );
+
+        let tools = vec![json!({
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "y".repeat(200),
+                "parameters": {"type": "object"}
+            }
+        })];
+        let err = plan_context("s", &session, &json!("hi"), &tools, budget, 0).unwrap_err();
+        assert!(
+            err.to_string().contains("超过模型输入预算"),
+            "工具描述应计入预算: {err}"
+        );
+    }
+
+    fn session_with_stats(model: &str, input: usize, output: usize) -> SessionData {
+        let mut session = SessionData::empty();
+        session.stats.last_model = model.to_string();
+        session.stats.last_input_tokens = input;
+        session.stats.last_output_tokens = output;
+        session
+    }
+
+    /// 换模型后旧锚点不可比，必须归零跳过预检；同模型则取 input + output，
+    /// 且极端值不能 panic。
+    #[test]
+    fn anchor_tokens_resets_when_model_changes() {
+        let session = session_with_stats("m1", 100, 20);
+        assert_eq!(anchor_tokens(&session, "m1"), 120);
+        assert_eq!(anchor_tokens(&session, "m2"), 0);
+
+        let overflow = session_with_stats("m1", usize::MAX, 1);
+        assert_eq!(anchor_tokens(&overflow, "m1"), usize::MAX);
+    }
+
+    /// 非主人轮次：无工具时明确要求只输出文本；有白名单工具时改为工具范围限制。
+    #[test]
+    fn non_owner_restriction_depends_on_offered_tools() {
+        let owner = MessageOrigin::new(MessageSource::Desktop, TrustLevel::Owner);
+        assert!(non_owner_restriction(&owner, &[]).is_none());
+
+        let external = MessageOrigin::new(MessageSource::Feishu, TrustLevel::External);
+        assert_eq!(
+            non_owner_restriction(&external, &[]),
+            Some(NON_OWNER_TEXT_ONLY_RULE)
+        );
+
+        let schema = vec![json!({
+            "type": "function",
+            "function": {"name": "web_search"}
+        })];
+        assert_eq!(
+            non_owner_restriction(&external, &schema),
+            Some(NON_OWNER_TOOL_RULE)
+        );
+    }
+
+    #[test]
+    fn tool_offered_matches_only_declared_function_names() {
+        let schema = vec![
+            json!({"type": "function", "function": {"name": "web_search"}}),
+            json!({"type": "function"}),
+        ];
+        assert!(tool_offered(&schema, "web_search"));
+        assert!(!tool_offered(&schema, "write_file"));
+        assert!(!tool_offered(&[], "web_search"));
+    }
+
+    /// 兜底截断按字符而非字节：CJK 不能因为 3 字节编码被提前砍断。
+    #[test]
+    fn clip_tool_result_keeps_boundary_and_marks_truncation() {
+        let exact = "字".repeat(2000);
+        assert_eq!(clip_tool_result(&exact), exact);
+
+        let longer = "字".repeat(2001);
+        let clipped = clip_tool_result(&longer);
+        assert!(clipped.starts_with(&exact));
+        assert!(clipped.ends_with("（结果过长，已截断）"));
+        assert_eq!(clipped.matches('字').count(), 2000);
+    }
+
+    /// OpenAI 协议要求 assistant.tool_calls[].function.arguments 是 JSON 字符串，
+    /// 传对象会被 422 拒绝。
+    #[test]
+    fn assistant_tool_calls_arguments_serialized_as_json_string() {
+        let result = ChatResult {
+            message: "调用".to_string(),
+            thought: String::new(),
+            tool_calls: vec![crate::llm::ToolCall {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+                arguments: json!({"path": "a.txt"}),
+            }],
+            usage: TokenUsage::default(),
+            model: "test".to_string(),
+        };
+        let msg = assistant_tool_calls_msg(&result);
+        assert_eq!(msg["role"], "assistant");
+        assert_eq!(msg["content"], "调用");
+
+        let raw = msg["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .expect("arguments 必须是 JSON 字符串");
+        let parsed: Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed["path"], "a.txt");
+    }
+
+    fn temp_contacts(name: &str) -> ContactStore {
+        let dir = std::env::temp_dir().join(format!(
+            "avalon_react_contacts_{}_{}",
+            std::process::id(),
+            name
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        ContactStore::new(dir.join("contacts.json"))
+    }
+
+    /// 桌面与定时任务固定按主人处理，不采信调用方传入的 trust。
+    #[test]
+    fn resolve_origin_forces_owner_for_desktop_and_task() {
+        let contacts = temp_contacts("force_owner");
+        for source in ["desktop", "task"] {
+            let origin = MessageOrigin::from_value(json!({
+                "source": source,
+                "trust": "external"
+            }));
+            assert_eq!(
+                resolve_origin(Some(origin), &contacts).trust,
+                TrustLevel::Owner,
+                "{source} 应固定为主人"
+            );
+        }
+    }
+
+    /// 外部渠道的信任级别必须按通讯录现况重算，并统一补上渠道前缀；
+    /// 没有发言人时按最保守的 External 处理。
+    #[test]
+    fn resolve_origin_recomputes_channel_trust_from_contacts() {
+        let contacts = temp_contacts("channels");
+        contacts.record_owner("feishu", "ou_owner", "主人").unwrap();
+        contacts
+            .record("feishu:ou_friend", "朋友", "普通朋友")
+            .unwrap();
+
+        let owner = MessageOrigin::from_value(json!({
+            "source": "feishu",
+            "sender_id": "feishu:ou_owner",
+            "trust": "external"
+        }));
+        let resolved = resolve_origin(Some(owner), &contacts);
+        assert_eq!(resolved.trust, TrustLevel::Owner);
+        assert_eq!(resolved.sender_id.as_deref(), Some("feishu:ou_owner"));
+
+        // 裸 id 也要归一化成带前缀的形式
+        let friend = MessageOrigin::from_value(json!({
+            "source": "feishu",
+            "sender_id": "ou_friend"
+        }));
+        let resolved = resolve_origin(Some(friend), &contacts);
+        assert_eq!(resolved.trust, TrustLevel::Known);
+        assert_eq!(resolved.sender_id.as_deref(), Some("feishu:ou_friend"));
+
+        let stranger = MessageOrigin::from_value(json!({
+            "source": "feishu",
+            "sender_id": "feishu:ou_stranger"
+        }));
+        assert_eq!(
+            resolve_origin(Some(stranger), &contacts).trust,
+            TrustLevel::External
+        );
+
+        let no_sender = MessageOrigin::from_value(json!({"source": "qq"}));
+        assert_eq!(
+            resolve_origin(Some(no_sender), &contacts).trust,
+            TrustLevel::External
+        );
+    }
 }
