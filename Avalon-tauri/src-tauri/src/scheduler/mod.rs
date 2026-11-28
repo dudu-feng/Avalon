@@ -5,6 +5,7 @@
 // 数据模型 + 到期判断（is_due）+ 调度（Scheduler）+ 持久化（TaskStore）+ 结果通知（TaskNotifier）。
 
 pub mod notifier;
+#[allow(clippy::module_inception)] // 目录 mod.rs + 同名子模块，重命名收益不抵改动面
 pub mod scheduler;
 pub mod store;
 

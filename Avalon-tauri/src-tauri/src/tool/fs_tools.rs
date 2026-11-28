@@ -319,7 +319,7 @@ fn decode_output(bytes: &[u8]) -> String {
     #[cfg(target_os = "windows")]
     {
         let (cow, _, _) = encoding_rs::GBK.decode(bytes);
-        return cow.into_owned();
+        cow.into_owned()
     }
     #[cfg(not(target_os = "windows"))]
     {

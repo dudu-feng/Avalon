@@ -105,7 +105,7 @@ pub fn delete_skill(args: &Value, registry: &SkillRegistry) -> String {
 /// 按链接拉取并安装技能，分两种形态：
 ///   - GitHub 目录链接（.../tree/<branch>/<path>）：拉取整个技能文件夹的 SKILL.md + references/*.md；
 ///   - 单文件链接（blob/raw/其它直链）：抓取 SKILL.md 解析后落库。
-/// name 优先级：参数 name > frontmatter name > URL 推断名（目录链接取目录名）。
+///     name 优先级：参数 name > frontmatter name > URL 推断名（目录链接取目录名）。
 pub async fn install_skill(
     args: &Value,
     registry: &SkillRegistry,

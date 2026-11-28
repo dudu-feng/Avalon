@@ -340,7 +340,7 @@ where
 }
 
 /// 会话请求统计（provider 返回的真实用量，作为下一次请求的锚点）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionStats {
     /// 最近一次真实请求的 input_tokens
     #[serde(default)]
@@ -356,16 +356,6 @@ pub struct SessionStats {
     pub last_request_at: String,
 }
 
-impl Default for SessionStats {
-    fn default() -> Self {
-        Self {
-            last_input_tokens: 0,
-            last_output_tokens: 0,
-            last_model: String::new(),
-            last_request_at: String::new(),
-        }
-    }
-}
 
 /// 工具结果 artifact 引用：会话里只存预览，全文留在 artifacts/{session_id}/{id}.txt
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -421,7 +411,7 @@ impl SessionData {
     /// 新建活跃会话（id = {channel}_{timestamp}）
     pub fn new_active(id: String) -> Self {
         // 初始标题 = id 的时间戳部分（去掉 {channel}_ 前缀），归档时若未手动改名则被首条消息覆盖
-        let title = id.splitn(2, '_').nth(1).unwrap_or(id.as_str()).to_string();
+        let title = id.split_once('_').map(|x| x.1).unwrap_or(id.as_str()).to_string();
         Self {
             id,
             status: SessionStatus::Active,

@@ -151,33 +151,29 @@ pub fn build_preview(artifact_id: &str, content: &str) -> Option<String> {
 
 /// 取前 N 行、最多 N 字符（按 UTF-8 边界截断）
 fn take_head(content: &str, max_lines: usize, max_chars: usize) -> &str {
-    let mut chars = 0usize;
     let mut lines = 0usize;
-    for (idx, ch) in content.char_indices() {
+    for (chars, (idx, ch)) in content.char_indices().enumerate() {
         if chars >= max_chars || lines >= max_lines {
             return &content[..idx];
         }
         if ch == '\n' {
             lines += 1;
         }
-        chars += 1;
     }
     content
 }
 
 /// 取后 N 行、最多 N 字符（按 UTF-8 边界截断）
 fn take_tail(content: &str, max_lines: usize, max_chars: usize) -> &str {
-    let mut chars = 0usize;
     let mut lines = 0usize;
     let mut start = content.len();
-    for (idx, ch) in content.char_indices().rev() {
+    for (chars, (idx, ch)) in content.char_indices().rev().enumerate() {
         if chars >= max_chars || lines >= max_lines {
             break;
         }
         if ch == '\n' {
             lines += 1;
         }
-        chars += 1;
         start = idx;
     }
     &content[start..]

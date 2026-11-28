@@ -286,7 +286,7 @@ fn format_page(data: &Value, url: &str, limit: usize, offset: usize) -> String {
     out.push_str(&seg);
     out.push_str("\n\n…（");
     out.push_str(&tail);
-    out.push_str("）");
+    out.push('）');
     out
 }
 

@@ -26,8 +26,8 @@ pub fn parse_time_range(time_range: &str) -> (Option<String>, Option<String>) {
 
 /// 时间范围判断（None 表示不限制该侧）
 pub fn in_range(ts: &str, start: &Option<String>, end: &Option<String>) -> bool {
-    start.as_ref().map_or(true, |s| ts >= s.as_str())
-        && end.as_ref().map_or(true, |e| ts <= e.as_str())
+    start.as_ref().is_none_or(|s| ts >= s.as_str())
+        && end.as_ref().is_none_or(|e| ts <= e.as_str())
 }
 
 /// 字符级 bigram 切词（中文检索零依赖方案；不足两字符时按单字符返回）

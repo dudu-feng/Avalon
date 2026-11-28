@@ -14,7 +14,7 @@ fn strip_markdown_fences(text: &str) -> String {
     if let Some(rest) = trimmed.strip_prefix("```") {
         let rest = rest.trim_start();
         let rest = rest.strip_prefix("json").unwrap_or(rest);
-        let rest = rest.trim_start_matches(|c: char| c == '\n' || c == '\r' || c == ' ');
+        let rest = rest.trim_start_matches(['\n', '\r', ' ']);
         // 找结尾 ```
         if let Some(idx) = rest.find("```") {
             return rest[..idx].trim().to_string();
@@ -24,8 +24,8 @@ fn strip_markdown_fences(text: &str) -> String {
     }
 
     // 只有结尾标记 ```
-    if trimmed.ends_with("```") {
-        return trimmed[..trimmed.len() - 3].trim().to_string();
+    if let Some(body) = trimmed.strip_suffix("```") {
+        return body.trim().to_string();
     }
 
     text.to_string()

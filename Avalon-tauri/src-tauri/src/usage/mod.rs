@@ -103,8 +103,7 @@ impl UsageStore {
         // %Y-%m-%d 字典序即时间序，取最近 days 天
         let start = dates.len().saturating_sub(days);
         let mut rows = Vec::new();
-        for i in start..dates.len() {
-            let date = dates[i];
+        for date in dates.into_iter().skip(start) {
             if let Some(models) = file.daily.get(date) {
                 let mut names: Vec<&String> = models.keys().collect();
                 names.sort();
