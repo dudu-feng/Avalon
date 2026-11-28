@@ -171,7 +171,7 @@ shell_allowlist = ["where", "ping", "ipconfig", "tasklist", "systeminfo", "hostn
 
 # 非主人（群聊成员、陌生人）允许调用的工具名。默认空 = 完全无工具。
 # 只有安全工具会生效：web_search、read_web_page、search_session_memory、
-# list_session_history、read_session_history、read_tool_result。
+# list_session_history、read_session_history。
 non_owner_allowlist = []
 
 # ============================================================

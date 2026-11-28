@@ -100,8 +100,9 @@ pub fn tool_scope(name: &str) -> ToolScope {
         | "read_web_page"
         | "search_session_memory"
         | "list_session_history"
-        | "read_session_history"
-        | "read_tool_result" => ToolScope::NonOwnerSafe,
+        | "read_session_history" => ToolScope::NonOwnerSafe,
+        // read_tool_result 读的是全局 main 会话的 artifact，无法区分归属：
+        // 非主人放行会读到主人轮次的完整工具输出，因此归为 OwnerOnly。
         _ => ToolScope::OwnerOnly,
     }
 }
@@ -168,7 +169,7 @@ mod tests {
     #[test]
     fn whitelist_only_accepts_non_owner_safe_tools() {
         assert_eq!(tool_scope("web_search"), ToolScope::NonOwnerSafe);
-        assert_eq!(tool_scope("read_tool_result"), ToolScope::NonOwnerSafe);
+        assert_eq!(tool_scope("read_tool_result"), ToolScope::OwnerOnly);
         assert_eq!(tool_scope("write_file"), ToolScope::OwnerOnly);
         assert_eq!(tool_scope("feishu_send_message"), ToolScope::OwnerOnly);
         assert_eq!(tool_scope("unknown_tool"), ToolScope::OwnerOnly);

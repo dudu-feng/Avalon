@@ -200,6 +200,8 @@ fn is_reserved_name(name: &str) -> bool {
     matches!(
         stem.to_ascii_uppercase().as_str(),
         "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$"
+        // 控制台伪设备：会打开输入/输出控制台，读 CONIN$ 可能长期阻塞
+        | "CONIN$" | "CONOUT$"
         | "COM1" | "COM2" | "COM3" | "COM4" | "COM5"
         | "COM6" | "COM7" | "COM8" | "COM9"
         | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5"
