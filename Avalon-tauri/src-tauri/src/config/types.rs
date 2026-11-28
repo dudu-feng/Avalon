@@ -51,9 +51,13 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// 当前活跃模型（按名字查找，找不到返回 None）
+    /// 当前活跃模型（按名字查找；名字无效时回退到第一个模型，
+    /// 与校验提示「将回退到第一个模型」保持一致，避免配错名字后对话完全不可用）
     pub fn active_model_config(&self) -> Option<&ModelConfig> {
-        self.models.iter().find(|m| m.name == self.active_model)
+        self.models
+            .iter()
+            .find(|m| m.name == self.active_model)
+            .or_else(|| self.models.first())
     }
 }
 

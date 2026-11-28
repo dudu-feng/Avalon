@@ -330,8 +330,16 @@ impl SoulRegistry {
         let entries = self.list()?;
         let mut parts = Vec::new();
         for e in entries.into_iter().filter(|e| e.enabled) {
-            let content = self.read_content(&e.content_file)?;
-            parts.push(format!("## {}\n{}", e.title, content));
+            // 单条正文缺失只跳过该条：不能让一个误删的 .md 拖垮整段 system prompt
+            match self.read_content(&e.content_file) {
+                Ok(content) => parts.push(format!("## {}\n{}", e.title, content)),
+                Err(err) => log::warn!(
+                    target: "soul",
+                    "跳过无法读取的灵魂条目「{}」（{}）: {err:#}",
+                    e.title,
+                    e.content_file
+                ),
+            }
         }
         Ok(parts)
     }
@@ -450,12 +458,23 @@ impl SoulRegistry {
             .with_context(|| format!("写入灵魂条目正文失败: {}", p.display()))
     }
 
-    /// 检测 registry.json 是否为旧版（内嵌 content 字段）。新格式只有 content_file，
-    /// 精确匹配 `"content"`（带引号）即可与 `"content_file"` 区分。
+    /// 检测 registry.json 是否为旧版（内嵌 content 字段）。
+    /// 不能对原始文本做 `"content"` 子串匹配：新格式里标题恰好叫 content 时
+    /// 会误判，随后按旧版解析（content 缺省为空串）把所有正文覆盖成空。
+    /// 改为真正解析 JSON：存在 content 字符串且没有 content_file 才算旧版。
     fn needs_content_migration(&self) -> Result<bool> {
         let raw = std::fs::read_to_string(&self.path)
             .with_context(|| format!("读取灵魂注册表失败: {}", self.path.display()))?;
-        Ok(raw.contains("\"content\""))
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return Ok(false); // 结构损坏交给正常加载流程报错，不能当旧版覆盖
+        };
+        let legacy = value.as_array().is_some_and(|arr| {
+            arr.iter().any(|e| {
+                e.get("content").and_then(serde_json::Value::as_str).is_some()
+                    && e.get("content_file").is_none()
+            })
+        });
+        Ok(legacy)
     }
 
     /// 旧版 registry.json（内嵌 content）→ 索引 + 独立 md
