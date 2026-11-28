@@ -196,6 +196,7 @@ export function ChatPage() {
             onSubmit={send}
             onStop={stop}
             isBusy={isBusy}
+            sendDisabled={activeSource !== null}
             models={models}
             activeModel={activeModel}
             onModelChange={onModelChange}

@@ -21,6 +21,21 @@ export async function initSession(): Promise<void> {
   await invoke('init_session');
 }
 
+let sessionInitPromise: Promise<void> | null = null;
+
+/** 幂等初始化：App、对话页、仪表盘共享同一次 init_session。
+ *  子组件 effect 先于父组件执行，各处必须 await 它，不能假设 App 的 effect 已先跑完。
+ *  失败时清空缓存，允许下次重试。 */
+export function ensureSessionInitialized(): Promise<void> {
+  if (!sessionInitPromise) {
+    sessionInitPromise = initSession().catch((e) => {
+      sessionInitPromise = null;
+      throw e;
+    });
+  }
+  return sessionInitPromise;
+}
+
 /** 新建会话：归档当前（若非空）+ 创建新的 active 会话，返回新会话完整数据 */
 export async function createSession(): Promise<CurrentSession> {
   return invoke<CurrentSession>('create_session');

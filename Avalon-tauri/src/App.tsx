@@ -3,7 +3,7 @@ import { MainLayout, Sidebar, Header } from './components/layout';
 import { ThemeToggle } from './components/ui/ThemeToggle';
 import { useTheme } from './hooks/useTheme';
 import { pages } from './pages';
-import { initSession } from './lib/chatApi';
+import { ensureSessionInitialized } from './lib/chatApi';
 
 function App() {
   const { mode, setMode } = useTheme();
@@ -12,9 +12,10 @@ function App() {
   const active = pages.find((page) => page.id === activeId) ?? pages[0];
   const ActivePage = active.component;
 
-  // 应用启动时初始化会话（复用 active / 否则新建），会话为应用级资源，启动即就绪
+  // 应用启动时初始化会话（复用 active / 否则新建），会话为应用级资源，启动即就绪。
+  // 页面侧通过 ensureSessionInitialized 共享同一 Promise，不依赖这里的执行顺序。
   useEffect(() => {
-    initSession().catch((e) => console.error('init_session 失败:', e));
+    ensureSessionInitialized().catch((e) => console.error('init_session 失败:', e));
   }, []);
 
   const sidebar = (

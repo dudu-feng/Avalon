@@ -14,6 +14,8 @@ export interface ChatInputProps {
   onSubmit: (text: string, attachments: MessageAttachment[]) => void;
   onStop: () => void;
   isBusy?: boolean;
+  /** 外部状态不允许发送（如后台渠道仍在流式输出），输入框保持可编辑 */
+  sendDisabled?: boolean;
   models?: ModelOption[];
   activeModel?: string;
   onModelChange?: (name: string) => void;
@@ -80,6 +82,7 @@ function ChatInputImpl({
   onSubmit,
   onStop,
   isBusy = false,
+  sendDisabled = false,
   models = [],
   activeModel = '',
   onModelChange = () => {},
@@ -103,17 +106,22 @@ function ChatInputImpl({
   const attachmentsRef = useRef<PendingAttachment[]>([]);
   /** 等待外发确认期间的发送内容；取消时保留输入框与附件 */
   const pendingSendRef = useRef<{ text: string; attachments: MessageAttachment[] } | null>(null);
+  /** 上传互斥：拖拽与选择器可能并发触发，不串行会突破 MAX_ATTACHMENTS 上限 */
+  const uploadingRef = useRef(false);
+  /** 挂载标记：落盘 await 期间页面可能已卸载，晚到的预览 URL 必须自行释放 */
+  const mountedRef = useRef(true);
 
   // 预览 URL 与组件生命周期绑定：移除/发送时主动释放，卸载时兜底
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
       attachmentsRef.current.forEach((a) => URL.revokeObjectURL(a.previewUrl));
-    },
-    [],
-  );
+    };
+  }, []);
 
   const revokeAll = (items: PendingAttachment[]) => {
     items.forEach((a) => URL.revokeObjectURL(a.previewUrl));
@@ -126,15 +134,23 @@ function ChatInputImpl({
       (f) => f.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(f.name),
     );
     if (files.length === 0) return;
+    // 并发进入（拖拽 + 选择器 / 连续粘贴）时直接丢弃后一次，避免 read-modify-write 超上限
+    if (uploadingRef.current) return;
     const room = MAX_ATTACHMENTS - attachmentsRef.current.length;
     if (room <= 0) return;
 
+    uploadingRef.current = true;
     setUploading(true);
     try {
       for (const file of files.slice(0, room)) {
         const previewUrl = URL.createObjectURL(file);
         try {
           const stored = await saveAttachment(file, { source: 'upload' });
+          // 组件已卸载：对象 URL 永远不会被渲染或清理，立刻释放
+          if (!mountedRef.current) {
+            URL.revokeObjectURL(previewUrl);
+            return;
+          }
           const pending: PendingAttachment = {
             path: stored.path,
             name: stored.original_name || file.name || '图片',
@@ -154,6 +170,7 @@ function ChatInputImpl({
         }
       }
     } finally {
+      uploadingRef.current = false;
       setUploading(false);
     }
   };
@@ -193,7 +210,7 @@ function ChatInputImpl({
   const submit = () => {
     if (visionConfirmOpen) return;
     const trimmed = value.trim();
-    if ((!trimmed && attachments.length === 0) || isBusy || uploading) return;
+    if ((!trimmed && attachments.length === 0) || isBusy || sendDisabled || uploading) return;
 
     const payload: MessageAttachment[] = attachments.map((a) => ({
       path: a.path,
@@ -398,7 +415,7 @@ function ChatInputImpl({
               size="sm"
               variant={isBusy ? 'secondary' : 'primary'}
               onClick={isBusy ? () => setStopConfirmOpen(true) : submit}
-              disabled={!isBusy && !value.trim() && attachments.length === 0}
+              disabled={!isBusy && (sendDisabled || (!value.trim() && attachments.length === 0))}
             >
               {isBusy ? '停止' : '发送'}
             </Button>

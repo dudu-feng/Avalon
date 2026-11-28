@@ -25,6 +25,7 @@ import {
   compressSession,
   createSession,
   deleteSession as deleteSessionApi,
+  ensureSessionInitialized,
   getContextUsage,
   getCurrentSession,
   listSessions,
@@ -569,6 +570,8 @@ export function ensureInit(store: ChatStore) {
 async function runInit(store: ChatStore) {
   const epoch = ++store.epoch;
   try {
+    // 首次启动时本页 effect 可能早于 App 的 effect，必须自己等会话就绪
+    await ensureSessionInitialized();
     const s = await getCurrentSession();
     const base = mapHistoryMessages(s.messages, 'cur'); // 未压缩的最新消息（底部）
     let messages = base;
@@ -590,6 +593,8 @@ async function runInit(store: ChatStore) {
     }
   } catch (e) {
     console.error('get_current_session 失败:', e);
+    // 没有权威历史可替换，残留的流式气泡可能是上一轮异常中断留下的，清掉避免永久停在“生成中”
+    if (epoch === store.epoch) setState(store, { streaming: null });
   } finally {
     store.initDone = true;
     setState(store, { initialLoading: false }); // 骨架屏绝不能卡住，失败也要解除
@@ -619,7 +624,8 @@ export async function refreshUsage(store: ChatStore) {
  *  先置 resetting 并乐观清空（立即反馈，避免等后端导致的静止），后端收尾后复位。 */
 export async function newSession(store: ChatStore) {
   const st = store.state;
-  if (st.isBusy || st.resetting || st.switching) return;
+  // 后台来源正在流式输出时不允许归档：后端会把它归档进当前会话，前端却清空了列表
+  if (st.isBusy || st.activeSource !== null || st.resetting || st.switching) return;
   ++store.epoch; // 整体替换消息列表，作废在飞的 init 写入
   setState(store, {
     resetting: true,
@@ -642,7 +648,17 @@ export async function newSession(store: ChatStore) {
 /** 切换会话：归档当前（后端处理），将目标历史会话设为 active，读取其最新压缩块原始消息渲染 */
 export async function switchSession(store: ChatStore, id: string) {
   const st = store.state;
-  if (st.isBusy || st.resetting || st.switching || !id || id === st.activeId) return;
+  // 后台来源流式期间切会话，旧会话内容会写进新会话的流式槽位
+  if (
+    st.isBusy ||
+    st.activeSource !== null ||
+    st.resetting ||
+    st.switching ||
+    !id ||
+    id === st.activeId
+  ) {
+    return;
+  }
   ++store.epoch; // 整体替换消息列表，作废在飞的 init 写入
   setState(store, { switching: true });
   try {
@@ -722,7 +738,15 @@ export function stop(store: ChatStore) {
  *  错误向上抛给调用方（ChatInput 确认框的 handleCompress 兜底 console.error）。 */
 export async function compressNow(store: ChatStore) {
   const st = store.state;
-  if (st.isBusy || st.compressing || st.resetting || st.switching) return;
+  if (
+    st.isBusy ||
+    st.activeSource !== null ||
+    st.compressing ||
+    st.resetting ||
+    st.switching
+  ) {
+    return;
+  }
   setState(store, { compressing: true });
   try {
     await compressSession();
@@ -741,7 +765,16 @@ export async function send(
 ) {
   const st = store.state;
   const trimmed = text.trim();
-  if ((!trimmed && attachments.length === 0) || st.isBusy || st.compressing || st.resetting || st.switching) {
+  // activeSource ≠ null：后台来源（飞书/QQ/定时任务）正在占用流式槽位，
+  // 此时发桌面消息会和后台流写同一个 streaming 对象，双方内容会互相穿插。
+  if (
+    (!trimmed && attachments.length === 0) ||
+    st.isBusy ||
+    st.activeSource !== null ||
+    st.compressing ||
+    st.resetting ||
+    st.switching
+  ) {
     return;
   }
 
@@ -781,9 +814,9 @@ export async function send(
       runId,
       attachments.map((a) => ({ path: a.path })),
       (ev) => {
-        // 已请求停止或代次已变：本轮消息不会再落盘，忽略陈旧事件，
+        // 已请求停止或代次已变：本轮消息不会再落盘，忽略所有晚到事件（含增量），
         // 由 finally 从后端重拉，避免事件与重拉结果互相覆盖。
-        if (finalized && (ev.type === 'done' || ev.type === 'error')) return;
+        if (finalized) return;
         enqueueDesktopEvent(store, runEpoch, ev);
       },
     );
@@ -931,7 +964,8 @@ export function initSessionEvents() {
   listen<{ run_id?: string }>('session-updated', (event) => {
     const runId = event.payload?.run_id ?? '';
     // 自己发起的 run 由命令流渲染，收尾的这条广播跳过
-    if (runId && runId === store.currentRunId) return;
+    // （currentRunId 收尾后会被清空，desktopRunIds 才是持久标记）
+    if (runId && (runId === store.currentRunId || desktopRunIds.has(runId))) return;
     if (store.state.isBusy) {
       staleWhileBusy = true;
       return;
