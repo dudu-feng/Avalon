@@ -15,6 +15,7 @@ use crate::config::{ModelConfig, SessionMemoryConfig};
 use crate::session::{
     CompressedChunk, Message, MessageOrigin, MessageSource, SessionData, TrustLevel,
 };
+use crate::vision::escape_untrusted;
 
 /// 上下文预算：把「窗口 - 输出预留 - 安全余量」拆成固定部分、长期记忆和最近对话。
 #[derive(Debug, Clone, Copy)]
@@ -427,10 +428,11 @@ pub fn render_origin_prefix(origin: &MessageOrigin, time: &str) -> String {
 
 /// 显示时间：存储格式 `YYYY-MM-DD-HH:MM:SS` → `YYYY-MM-DD HH:MM`
 fn display_time(time: &str) -> String {
-    if time.len() >= 16 {
-        format!("{} {}", &time[..10], &time[11..16])
-    } else {
-        time.to_string()
+    // 不能用字节切片：time 可能来自手工编辑 / 旧数据，含多字节字符时
+    // `&time[..10]` 会落在字符边界内直接 panic（release panic=abort 会退出应用）。
+    match (time.get(..10), time.get(11..16)) {
+        (Some(date), Some(clock)) => format!("{date} {clock}"),
+        _ => time.to_string(),
     }
 }
 
@@ -467,25 +469,32 @@ fn render_attachments(origin: &MessageOrigin) -> Option<String> {
             .and_then(Value::as_str)
             .or_else(|| attachment.get("path").and_then(Value::as_str))
             .unwrap_or("附件");
-        let mut lines = vec![format!("[图片: {name}]")];
+        // 名称与观察 / OCR / 标签都源自图片内容，属于不可信数据：
+        // 不转义的话可以伪造 `</attachments>` 逃逸数据边界。
+        let mut lines = vec![format!("[图片: {}]", escape_untrusted(name))];
 
         if let Some(path) = attachment.get("path").and_then(Value::as_str) {
-            lines.push(format!("path: {path}"));
+            lines.push(format!("path: {}", escape_untrusted(path)));
         }
         if let Some(observation) = attachment.get("observation").and_then(Value::as_str) {
             if !observation.trim().is_empty() {
-                lines.push(format!("观察: {observation}"));
+                lines.push(format!("观察: {}", escape_untrusted(observation)));
             }
         }
         if let Some(ocr) = attachment.get("ocr_text").and_then(Value::as_str) {
             if !ocr.trim().is_empty() {
-                lines.push(format!("OCR: {ocr}"));
+                lines.push(format!("OCR: {}", escape_untrusted(ocr)));
             }
         }
         if let Some(labels) = attachment.get("labels").and_then(Value::as_array) {
             let labels: Vec<&str> = labels.iter().filter_map(Value::as_str).collect();
             if !labels.is_empty() {
-                lines.push(format!("标签: {}", labels.join("、")));
+                let joined = labels
+                    .iter()
+                    .map(|s| escape_untrusted(s))
+                    .collect::<Vec<_>>()
+                    .join("、");
+                lines.push(format!("标签: {joined}"));
             }
         }
 

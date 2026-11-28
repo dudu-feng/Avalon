@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -32,6 +33,25 @@ use super::{now_id_ts, SessionStore};
 
 /// 旧会话工具链清洗标记：存在即表示已扫描过，无需每次启动重复读全部历史
 const TOOLCHAIN_CLEANUP_MARKER: &str = ".toolchain_cleanup_v1";
+
+/// 原子写临时文件名：进程内自增，避免同一目标的并发写共用临时文件互相截断。
+fn temp_path(path: &Path) -> PathBuf {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    path.with_extension(format!(
+        "{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// 会话 ID 会直接拼进文件路径：仅允许文件名安全字符，拒绝 `..` / 分隔符 / 绝对路径。
+fn ensure_safe_session_id(id: &str) -> Result<()> {
+    if artifact::is_safe_id(id) {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("非法会话 ID: {id}"))
+    }
+}
 
 /// 统一会话的唯一活跃槽位文件（current/main.json）。
 /// channel 只作为消息属性存在，不再参与文件分区。
@@ -83,7 +103,22 @@ impl FileSessionStore {
         match serde_json::from_str(&content) {
             Ok(data) => Ok(data),
             Err(e) => {
-                log::warn!(target: "session", "旧格式会话已忽略（{}）: {e}", path.display());
+                // 先备份再降级：后续 ensure_active 会用新会话覆盖 main.json，
+                // 不备份的话损坏但可能可修复的原文件会被永久销毁。
+                let backup = path.with_extension(format!("corrupt-{}", now_id_ts()));
+                if let Err(re) = std::fs::rename(&path, &backup) {
+                    log::warn!(
+                        target: "session",
+                        "会话文件解析失败且备份失败（{}）: {e}; {re}",
+                        path.display()
+                    );
+                } else {
+                    log::warn!(
+                        target: "session",
+                        "会话文件解析失败，已备份为 {}: {e}",
+                        backup.display()
+                    );
+                }
                 Ok(SessionData::empty())
             }
         }
@@ -97,7 +132,7 @@ impl FileSessionStore {
                 .with_context(|| format!("创建会话目录失败: {}", parent.display()))?;
         }
         let content = serde_json::to_string_pretty(data).context("序列化会话数据失败")?;
-        let tmp = path.with_extension("json.tmp");
+        let tmp = temp_path(&path);
         std::fs::write(&tmp, &content)
             .with_context(|| format!("写入会话临时文件失败: {}", tmp.display()))?;
         std::fs::rename(&tmp, &path)
@@ -124,6 +159,11 @@ impl FileSessionStore {
 
     /// 写会话 index 文件（history/{id}/index.json），自动建目录
     fn write_session_index(&self, data: &SessionData) -> Result<()> {
+        // id 可能来自磁盘上的 index.json（可被外部编辑），落盘前必须校验，
+        // 否则绝对路径 / `..` 会把文件写到 history 目录之外。
+        if !artifact::is_safe_id(&data.id) {
+            anyhow::bail!("非法会话 ID，拒绝写入: {}", data.id);
+        }
         let dir = self.history_dir().join(&data.id);
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("创建会话目录失败: {}", dir.display()))?;
@@ -137,7 +177,7 @@ impl FileSessionStore {
                 .with_context(|| format!("创建会话目录失败: {}", parent.display()))?;
         }
         let content = serde_json::to_string_pretty(data).context("序列化会话数据失败")?;
-        let tmp = path.with_extension("json.tmp");
+        let tmp = temp_path(path);
         std::fs::write(&tmp, &content)
             .with_context(|| format!("写入会话临时文件失败: {}", tmp.display()))?;
         std::fs::rename(&tmp, path)
@@ -561,7 +601,7 @@ impl FileSessionStore {
             value["messages"] = serialized;
         }
         let text = serde_json::to_string_pretty(&value).context("序列化 raw 文件失败")?;
-        let tmp = path.with_extension("json.tmp");
+        let tmp = temp_path(path);
         std::fs::write(&tmp, text)
             .with_context(|| format!("写入 raw 临时文件失败: {}", tmp.display()))?;
         std::fs::rename(&tmp, path)
@@ -668,13 +708,18 @@ impl FileSessionStore {
         data.stats.last_output_tokens = 0;
         self.write_current(&data)?;
 
-        // 6. 同步向量库
+        // 6. 同步向量库（best-effort）：压缩块此时已落盘，向量写入失败只影响检索，
+        //    不能反过来把调用方判成“压缩失败”——否则预检会拿旧上下文继续请求。
         let index_text = chunk.index_text();
         if !index_text.is_empty() {
             let doc_id = format!("{}_chunk_{round}", data.id);
             let timestamp = self.doc_timestamp(&data.id);
-            self.vector
-                .insert(&doc_id, &index_text, &chunk.keywords, &timestamp)?;
+            if let Err(e) = self
+                .vector
+                .insert(&doc_id, &index_text, &chunk.keywords, &timestamp)
+            {
+                log::warn!(target: "session", "压缩块同步向量库失败（不影响压缩结果）: {e:#}");
+            }
         }
 
         log::info!(
@@ -684,8 +729,10 @@ impl FileSessionStore {
             data.compressed.len()
         );
 
-        // 7. 滚动摘要检查
-        self.progressive_summarize(&mut data).await?;
+        // 7. 滚动摘要检查：失败只影响长期记忆，压缩本身已提交，不能向上报错
+        if let Err(e) = self.progressive_summarize(&mut data).await {
+            log::warn!(target: "session", "滚动摘要失败（压缩块已保存）: {e:#}");
+        }
 
         Ok(true)
     }
@@ -1212,8 +1259,11 @@ impl SessionStore for FileSessionStore {
         }
 
         self.ensure_title()?;
-        // 归档时把全部未压缩消息压成摘要；压缩失败时保留原文随 index 一起存档
-        let _ = self.compress().await?;
+        // 归档时把全部未压缩消息压成摘要；压缩失败时保留原文随 index 一起存档。
+        // 压缩失败不能阻断归档：否则模型没配好时连新建 / 切换会话都做不了。
+        if let Err(e) = self.compress().await {
+            log::warn!(target: "session", "归档压缩失败，保留未压缩原文: {e:#}");
+        }
         data = self.read_current()?;
         data.status = SessionStatus::Archived;
         self.write_session_index(&data)?;
@@ -1253,6 +1303,7 @@ impl SessionStore for FileSessionStore {
     }
 
     async fn switch_session(&self, id: &str) -> Result<SessionData> {
+        ensure_safe_session_id(id)?;
         // ① 目标会话必须存在（archived index）
         let src = self.history_dir().join(id).join("index.json");
         if !src.is_file() {
@@ -1284,6 +1335,7 @@ impl SessionStore for FileSessionStore {
         id: &str,
         before_chunk: Option<u64>,
     ) -> Result<LoadHistoryResult> {
+        ensure_safe_session_id(id)?;
         let (chunk, messages, has_earlier) = self.load_history_chunk(id, before_chunk)?;
         Ok(LoadHistoryResult { chunk, messages, has_earlier })
     }
@@ -1293,6 +1345,7 @@ impl SessionStore for FileSessionStore {
     }
 
     fn read_session_raw_messages(&self, id: &str) -> Result<Vec<Message>> {
+        ensure_safe_session_id(id)?;
         let data = self.locate_session(id)?;
         let mut messages = Vec::new();
         for n in self.raw_chunk_nums(id)? {
@@ -1332,6 +1385,7 @@ impl SessionStore for FileSessionStore {
     }
 
     fn delete_session(&self, id: &str) -> Result<()> {
+        ensure_safe_session_id(id)?;
         let dir = self.history_dir().join(id);
         let index = dir.join("index.json");
 
@@ -1374,6 +1428,7 @@ impl SessionStore for FileSessionStore {
     }
 
     fn rename_session(&self, id: &str, title: &str) -> Result<()> {
+        ensure_safe_session_id(id)?;
         let title = title.trim().to_string();
         if title.is_empty() {
             return Err(anyhow::anyhow!("标题不能为空"));
@@ -1573,7 +1628,7 @@ fn truncate_title(s: &str) -> String {
 
 /// 从 session_id 解析创建时间（epoch 秒）。id 形如 {channel}_{%Y-%m-%d-%H_%M_%S}
 fn id_epoch(id: &str) -> i64 {
-    let ts = id.splitn(2, '_').nth(1).unwrap_or(id);
+    let ts = id.split_once('_').map(|x| x.1).unwrap_or(id);
     chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%d-%H_%M_%S")
         .ok()
         .and_then(|naive| naive.and_local_timezone(chrono::Local).single())
@@ -1584,9 +1639,7 @@ fn id_epoch(id: &str) -> i64 {
 /// 从会话数据构建列表元信息（标题空则回退时间戳）
 fn meta_from(data: &SessionData) -> SessionMeta {
     let title = if data.title.is_empty() {
-        data.id
-            .splitn(2, '_')
-            .nth(1)
+        data.id.split_once('_').map(|x| x.1)
             .unwrap_or(&data.id)
             .to_string()
     } else {

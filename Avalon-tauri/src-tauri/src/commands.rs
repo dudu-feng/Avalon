@@ -360,6 +360,9 @@ pub fn rename_session(
     title: String,
     engine: State<'_, Arc<Engine>>,
 ) -> Result<(), String> {
+    // 重命名与 run 收尾都会对 main.json 做 read-modify-write，
+    // 生成期间改名会让整轮对话被旧快照覆盖，必须等空闲。
+    ensure_idle(&engine, "重命名会话")?;
     engine
         .rename_session(&id, &title)
         .map_err(|e| e.to_string())
@@ -591,6 +594,7 @@ pub fn toggle_scheduled_task(
 
 /// 编辑定时任务定义（名称/内容/触发方式），id 不变，执行历史保留
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC 字段与前端表单一一对应，打包成结构体会多一层协议
 pub fn update_scheduled_task(
     task_id: String,
     name: String,
