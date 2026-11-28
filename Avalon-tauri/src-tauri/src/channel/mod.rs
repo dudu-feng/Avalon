@@ -157,12 +157,14 @@ impl ChannelManager {
 
     /// 启动飞书渠道。已在运行时先停掉旧的（配置改动后重启即走这条路）
     pub fn start_feishu(&self, config: FeishuConfig, engine: Arc<Engine>) -> Result<(), String> {
+        // 先停旧连接再判断配置：配置被禁用 / 清空凭证时，旧长连接也必须立即断开，
+        // 否则状态显示“未启用”但 WebSocket 仍在收消息并回复，用户无法从界面停掉。
+        self.stop(ChannelKind::Feishu);
         if !config.is_ready() {
             self.feishu.set_status(ChannelStatus::Disabled);
             return Err("飞书渠道未启用或 app_id / app_secret 未填写".to_string());
         }
 
-        self.stop(ChannelKind::Feishu);
 
         let stop = Arc::new(AtomicBool::new(false));
         let status = self.feishu.status.clone();
@@ -186,6 +188,8 @@ impl ChannelManager {
 
     /// 启动 QQ 渠道。同样先停旧的再起新的
     pub fn start_qq(&self, config: QqConfig, engine: Arc<Engine>) -> Result<(), String> {
+        // 同飞书：配置不再可用时，旧连接必须先断开
+        self.stop(ChannelKind::Qq);
         if !config.is_ready() {
             self.qq.set_status(ChannelStatus::Disabled);
             if config.enabled && config.backend == crate::config::QqBackend::Onebot {
@@ -193,8 +197,6 @@ impl ChannelManager {
             }
             return Err("QQ 渠道未启用或 AppID / AppSecret 未填写".to_string());
         }
-
-        self.stop(ChannelKind::Qq);
 
         let stop = Arc::new(AtomicBool::new(false));
         let status = self.qq.status.clone();

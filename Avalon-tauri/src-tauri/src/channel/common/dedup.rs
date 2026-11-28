@@ -28,6 +28,13 @@ impl Dedup {
     /// 首次出现返回 true；重复返回 false。
     pub fn accept(&mut self, id: &str) -> bool {
         let now = Instant::now();
+        // 判重必须在容量淘汰之前：先开除旧一半再检查的话，当前事件恰好是被
+        // 淘汰的那条时会被当成新事件，重复执行一次 ReAct。
+        if let Some(t) = self.seen.get(id) {
+            if now.duration_since(*t) < self.ttl {
+                return false;
+            }
+        }
         self.seen.retain(|_, t| now.duration_since(*t) < self.ttl);
 
         if self.seen.len() >= self.capacity {
