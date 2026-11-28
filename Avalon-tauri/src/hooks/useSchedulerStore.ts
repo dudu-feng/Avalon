@@ -59,8 +59,12 @@ let initialized = false;
 export function initScheduler() {
   if (initialized) return;
   initialized = true;
+  // 订阅是异步的：失败时复位标志，下次挂载还能重试；同时吞掉 rejection
   onTaskFinished(() => {
-    refreshScheduler();
+    void refreshScheduler();
+  }).catch((e) => {
+    initialized = false;
+    console.error('订阅 task-finished 失败:', e);
   });
   // 任务 notify_channel = desktop 时后端广播；WebView 的 Notification 会落到系统通知中心。
   // 权限未授予时先请求一次；失败只记日志，不影响任务本身。
