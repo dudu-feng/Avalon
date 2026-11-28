@@ -319,4 +319,3 @@ export function ChatPage() {
 
 - **后端未完善**：`llm_chat` / `llm_action` / `llm_compress` 命令已注册，但返回内容与工具执行链路尚未完整。
 - **`greet` 命令已移除**：旧模板的 `greet` 演示在 `pages/HomePage` 中仍引用，后端完善后需一并处理。
-- **未使用的依赖**：`antd`、`@xyflow/react` 已声明但当前未使用（走自研组件）。
