@@ -119,7 +119,7 @@ function streamToMessage(
 }
 
 /** 事件路由：增量只改 streaming；轮次边界 / 工具 / 压缩事件才写 messages。 */
-function applyEvent(store: ChatStore, ev: EngineEvent, source: MessageSource) {
+export function applyEvent(store: ChatStore, ev: EngineEvent, source: MessageSource) {
   const st = store.state;
 
   // 增量：只替换流式对象，messages / ui 引用保持不变
@@ -364,7 +364,7 @@ const INITIAL_STATE: ChatState = {
   activeSource: null,
 };
 
-function createStore(): ChatStore {
+export function createStore(): ChatStore {
   const listeners = new Set<() => void>();
   const store: ChatStore = {
     state: INITIAL_STATE,
