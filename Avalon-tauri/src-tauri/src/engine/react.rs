@@ -95,6 +95,7 @@ fn anchor_tokens(session: &SessionData, model_name: &str) -> usize {
 }
 
 /// ReAct 循环核心（依赖 trait object，可注入 mock 单测循环逻辑）
+#[allow(clippy::too_many_arguments)] // 编排核心，拆参数会引入无意义的上下文结构体
 pub(crate) async fn run_loop<F>(
     mut input: UserInput<'_>,
     run: &RunContext,
@@ -236,7 +237,7 @@ where
         }
         // 轮次边界：每轮大模型调用开始前发标记，前端据此封口上一轮气泡、开新气泡
         on_event(EngineEvent::RoundStart);
-        let mut result = client
+        let mut result = match client
             .chat_stream(&messages, &tools_schema, cancel, |ev| match ev {
                 StreamEvent::ThoughtDelta { delta } => {
                     on_event(EngineEvent::ThoughtDelta { delta })
@@ -246,7 +247,21 @@ where
                 }
                 StreamEvent::Done { .. } => {}
             })
-            .await?;
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // 后续轮请求失败（5xx / 超时）时，前面已完成的 assistant + 工具链是完整的，
+                // 先落盘再上抛；否则工具副作用已发生，重载后整轮却凭空消失。
+                // 只有用户消息（首轮就失败）不落盘，避免留下无人回答的孤立提问。
+                if persisted.len() > 1 {
+                    if let Err(pe) = session.update_current_session(&persisted) {
+                        log::warn!(target: "session", "失败轮次落盘失败: {pe:#}");
+                    }
+                }
+                return Err(e);
+            }
+        };
 
         // 非主人轮次只接受本轮实际提供的工具。模型凭历史记忆硬调其他工具时
         // 直接丢弃该调用（不执行、不落盘），避免历史里留下悬空的 tool_calls。
@@ -303,6 +318,11 @@ where
 
         // 逐个执行工具，回填 role=tool，推前端事件，记精简记录
         for tc in &result.tool_calls {
+            // 已请求停止：本轮轨迹整体丢弃，剩余工具不能再产生副作用（写文件 / 执行命令）
+            if cancel.load(Ordering::Relaxed) {
+                cancelled = true;
+                break;
+            }
             on_event(EngineEvent::ToolCall {
                 id: tc.id.clone(),
                 tool_name: tc.name.clone(),

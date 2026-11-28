@@ -154,7 +154,28 @@ impl Drop for RunPermit<'_> {
         let mut inner = self.queue.inner.lock().unwrap();
         inner.running = false;
         drop(inner);
-        self.queue.notify.notify_one();
+        // 必须唤醒全部等待者：只唤醒一个的话，被唤醒者未必是新的队首
+        // （高优先级后插入），它会重新睡下，队列此后无人唤醒，全局卡死。
+        self.queue.notify.notify_waiters();
+    }
+}
+
+/// 排队 ticket 的守卫：等待中的 future 被 drop（任务 abort / select 取消）时，
+/// 从等待队列移除自己，否则幽灵 ticket 会永久占据队首。
+struct WaitTicket<'a> {
+    queue: &'a RunQueue,
+    key: Option<(u8, u64)>,
+}
+
+impl Drop for WaitTicket<'_> {
+    fn drop(&mut self) {
+        let Some(key) = self.key.take() else { return };
+        let mut inner = self.queue.inner.lock().unwrap();
+        let removed = inner.waiting.remove(&key).is_some();
+        drop(inner);
+        if removed {
+            self.queue.notify.notify_waiters();
+        }
     }
 }
 
@@ -179,17 +200,27 @@ impl RunQueue {
             key
         };
 
+        let mut ticket = WaitTicket {
+            queue: self,
+            key: Some(key),
+        };
+
         loop {
+            let notified = self.notify.notified();
+            let mut notified = std::pin::pin!(notified);
+            // 先注册等待者再检查状态：notify_waiters 不保存许可，检查后才注册会丢唤醒
+            let _ = notified.as_mut().enable();
             {
                 let mut inner = self.inner.lock().unwrap();
                 let first = inner.waiting.keys().next().copied();
                 if !inner.running && first == Some(key) {
                     inner.waiting.remove(&key);
                     inner.running = true;
+                    ticket.key = None; // 正常获得执行权：守卫退出时不再摘 ticket
                     return RunPermit { queue: self };
                 }
             }
-            self.notify.notified().await;
+            notified.await;
         }
     }
 
@@ -226,6 +257,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    #[allow(clippy::too_many_arguments)] // 装配入口，依赖按类型注入，打包无收益
     pub fn new(
         config: ConfigStore,
         llm: LlmState,
