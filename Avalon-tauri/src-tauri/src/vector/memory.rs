@@ -5,7 +5,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Context, Result};
 
@@ -71,6 +72,8 @@ pub struct InMemoryStore {
     index: RwLock<Index>,
     /// 持久化文件路径
     path: PathBuf,
+    /// 串行化落盘：并发写若共用临时文件会互相截断，rename 还可能用旧快照覆盖新快照
+    persist_lock: Mutex<()>,
     /// 检索/入库编码器句柄（决策甲：持 handle 而非 Arc<dyn Embedder>，编码时 get_sync 取实例）
     handle: EmbedderHandle,
 }
@@ -87,9 +90,26 @@ impl InMemoryStore {
         let store = Self {
             index: RwLock::new(Index::new()),
             path: path.to_path_buf(),
+            persist_lock: Mutex::new(()),
             handle,
         };
-        store.load()?;
+        if let Err(e) = store.load() {
+            // 反序列化失败（并发写损坏 / 磁盘问题 / 旧 schema）不能阻断应用启动：
+            // 隔离坏文件、以空索引继续，用户可在设置页重建索引。
+            log::error!(
+                target: "vector",
+                "向量库加载失败，隔离后以空索引启动: {e:#}"
+            );
+            let corrupt = path.with_extension("bin.corrupt");
+            if let Err(re) = std::fs::rename(path, &corrupt) {
+                log::warn!(
+                    target: "vector",
+                    "隔离损坏向量库失败（{} → {}）: {re}",
+                    path.display(),
+                    corrupt.display()
+                );
+            }
+        }
         Ok(store)
     }
 
@@ -119,13 +139,21 @@ impl InMemoryStore {
         Ok(())
     }
 
-    /// 全量序列化写回（tmp + rename 原子写）
+    /// 全量序列化写回（tmp + rename 原子写）。
+    /// 全程持 persist_lock：序列化到 rename 之间必须独占，既保证最后落盘的是最新快照，
+    /// 也避免并发写共用临时文件互相截断。
     fn persist(&self) -> Result<()> {
+        static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+        let _guard = self.persist_lock.lock().unwrap();
         let bytes = {
             let index = self.index.read().unwrap();
             bincode::serialize(&index.docs).context("序列化向量库失败")?
         };
-        let tmp = self.path.with_extension("bin.tmp");
+        let tmp = self.path.with_extension(format!(
+            "bin.{}.{}.tmp",
+            std::process::id(),
+            TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::write(&tmp, &bytes)
             .with_context(|| format!("写入向量库临时文件失败: {}", tmp.display()))?;
         std::fs::rename(&tmp, &self.path)

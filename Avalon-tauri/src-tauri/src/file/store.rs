@@ -195,8 +195,18 @@ impl FileStore {
             bail!("TTL 不能为负数");
         }
 
-        let temp_cutoff = now.clone() - Duration::hours(temp_ttl_hours);
-        let quarantine_cutoff = now - Duration::days(quarantine_ttl_days);
+        // 用 try_* + checked_sub 而非 Duration::hours / 减法运算符：
+        // 后者在超界时直接 panic（release 配置 panic=abort，会拖垮整个应用）。
+        let temp_dur = Duration::try_hours(temp_ttl_hours)
+            .ok_or_else(|| anyhow::anyhow!("temp TTL 超出可表示范围: {temp_ttl_hours}"))?;
+        let quarantine_dur = Duration::try_days(quarantine_ttl_days)
+            .ok_or_else(|| anyhow::anyhow!("quarantine TTL 超出可表示范围: {quarantine_ttl_days}"))?;
+        let temp_cutoff = now
+            .checked_sub_signed(temp_dur)
+            .ok_or_else(|| anyhow::anyhow!("temp TTL 超出可表示时间范围"))?;
+        let quarantine_cutoff = now
+            .checked_sub_signed(quarantine_dur)
+            .ok_or_else(|| anyhow::anyhow!("quarantine TTL 超出可表示时间范围"))?;
 
         let mut report = CleanupReport::default();
         self.cleanup_dir(&self.temp_dir(), temp_cutoff, &mut report)?;
@@ -222,7 +232,11 @@ impl FileStore {
             return Ok(report);
         }
 
-        let cutoff = now - Duration::days(ttl_days);
+        let dur = Duration::try_days(ttl_days)
+            .ok_or_else(|| anyhow::anyhow!("缓存 TTL 超出可表示范围: {ttl_days}"))?;
+        let cutoff = now
+            .checked_sub_signed(dur)
+            .ok_or_else(|| anyhow::anyhow!("缓存 TTL 超出可表示时间范围"))?;
         for kind in [CacheKind::Thumb, CacheKind::Ocr, CacheKind::Vlm] {
             self.cleanup_dir(&self.cache_dir(kind), cutoff, &mut report)?;
         }
