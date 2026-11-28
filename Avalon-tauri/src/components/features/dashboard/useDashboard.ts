@@ -9,7 +9,7 @@
 // 切区间只重取用量，且不清空旧数据 —— 否则会闪骨架屏。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getContextUsage, listSessions } from '../../../lib/chatApi';
+import { ensureSessionInitialized, getContextUsage, listSessions } from '../../../lib/chatApi';
 import { listScheduledTasks, onTaskFinished } from '../../../lib/schedulerApi';
 import { getConfig } from '../../../lib/settingsApi';
 import { queryDailyUsage } from '../../../lib/usageApi';
@@ -68,6 +68,8 @@ export function useDashboard(): UseDashboardResult {
   const usageLoadedRef = useRef(false);
   // 请求序号：快速连点区间时，只有最后发起的那次允许落盘
   const seqRef = useRef(0);
+  // 刷新序号：silent 请求会抢占 seqRef，但不应让被抢占的 refresh 永远停在「刷新中」
+  const refreshSeqRef = useRef(0);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -82,6 +84,7 @@ export function useDashboard(): UseDashboardResult {
 
   const fetchUsage = useCallback(async (days: DashboardRange, mode: FetchMode) => {
     const seq = ++seqRef.current;
+    const refreshSeq = mode === 'refresh' ? ++refreshSeqRef.current : 0;
     if (mode === 'refresh') setRefreshing(true);
     try {
       // 取双倍天数：后一半是当前窗口，前一半用于算环比
@@ -91,13 +94,14 @@ export function useDashboard(): UseDashboardResult {
     } catch (e) {
       console.error('query_daily_usage 失败:', e);
     } finally {
-      if (aliveRef.current && seq === seqRef.current) {
-        // 失败也要解除首载，否则骨架屏永远不散
+      if (aliveRef.current) {
+        // 首载解锁与 seq 无关：即便中途被 refresh / silent 抢走，骨架也必须散掉
         if (mode === 'initial') {
           usageLoadedRef.current = true;
           setUsageLoaded(true);
         }
-        if (mode === 'refresh') setRefreshing(false);
+        // 只有最新一次 refresh 才负责清除指示器：被 silent 抢占的旧 refresh 也要清
+        if (mode === 'refresh' && refreshSeq === refreshSeqRef.current) setRefreshing(false);
       }
     }
   }, []);
@@ -116,6 +120,8 @@ export function useDashboard(): UseDashboardResult {
     let cancelled = false;
     (async () => {
       try {
+        // 仪表盘是默认页，挂载 effect 早于 App 的 init_session；上下文用量依赖当前会话
+        await ensureSessionInitialized();
         const [sess, ctx, cfg, tk] = await Promise.all([
           listSessions(),
           getContextUsage(),
