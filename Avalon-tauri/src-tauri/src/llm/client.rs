@@ -88,6 +88,9 @@ impl LlmClient {
         let mut thought = String::new();
         let mut message = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
+        // 字节缓冲：TCP 可能在任意字节处切分，一个汉字/emoji 跨 chunk 时逐块 lossy 解码
+        // 会变成不可还原的 U+FFFD。只在完整 SSE 事件边界解码。
+        let mut byte_buf: Vec<u8> = Vec::new();
         let mut sse_buf = String::new();
         let mut stream = resp.bytes_stream();
         let mut cancelled = false;
@@ -98,20 +101,38 @@ impl LlmClient {
                 break;
             }
             let chunk = chunk.context("读取流失败")?;
-            sse_buf.push_str(&String::from_utf8_lossy(&chunk));
+            byte_buf.extend_from_slice(&chunk);
 
-            while let Some((event, rest)) = take_sse_event(&sse_buf) {
-                sse_buf = rest;
-                if let Some(delta) = sse_delta(&event) {
-                    apply_delta(&delta, &mut thought, &mut message, &mut tool_calls, &mut on_event);
-                }
-                if let Some(u) = sse_usage(&event) {
-                    usage = u;
+            // 只解码最后一个完整事件之前的字节，残缺事件的尾部（可能截断多字节字符）继续累积
+            if let Some(end) = last_sse_event_end(&byte_buf) {
+                sse_buf.push_str(&String::from_utf8_lossy(&byte_buf[..end]));
+                byte_buf.drain(..end);
+
+                while let Some((event, rest)) = take_sse_event(&sse_buf) {
+                    sse_buf = rest;
+                    if let Some(delta) = sse_delta(&event) {
+                        apply_delta(
+                            &delta,
+                            &mut thought,
+                            &mut message,
+                            &mut tool_calls,
+                            &mut on_event,
+                        );
+                    }
+                    if let Some(u) = sse_usage(&event) {
+                        usage = u;
+                    }
                 }
             }
         }
 
-        // 流结束后处理无尾随空行的残余事件（通常是最后一个 usage / [DONE]）；
+        // 流结束后把剩余字节交给事件解析（可能是无尾随空行的最后一个事件）
+        if !cancelled && !byte_buf.is_empty() {
+            sse_buf.push_str(&String::from_utf8_lossy(&byte_buf));
+            byte_buf.clear();
+        }
+
+        // 处理无尾随空行的残余事件（通常是最后一个 usage / [DONE]）；
         // 取消时跳过，避免把取消前的缓冲继续推给前端。
         if !cancelled && !sse_buf.trim().is_empty() {
             if let Some(delta) = sse_delta(&sse_buf) {
@@ -237,6 +258,17 @@ impl LlmClient {
 
 // ============ SSE 解析辅助 ============
 
+/// 字节缓冲中最后一个完整 SSE 事件的结束下标（含空行）。
+/// 用于在解码 UTF-8 之前切开：残缺事件可能以半个多字节字符结尾。
+fn last_sse_event_end(buf: &[u8]) -> Option<usize> {
+    let lf = buf.windows(2).rposition(|w| w == b"\n\n").map(|i| i + 2);
+    let crlf = buf
+        .windows(4)
+        .rposition(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4);
+    lf.max(crlf)
+}
+
 /// 从缓冲区提取一个完整 SSE 事件（以空行分隔），返回 (事件, 剩余)。
 pub(crate) fn take_sse_event(buf: &str) -> Option<(String, String)> {
     if let Some(idx) = buf.find("\n\n") {
@@ -296,6 +328,12 @@ pub(crate) fn apply_delta(
     if let Some(tcs) = delta.get("tool_calls").and_then(Value::as_array) {
         for tc in tcs {
             let index = tc.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            // index 来自远端，不能按它无界扩容（伪造超大 index 会耗尽内存）
+            const MAX_TOOL_CALLS: usize = 64;
+            if index >= MAX_TOOL_CALLS {
+                log::warn!(target: "llm", "忽略越界 tool_call index: {index}");
+                continue;
+            }
             while tool_calls.len() <= index {
                 tool_calls.push(ToolCall {
                     id: String::new(),
