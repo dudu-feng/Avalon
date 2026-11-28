@@ -14,6 +14,7 @@ pub mod history_tools;
 pub mod memory_tools;
 pub mod qq_tools;
 pub mod registry;
+mod schema;
 pub mod sandbox;
 pub mod scheduler_tools;
 pub mod skill_tools;
